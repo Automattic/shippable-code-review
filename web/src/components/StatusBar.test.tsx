@@ -16,6 +16,8 @@ describe("StatusBar", () => {
           fileDisplay: "file 1/3",
           readDisplay: "read 10%",
           filesDisplay: "reviewed 0/3",
+          changesetSignOffDisplay: null,
+          changesetSignedOff: false,
           selectionHint: "selection L10-L12 · c to comment",
           defaultHint: "j/k line · ]/[ file · ? help",
         }}

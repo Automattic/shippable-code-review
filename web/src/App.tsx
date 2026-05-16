@@ -171,6 +171,7 @@ export default function App() {
       cursor: persisted.cursor,
       readLines: persisted.readLines,
       reviewedFiles: persisted.reviewedFiles,
+      reviewedChangesets: persisted.reviewedChangesets,
       dismissedGuides: persisted.dismissedGuides,
     };
   });

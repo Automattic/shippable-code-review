@@ -267,6 +267,15 @@ export interface ReviewState {
    * The single verdict gesture. Toggle: pressing again clears the file.
    */
   reviewedFiles: Set<string>;
+  /**
+   * Changeset-level sign-off, keyed by `changesetId` and valued by the list
+   * of review tokens (`getChangesetReviewToken`) at which sign-off has been
+   * given. The current revision reads as signed off iff its token is in the
+   * list. Switching revisions is navigation, not invalidation — entries are
+   * preserved on changeset load/reload. Toggled by Shift+S. See
+   * `docs/concepts/review-state.md § Review tokens and revision-scoped sign-off`.
+   */
+  reviewedChangesets: Record<string, string[]>;
   dismissedGuides: Set<string>;
   /** keys are thread-target keys; see thread-key helpers */
   interactions: Record<string, Interaction[]>;

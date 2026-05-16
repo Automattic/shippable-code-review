@@ -17,6 +17,12 @@
 .statusbar__cell--cov {
   color: var(--green);
 }
+.statusbar__cell--changeset {
+  color: var(--fg-dim);
+}
+.statusbar__cell--changeset-on {
+  color: var(--green);
+}
 .statusbar__spacer {
   flex: 1;
 }

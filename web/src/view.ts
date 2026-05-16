@@ -525,6 +525,20 @@ export interface StatusBarViewModel {
   /** "files X/Y" — how many files the reviewer has signed off on. */
   filesDisplay: string;
   /**
+   * Changeset-level sign-off cell. Null when the changeset has no stable
+   * review token (paste / upload / stub / fixture / legacy worktree without
+   * captured state) — the StatusBar hides the cell in that case (D6).
+   * Otherwise: "changeset ✓" when signed off at the current revision,
+   * "changeset" when not.
+   */
+  changesetSignOffDisplay: string | null;
+  /**
+   * True iff the current changeset's review token is in
+   * `reviewedChangesets[csId]`. Drives the cell's "on" styling. Always
+   * false when `changesetSignOffDisplay` is null.
+   */
+  changesetSignedOff: boolean;
+  /**
    * "selection L12–L18 · c to comment" when the reviewer has an active
    * shift-extended selection. Null otherwise. Replaces the trailing hint
    * temporarily so the affordance is paired with the selection state.
@@ -571,6 +585,12 @@ export interface BuildStatusBarViewModelArgs {
   currentFileReadFraction: number;
   /** True when the reviewer has signed off on the current file. */
   currentFileReviewed: boolean;
+  /**
+   * Null when the current changeset has no stable review token; the
+   * StatusBar hides the cell in that case (D6). Otherwise the boolean is
+   * the sign-off state at the current revision.
+   */
+  currentChangesetSignedOff: boolean | null;
 }
 
 const DEFAULT_HINT =
@@ -590,6 +610,7 @@ export function buildStatusBarViewModel({
   lineNoteAcked,
   currentFileReadFraction,
   currentFileReviewed,
+  currentChangesetSignedOff,
 }: BuildStatusBarViewModelArgs): StatusBarViewModel {
   // Priority: an unacked note on the current line is the most actionable
   // signal — surface r/a first. Otherwise, when the file is fully read but
@@ -609,6 +630,13 @@ export function buildStatusBarViewModel({
     fileDisplay: `file ${fileIdx + 1}/${totalFiles}`,
     readDisplay: `read ${Math.round(readCoverage * 100)}%`,
     filesDisplay: `reviewed ${reviewedFiles}/${totalFiles}`,
+    changesetSignOffDisplay:
+      currentChangesetSignedOff === null
+        ? null
+        : currentChangesetSignedOff
+          ? "changeset ✓"
+          : "changeset",
+    changesetSignedOff: currentChangesetSignedOff === true,
     selectionHint: selection
       ? `selection L${selection.loLineNo}–L${selection.hiLineNo} · c to comment`
       : null,

@@ -45,16 +45,17 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("persist v4 — snapshot shape only contains progress fields", () => {
-  it("buildSnapshot serializes only cursor, readLines, reviewedFiles, dismissedGuides, drafts (no interactions)", () => {
+describe("persist v5 — snapshot shape only contains progress fields", () => {
+  it("buildSnapshot serializes cursor, readLines, reviewedFiles, reviewedChangesets, dismissedGuides, drafts (no interactions)", () => {
     const cs = makeChangeset();
     const state = initialState([cs]);
     const snap = buildSnapshot(state, { "some:key": "draft text" });
 
-    expect(snap.v).toBe(4);
+    expect(snap.v).toBe(5);
     expect(snap.cursor).toEqual(state.cursor);
     expect(snap.readLines).toBeDefined();
     expect(snap.reviewedFiles).toBeDefined();
+    expect(snap.reviewedChangesets).toBeDefined();
     expect(snap.dismissedGuides).toBeDefined();
     expect(snap.drafts).toEqual({ "some:key": "draft text" });
     // No interaction fields
@@ -92,8 +93,8 @@ describe("persist v4 — snapshot shape only contains progress fields", () => {
   });
 });
 
-describe("persist v4 — fails closed on non-v4 snapshots", () => {
-  it("peekSession returns null for v < 4 (old v3 snapshot)", () => {
+describe("persist v5 — fails closed on non-v5 snapshots", () => {
+  it("peekSession returns null for v < 5 (old v3 snapshot)", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
@@ -127,7 +128,22 @@ describe("persist v4 — fails closed on non-v4 snapshots", () => {
     expect(loadSession([])).toEqual({ state: null, drafts: {} });
   });
 
-  it("loadSession returns empty hydration for v > 4", () => {
+  it("loadSession returns empty hydration for a v4 snapshot (predates reviewedChangesets)", () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        v: 4,
+        cursor: { changesetId: "cs", fileId: "f", hunkId: "h", lineIdx: 0 },
+        readLines: {},
+        reviewedFiles: [],
+        dismissedGuides: [],
+        drafts: {},
+      }),
+    );
+    expect(loadSession([])).toEqual({ state: null, drafts: {} });
+  });
+
+  it("loadSession returns empty hydration for v > 5", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
@@ -148,7 +164,7 @@ describe("persist v4 — fails closed on non-v4 snapshots", () => {
   });
 });
 
-describe("persist v4 — hunk-validity filtering for drafts", () => {
+describe("persist v5 — hunk-validity filtering for drafts", () => {
   it("drops drafts whose hunkId no longer exists in the loaded changeset", () => {
     const cs = makeChangeset();
     const state = initialState([cs]);
@@ -162,7 +178,7 @@ describe("persist v4 — hunk-validity filtering for drafts", () => {
   });
 });
 
-describe("persist v4 — empty / unusable changeset boot path", () => {
+describe("persist v5 — empty / unusable changeset boot path", () => {
   // Repro for the blank-screen crash: a clean worktree reload produced a
   // ChangeSet with `files: []`, recents persisted it, the next boot rehydrated
   // it, and defaultCursor crashed reading `files[0].hunks[0]`.
@@ -180,10 +196,11 @@ describe("persist v4 — empty / unusable changeset boot path", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        v: 4,
+        v: 5,
         cursor: { changesetId: "wt-clean", fileId: "x", hunkId: "y", lineIdx: 0 },
         readLines: {},
         reviewedFiles: [],
+        reviewedChangesets: {},
         dismissedGuides: [],
         drafts: {},
       }),
@@ -203,10 +220,11 @@ describe("persist v4 — empty / unusable changeset boot path", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        v: 4,
+        v: 5,
         cursor: { changesetId: "cs1", fileId: "cs1/f1", hunkId: "missing", lineIdx: 0 },
         readLines: {},
         reviewedFiles: [],
+        reviewedChangesets: {},
         dismissedGuides: [],
         drafts: {},
       }),

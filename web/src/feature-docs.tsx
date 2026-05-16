@@ -417,6 +417,7 @@ function WorkspaceFrame({
             lineNoteAcked: false,
             currentFileReadFraction: 0,
             currentFileReviewed: false,
+            currentChangesetSignedOff: null,
           })}
         />
       </div>

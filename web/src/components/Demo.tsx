@@ -1865,6 +1865,7 @@ function WorkspaceStage({
           lineNoteAcked: false,
           currentFileReadFraction: 0,
           currentFileReviewed: false,
+          currentChangesetSignedOff: null,
         })}
       />
 

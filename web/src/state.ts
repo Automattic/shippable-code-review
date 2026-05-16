@@ -85,6 +85,7 @@ export function initialState(
       changesets: [],
       readLines: {},
       reviewedFiles: new Set(),
+      reviewedChangesets: {},
       dismissedGuides: new Set(),
       interactions: { ...seedInteractions },
       expandLevelAbove: {},
@@ -103,6 +104,7 @@ export function initialState(
     changesets: seed,
     readLines: addLine({}, hunk.id, 0),
     reviewedFiles: new Set(),
+    reviewedChangesets: {},
     dismissedGuides: new Set(),
     interactions: { ...seedInteractions },
     expandLevelAbove: {},
@@ -204,6 +206,16 @@ export type Action =
     }
   | { type: "TOGGLE_PREVIEW_FILE"; fileId: string }
   | { type: "TOGGLE_FILE_REVIEWED"; fileId: string }
+  | {
+      // Toggle the current changeset's sign-off at its current review token
+      // (`getChangesetReviewToken`). On: append the token to
+      // `reviewedChangesets[changesetId]` (no-op if already present). Off:
+      // remove only that token's entry — every other entry on the list
+      // (prior revisions) is preserved (W6, D4). No-op when the token is null
+      // (paste / upload / stub / fixture — D6).
+      type: "TOGGLE_CHANGESET_REVIEWED";
+      changesetId: string;
+    }
   | {
       // Set the line-range selection directly without moving the cursor.
       // Used by the DiffView drag pipeline once per pointermove tick. Drops
@@ -474,6 +486,24 @@ export function reducer(state: ReviewState, action: Action): ReviewState {
     }
     case "TOGGLE_FILE_REVIEWED":
       return { ...state, reviewedFiles: togglein(state.reviewedFiles, action.fileId) };
+    case "TOGGLE_CHANGESET_REVIEWED": {
+      const cs = state.changesets.find((c) => c.id === action.changesetId);
+      if (!cs) return state;
+      const token = getChangesetReviewToken(cs);
+      if (token === null) return state;
+      const current = state.reviewedChangesets[cs.id] ?? [];
+      const idx = current.indexOf(token);
+      let nextList: string[];
+      if (idx >= 0) {
+        nextList = current.filter((t) => t !== token);
+      } else {
+        nextList = [...current, token];
+      }
+      const nextMap = { ...state.reviewedChangesets };
+      if (nextList.length === 0) delete nextMap[cs.id];
+      else nextMap[cs.id] = nextList;
+      return { ...state, reviewedChangesets: nextMap };
+    }
     case "HYDRATE_FILE": {
       const csIdx = state.changesets.findIndex((c) => c.id === action.changesetId);
       if (csIdx < 0) return state;
@@ -1295,6 +1325,45 @@ export function reviewedFilesCount(
   let n = 0;
   for (const f of cs.files) if (reviewedFiles.has(f.id)) n++;
   return n;
+}
+
+/**
+ * Canonical review token for the loaded `ChangeSet`. Sign-off keys against
+ * this token, not the changeset id, so a refresh that swaps content while
+ * keeping the id (worktree live-reload, PR fetch) recomputes the token and
+ * only restores sign-off if the new revision matches a previously stored
+ * entry. Rules (see `docs/concepts/review-state.md`):
+ *   - worktree-backed: `wt:<sha>:<dirtyHash|-->` from `worktreeSource.state`
+ *   - PR-only:         `pr:<baseSha>:<headSha>` from `prSource`
+ *   - overlay:         worktree wins; the displayed diff is the worktree's
+ *   - paste/upload/stub/fixture/legacy-worktree-without-state: `null`
+ */
+export function getChangesetReviewToken(cs: ChangeSet): string | null {
+  const wt = cs.worktreeSource;
+  if (wt) {
+    const state = wt.state;
+    if (!state) return null;
+    return `wt:${state.sha}:${state.dirtyHash ?? "-"}`;
+  }
+  const pr = cs.prSource;
+  if (pr) return `pr:${pr.baseSha}:${pr.headSha}`;
+  return null;
+}
+
+/**
+ * True iff the changeset's current review token is in its `reviewedChangesets`
+ * entry. Returns `false` when the token is null (no top-level sign-off shape
+ * for paste/upload/etc — the UI should hide the affordance via
+ * `getChangesetReviewToken(cs) !== null`).
+ */
+export function isChangesetSignedOff(
+  cs: ChangeSet,
+  reviewedChangesets: Record<string, string[]>,
+): boolean {
+  const token = getChangesetReviewToken(cs);
+  if (token === null) return false;
+  const list = reviewedChangesets[cs.id];
+  return list ? list.includes(token) : false;
 }
 
 // ── Ack helpers ──────────────────────────────────────────────────────────

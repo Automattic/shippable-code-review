@@ -59,17 +59,21 @@ export function setLiveReloadEnabled(
   }
 }
 
-// Head schema version is 4. Snapshots whose `v` isn't exactly 4 are rejected
+// Head schema version is 5. Snapshots whose `v` isn't exactly 5 are rejected
 // at load and the store boots empty. The prototype has no users to migrate.
 // v3 → v4: interactions and detachedInteractions removed (moved to SQLite).
+// v4 → v5: reviewedChangesets added (revision-scoped changeset sign-off,
+// see docs/concepts/review-state.md § Review tokens).
 
 /** What we actually serialize — Sets become arrays, ephemeral fields drop. */
 interface PersistedSnapshot {
-  v: 4;
+  v: 5;
   cursor: Cursor;
   /** Set<number> → number[] per hunk id. */
   readLines: Record<string, number[]>;
   reviewedFiles: string[];
+  /** changesetId → review tokens at which sign-off was given for that cs. */
+  reviewedChangesets: Record<string, string[]>;
   dismissedGuides: string[];
   drafts: Record<string, string>;
 }
@@ -81,6 +85,7 @@ export interface HydratedSession {
     cursor: Cursor;
     readLines: Record<string, Set<number>>;
     reviewedFiles: Set<string>;
+    reviewedChangesets: Record<string, string[]>;
     dismissedGuides: Set<string>;
   } | null;
   drafts: Record<string, string>;
@@ -99,11 +104,17 @@ export function buildSnapshot(
     if (set.size === 0) continue;
     readLines[hunkId] = Array.from(set).sort((a, b) => a - b);
   }
+  const reviewedChangesets: Record<string, string[]> = {};
+  for (const [csId, tokens] of Object.entries(state.reviewedChangesets)) {
+    if (tokens.length === 0) continue;
+    reviewedChangesets[csId] = [...tokens];
+  }
   return {
-    v: 4,
+    v: 5,
     cursor: state.cursor,
     readLines,
     reviewedFiles: Array.from(state.reviewedFiles).sort(),
+    reviewedChangesets,
     dismissedGuides: Array.from(state.dismissedGuides).sort(),
     drafts,
   };
@@ -161,6 +172,9 @@ export function peekSession(): PersistedSnapshot | null {
  */
 export function hasProgress(s: PersistedSnapshot): boolean {
   if (s.reviewedFiles.length > 0) return true;
+  for (const arr of Object.values(s.reviewedChangesets)) {
+    if (arr.length > 0) return true;
+  }
   for (const arr of Object.values(s.readLines)) {
     if (arr.length > 1) return true;
   }
@@ -223,11 +237,23 @@ export function loadSession(changesets: ChangeSet[]): HydratedSession {
   const resolvedCursor = cursor ?? defaultCursor(changesets);
   if (!resolvedCursor) return empty;
 
+  // reviewedChangesets is keyed by changesetId, not by a structure that varies
+  // per load. Entries for changesets not currently loaded are kept so a future
+  // load of the same changeset (recents, re-open) re-reads sign-off without
+  // re-confirmation. Tokens are validated lazily — a stale token simply won't
+  // match the current revision's derived token.
+  const reviewedChangesets: Record<string, string[]> = {};
+  for (const [csId, tokens] of Object.entries(snapshot.reviewedChangesets)) {
+    if (tokens.length === 0) continue;
+    reviewedChangesets[csId] = [...tokens];
+  }
+
   return {
     state: {
       cursor: resolvedCursor,
       readLines,
       reviewedFiles: new Set(snapshot.reviewedFiles.filter((id) => validFileIds.has(id))),
+      reviewedChangesets,
       dismissedGuides: new Set(snapshot.dismissedGuides),
     },
     drafts: filterDraftsByHunk(snapshot.drafts, validHunkIds),
@@ -239,14 +265,22 @@ export function loadSession(changesets: ChangeSet[]): HydratedSession {
 function isPersistedSnapshot(x: unknown): x is PersistedSnapshot {
   if (!x || typeof x !== "object") return false;
   const o = x as Record<string, unknown>;
-  return (
-    o.v === 4 &&
-    typeof o.cursor === "object" &&
-    typeof o.readLines === "object" &&
-    Array.isArray(o.reviewedFiles) &&
-    Array.isArray(o.dismissedGuides) &&
-    typeof o.drafts === "object"
-  );
+  if (
+    o.v !== 5 ||
+    typeof o.cursor !== "object" ||
+    typeof o.readLines !== "object" ||
+    !Array.isArray(o.reviewedFiles) ||
+    typeof o.reviewedChangesets !== "object" || o.reviewedChangesets === null ||
+    !Array.isArray(o.dismissedGuides) ||
+    typeof o.drafts !== "object"
+  ) {
+    return false;
+  }
+  for (const tokens of Object.values(o.reviewedChangesets as Record<string, unknown>)) {
+    if (!Array.isArray(tokens)) return false;
+    for (const t of tokens) if (typeof t !== "string") return false;
+  }
+  return true;
 }
 
 function validateCursor(

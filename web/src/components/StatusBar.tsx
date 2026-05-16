@@ -24,6 +24,19 @@ export function StatusBar({ viewModel, transientHint }: Props) {
       >
         {viewModel.filesDisplay}
       </span>
+      {viewModel.changesetSignOffDisplay !== null && (
+        <span
+          className={
+            "statusbar__cell statusbar__cell--changeset" +
+            (viewModel.changesetSignedOff
+              ? " statusbar__cell--changeset-on"
+              : "")
+          }
+          title="changeset signed off at this revision · Shift+S to toggle"
+        >
+          {viewModel.changesetSignOffDisplay}
+        </span>
+      )}
       <span className="statusbar__spacer" />
       {transientHint ? (
         <span className="statusbar__hint statusbar__hint--tip">

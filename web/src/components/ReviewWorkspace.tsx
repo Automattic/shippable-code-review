@@ -5,7 +5,9 @@ import {
   changesetCoverage,
   fileCoverage,
   firstTargetForKey,
+  getChangesetReviewToken,
   isAckedByMe,
+  isChangesetSignedOff,
   replyTarget,
   reviewedFilesCount,
   selectAckedNotes,
@@ -543,6 +545,12 @@ export function ReviewWorkspace({
         dispatch({
           type: "TOGGLE_FILE_REVIEWED",
           fileId: state.cursor.fileId,
+        });
+        break;
+      case "TOGGLE_CHANGESET_REVIEWED":
+        dispatch({
+          type: "TOGGLE_CHANGESET_REVIEWED",
+          changesetId: state.cursor.changesetId,
         });
         break;
       case "START_REPLY":
@@ -1750,6 +1758,10 @@ export function ReviewWorkspace({
           lineNoteAcked,
           currentFileReadFraction: fileCoverage(file, state.readLines),
           currentFileReviewed: state.reviewedFiles.has(file.id),
+          currentChangesetSignedOff:
+            getChangesetReviewToken(cs) === null
+              ? null
+              : isChangesetSignedOff(cs, state.reviewedChangesets),
         })}
       />
     </div>

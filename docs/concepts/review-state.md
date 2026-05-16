@@ -35,7 +35,7 @@ A changeset's content can change after sign-off — new commits, a force-push, a
 
 A canonical string derived from the loaded `ChangeSet` by `getChangesetReviewToken(cs)`:
 
-- Worktree-backed (any kind — branch / range / dirty / picked): `wt:${state.sha}:${state.dirtyHash ?? "-"}`. The same `(sha, dirtyHash)` pair live-reload already uses to decide "did the loaded revision change?"
+- Worktree-backed (any kind — branch / range / dirty / picked): `wt:${state.sha}:${state.dirtyHash ?? "-"}`, where `state` is `worktreeSource.state` captured at load time. The same `(sha, dirtyHash)` pair live-reload already uses to decide "did the loaded revision change?" When `worktreeSource` is present but `state` is missing (legacy persisted recents written before the field shipped), the token is `null` — we don't invent a fallback that might claim sign-off on a different revision than the reviewer saw.
 - PR-only: `pr:${baseSha}:${headSha}`. Both ends matter — the diff moves when the base moves even if the head doesn't.
 - Worktree + PR overlay: the worktree token wins. The displayed diff comes from the worktree load path; the PR overlay adds metadata around it.
 - Paste / upload / stub / fixture: `null`. No stable revision identity, and no top-level sign-off control is offered.
@@ -49,11 +49,11 @@ A canonical string derived from the loaded `ChangeSet` by `getChangesetReviewTok
 
 ### Storage shape and eviction
 
-`reviewedChangesets: Record<changesetId, string[]>` — the list of review tokens at which sign-off has been given for the changeset. Lookup: "is the current token in the list?" Persisted at schema `v: 4`.
+`reviewedChangesets: Record<changesetId, string[]>` — the list of review tokens at which sign-off has been given for the changeset. Lookup: "is the current token in the list?" Persisted at schema `v: 5`.
 
-Eviction is either explicit unsign-off (removes the current revision's entry only) or bounded retention per changeset (drop least-recently-applied past a small cap, e.g. 8). We do **not** evict on "the displayed revision changed" — that was the previous at-token / drop-on-mismatch rule and it silently destroyed reviewer work whenever a refresh moved the token.
+Eviction is explicit unsign-off only: toggling sign-off off on the displayed revision removes that token's entry; every other entry is preserved. We do **not** evict on "the displayed revision changed" — that was the previous at-token / drop-on-mismatch rule and it silently destroyed reviewer work whenever a refresh moved the token — and we do **not** cap the list. A token is short (sha-pair) and only appended on deliberate sign-off, so the per-changeset list grows monotonically with reviewer intent and stays well inside the localStorage budget that `readLines` already lives in.
 
-Persist notes: `hasProgress()` must count `reviewedChangesets` (a session with only top-level sign-off must resume); the schema bump from `v: 3` to `v: 4` follows the existing exact-version load policy (reject non-v4 snapshots and boot empty).
+Persist notes: `hasProgress()` must count `reviewedChangesets` (a session with only top-level sign-off must resume); the schema bump from `v: 4` to `v: 5` follows the existing exact-version load policy (reject non-v5 snapshots and boot empty). The previous v4 snapshot shape predates this field; no migration is shipped — the prototype has no users to carry over.
 
 ### Why a per-revision list, not a single at-token
 
