@@ -1,8 +1,6 @@
 # Multi-window
 
-Shippable today is a single-window app. That's fine for one PR at a time, but reviewers regularly need to hold two changesets in their head — referencing the PR that introduced the code being changed, comparing how two branches solve the same problem, or just bouncing between a handful of open reviews in one session. There is no way to do that today without losing the place in the first review.
-
-This plan adds multiple OS windows to the Tauri shell. Each window is an independent reviewer pointed at its own changeset; together they share the same sidecar server, the same localStorage, and the same prompt library. Coordination between windows is minimal: cross-window awareness exists only to detect when you've opened the same source twice and offer to focus the existing window instead.
+Shippable is single-window today, so reviewers can't hold two changesets at once without losing their place. This plan adds OS-level multi-window to the Tauri shell: each window is an independent reviewer on its own changeset, sharing the sidecar, localStorage, and prompt library. The only cross-window coordination is duplicate detection — opening a changeset that's already loaded focuses the existing window instead of spawning another.
 
 ## Goal
 
@@ -75,7 +73,80 @@ The crucial property: **same origin for every window.** New windows are spawned 
 - **Stale registry entries.** When a window closes, Rust must drop its entry. Subscribe to the `WindowEvent::CloseRequested` / `Destroyed` events on each spawned window and remove the label from the registry there.
 - **Same-window changeset switches.** When a user switches changesets within one window (back to picker, then load another), the window must re-report to Rust. Hook into the same path that updates `recents` so the two stay aligned.
 
+## Review notes
+
+The toast surface (`web/src/components/Toast.tsx`, `web/src/components/Toast.css`) was only loosely reviewed during the initial pass — the rest of the multi-window plumbing got more scrutiny. Worth a closer look on the next touch (a11y on the live region, dismiss-on-click, stacking behavior if we ever emit two toasts close together).
+
 ## Open questions
 
 - **Menu beyond the minimum.** This plan ships the smallest menu that makes `⌘N` and `⌘W` real. A full app menu (Edit, View, Window, Help) is its own design problem; not in scope here.
 - **Capability flag.** Browser-mode dev doesn't have windows, only tabs. The "New Window" affordance should be hidden when running outside Tauri. Detect via the same flag that gates other Tauri-only features.
+
+## File map
+
+```mermaid
+flowchart LR
+  subgraph g0["src-tauri"]
+    f4["tauri.conf.json"]
+  end
+  subgraph g1["src-tauri/capabilities"]
+    f2["default.json"]
+  end
+  subgraph g2["src-tauri/src"]
+    f0["lib.rs"]
+    f3["menu.rs"]
+  end
+  subgraph g3["web/src"]
+    f1["multiWindow.ts"]
+    f9["useWorktreeLoader.ts"]
+    f12["App.tsx"]
+  end
+  subgraph g4["web/src/components"]
+    f5["LoadModal.css"]
+    f6["Toast.css"]
+    f7["Toast.tsx"]
+    f8["Welcome.css"]
+    f10["LoadModal.tsx"]
+    f11["Welcome.tsx"]
+  end
+  f7 -->|"Toast"| f12
+  f11 -->|"Welcome"| f12
+  f1 -->|"focusIfDuplicate, onToastEvent +2"| f12
+  f1 -->|"openChangesetInWindow"| f10
+  f1 -->|"openChangesetInWindow"| f11
+  f9 -->|"Worktree, useWorktreeLoader +1"| f10
+  f9 -->|"useWorktreeLoader, (uses-hook)"| f11
+  classDef role-code fill:#f7f7f7,stroke:#bbbbbb;
+  classDef role-config fill:#fff1cc,stroke:#9a6700;
+  classDef role-style fill:#f3f3f3,stroke:#cccccc;
+  classDef role-component fill:#fbeaff,stroke:#a347c1,stroke-width:1.5px;
+  classDef role-hook fill:#fbeaff,stroke:#a347c1,stroke-dasharray:0;
+  class f0,f1,f2,f3 role-code;
+  class f4 role-config;
+  class f5,f6,f8 role-style;
+  class f7,f10,f11,f12 role-component;
+  class f9 role-hook;
+  classDef entry stroke-width:2.5px;
+  class f0,f1,f12 entry;
+  classDef added stroke:#1a7f37,fill:#e9f9ee;
+  class f1,f6,f7 added;
+  click f0 call __shippableDiagramClick("src-tauri/src/lib.rs") "Code."
+  click f1 call __shippableDiagramClick("web/src/multiWindow.ts") "Code.  1 interface, 11 functions, 1 constant"
+  click f2 call __shippableDiagramClick("src-tauri/capabilities/default.json") "Code."
+  click f3 call __shippableDiagramClick("src-tauri/src/menu.rs") "Code."
+  click f4 call __shippableDiagramClick("src-tauri/tauri.conf.json") "Configuration — drives behaviour without being code."
+  click f5 call __shippableDiagramClick("web/src/components/LoadModal.css") "Stylesheet."
+  click f6 call __shippableDiagramClick("web/src/components/Toast.css") "Stylesheet."
+  click f7 call __shippableDiagramClick("web/src/components/Toast.tsx") "UI component — renders something to the screen.  1 interface, 1 function"
+  click f8 call __shippableDiagramClick("web/src/components/Welcome.css") "Stylesheet."
+  click f9 call __shippableDiagramClick("web/src/useWorktreeLoader.ts") "Reusable hook — stateful logic shared across components.  2 interfaces, 1 function, 1 constant"
+  click f10 call __shippableDiagramClick("web/src/components/LoadModal.tsx") "UI component — renders something to the screen.  1 interface, 5 functions"
+  click f11 call __shippableDiagramClick("web/src/components/Welcome.tsx") "UI component — renders something to the screen.  1 interface, 8 functions"
+  click f12 call __shippableDiagramClick("web/src/App.tsx") "UI component — renders something to the screen.  1 interface, 6 functions, 2 constants"
+```
+
+
+# More context
+
+
+...
