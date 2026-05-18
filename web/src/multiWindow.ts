@@ -2,6 +2,12 @@
 // Mirrors the shape of `keychain.ts` — `isTauri()` guard means every export
 // degrades to a no-op (or empty result) under browser dev, so callers
 // don't need to branch.
+//
+// In the browser, users never reach these no-ops: the "New Window" / ↗
+// affordances in `Welcome.tsx` and `LoadModal.tsx` are gated by
+// `supportsNewWindow = isTauri()` and don't render. Users get the
+// browser's native tabs/windows on `localhost:5173` instead. The no-ops
+// here cover any code path that forgets to gate.
 
 import { isTauri } from "./keychain";
 
