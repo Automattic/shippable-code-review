@@ -144,9 +144,3 @@ flowchart LR
   click f11 call __shippableDiagramClick("web/src/components/Welcome.tsx") "UI component — renders something to the screen.  1 interface, 8 functions"
   click f12 call __shippableDiagramClick("web/src/App.tsx") "UI component — renders something to the screen.  1 interface, 6 functions, 2 constants"
 ```
-
-
-# More context
-
-
-...
