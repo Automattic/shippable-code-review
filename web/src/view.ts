@@ -613,11 +613,17 @@ export function buildStatusBarViewModel({
   currentChangesetSignedOff,
 }: BuildStatusBarViewModelArgs): StatusBarViewModel {
   // Priority: an unacked note on the current line is the most actionable
-  // signal — surface r/a first. Otherwise, when the file is fully read but
-  // not signed off, nudge ⇧M. Fall back to the standard menu.
+  // signal — surface r/a first. Then, when the whole changeset has been
+  // read but no top-level verdict is in yet, nudge ⇧S (the terminal action).
+  // Otherwise, if just the current file is fully read but not signed off,
+  // nudge ⇧M. Fall back to the standard menu. The changeset nudge gates on
+  // `=== false` so it skips both the already-signed case and the null-token
+  // case where the cell is hidden.
   let defaultHint: string;
   if (lineHasAiNote && !lineNoteAcked) {
     defaultHint = "a ack · r reply · c comment · ]/[ file · ? help";
+  } else if (readCoverage >= 1 && currentChangesetSignedOff === false) {
+    defaultHint = "⇧S sign off changeset · / prompt · ? help";
   } else if (currentFileReadFraction >= 1 && !currentFileReviewed) {
     defaultHint = "⇧M sign off this file · ]/[ next file · / prompt · ? help";
   } else {

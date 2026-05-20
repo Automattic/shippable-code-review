@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildSidebarViewModel } from "./view";
+import { buildSidebarViewModel, buildStatusBarViewModel } from "./view";
+import type { BuildStatusBarViewModelArgs } from "./view";
 import type { Interaction } from "./types";
 import {
   blockCommentKey,
@@ -99,5 +100,56 @@ describe("buildSidebarViewModel commentCount", () => {
     });
     expect(counts.get("f-normal")).toBe(0);
     expect(counts.get("f-pr")).toBe(0);
+  });
+});
+
+describe("buildStatusBarViewModel defaultHint", () => {
+  function args(
+    overrides: Partial<BuildStatusBarViewModelArgs> = {},
+  ): BuildStatusBarViewModelArgs {
+    return {
+      totalFiles: 3,
+      fileIdx: 0,
+      totalHunks: 2,
+      hunkIdx: 0,
+      totalLines: 10,
+      lineIdx: 0,
+      readCoverage: 0,
+      reviewedFiles: 0,
+      selection: null,
+      lineHasAiNote: false,
+      lineNoteAcked: false,
+      currentFileReadFraction: 0,
+      currentFileReviewed: false,
+      currentChangesetSignedOff: false,
+      ...overrides,
+    };
+  }
+
+  it("nudges ⇧S once the whole changeset is read but unsigned", () => {
+    const vm = buildStatusBarViewModel(
+      args({ readCoverage: 1, currentChangesetSignedOff: false }),
+    );
+    expect(vm.defaultHint).toContain("⇧S sign off changeset");
+  });
+
+  it("skips the ⇧S nudge when no stable token is available", () => {
+    const vm = buildStatusBarViewModel(
+      args({ readCoverage: 1, currentChangesetSignedOff: null }),
+    );
+    expect(vm.defaultHint).not.toContain("⇧S");
+  });
+
+  it("prefers the ⇧S nudge over the per-file ⇧M nudge when both conditions hold", () => {
+    const vm = buildStatusBarViewModel(
+      args({
+        readCoverage: 1,
+        currentFileReadFraction: 1,
+        currentFileReviewed: false,
+        currentChangesetSignedOff: false,
+      }),
+    );
+    expect(vm.defaultHint).toContain("⇧S sign off changeset");
+    expect(vm.defaultHint).not.toContain("⇧M");
   });
 });
