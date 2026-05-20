@@ -5,10 +5,24 @@ import { z } from "zod";
 import {
   handleCheckReviewComments,
   handlePostReviewComment,
+  handleWatchReviewComments,
 } from "./handler.js";
 
 const TOOL_DESCRIPTION =
   "Check Shippable for reviewer interactions. Call this tool when the user mentions reviewing code, pulling reviewer feedback, checking shippable, or asks about review comments. Returns a `<reviewer-feedback>` envelope with one `<interaction id=\"…\" target=\"…\" intent=\"…\" author=\"…\" authorRole=\"…\" file=\"…\" lines=\"…\">…</interaction>` per entry. IMPORTANT: each `<interaction>` carries an `id` attribute — you SHOULD capture it (alongside the body) so you can later report back via `shippable_post_review_comment`. The `status` argument selects what to fetch: 'unread' returns interactions not yet marked read and marks them read, draining them from the unread queue; 'delivered' re-reads interactions already marked read; 'all' returns both. As a last resort, a missing id previously returned under 'unread' could be re-fetched with 'delivered' or 'all'.";
+
+const WATCH_TOOL_DESCRIPTION =
+  "Watch Shippable for reviewer comments and deliver them live. Call this when " +
+  "the user says 'watch shippable', 'address my comments as I review', wants a " +
+  "'live review', or asks you to keep watching for review comments. " +
+  "This tool BLOCKS: it drains anything already pending, then keeps polling " +
+  "until new reviewer comments arrive or the timeout elapses — it always " +
+  "returns, with either a `<reviewer-feedback>` envelope or a short 'no " +
+  "comments yet' message. IMPORTANT: watch mode is a loop. After you handle a " +
+  "batch (and post each outcome back via `shippable_post_review_comment`), or " +
+  "after a timeout, you MUST call `shippable_watch_review_comments` again to " +
+  "keep watching. The reviewer ends watch mode by interrupting you. Capture the " +
+  "`id` on each `<interaction>` — the queue drains on read.";
 
 const POST_COMMENT_DESCRIPTION =
   "Post a review interaction back to Shippable. Two modes, distinguished by which fields you supply:\n\n" +
@@ -42,6 +56,30 @@ async function main(): Promise<void> {
     },
     async ({ worktreePath, status }) => {
       return handleCheckReviewComments({ worktreePath, status });
+    },
+  );
+
+  server.registerTool(
+    "shippable_watch_review_comments",
+    {
+      description: WATCH_TOOL_DESCRIPTION,
+      inputSchema: {
+        worktreePath: z
+          .string()
+          .optional()
+          .describe(
+            "Absolute path to the worktree whose review interactions should be watched. Defaults to the agent's current working directory.",
+          ),
+        timeoutSeconds: z
+          .number()
+          .optional()
+          .describe(
+            "Seconds to keep watching before returning; default 60, clamped 1–300. The tool returns either way and you re-call it, so a short value is costless.",
+          ),
+      },
+    },
+    async (input) => {
+      return handleWatchReviewComments(input);
     },
   );
 

@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_PORT,
+  WATCH_DELIVERED_HINT,
+  WATCH_IDLE_HINT,
   handleCheckReviewComments,
   handlePostReviewComment,
+  handleWatchReviewComments,
 } from "./handler.js";
 
 interface CapturedRequest {
@@ -21,6 +24,35 @@ function makeFetch(response: Response | Promise<Response> | Error): {
     return response;
   }) as typeof fetch;
   return { fetchFn, calls };
+}
+
+/**
+ * A fetch stub that walks `responses` one entry per call, repeating the last
+ * entry once exhausted — so a watch loop that polls more than expected stays
+ * deterministic. An `Error` entry is thrown to model a fetch rejection.
+ */
+function makeSequenceFetch(responses: Array<Response | Error>): {
+  fetchFn: typeof fetch;
+  calls: CapturedRequest[];
+} {
+  const calls: CapturedRequest[] = [];
+  let i = 0;
+  const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    const entry = responses[Math.min(i, responses.length - 1)]!;
+    i++;
+    if (entry instanceof Error) throw entry;
+    // Clone — a Response body reads once, and a watch loop re-polls the
+    // last entry, so each call needs its own readable body.
+    return entry.clone();
+  }) as typeof fetch;
+  return { fetchFn, calls };
+}
+
+/** A `nowFn` that walks `values` once per call, holding on the last entry. */
+function steppingNow(values: number[]): () => number {
+  let i = 0;
+  return () => values[Math.min(i++, values.length - 1)]!;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -435,5 +467,186 @@ describe("handlePostReviewComment — top-level mode", () => {
     );
     expect(result.isError).toBe(true);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("handleWatchReviewComments", () => {
+  const ENVELOPE =
+    '<reviewer-feedback from="shippable" commit="abc"><interaction id="c1" file="x.ts">hi</interaction></reviewer-feedback>';
+
+  it("returns the envelope plus the delivered hint when the first pull is non-empty", async () => {
+    const { fetchFn } = makeSequenceFetch([
+      jsonResponse({ payload: ENVELOPE, ids: ["c1"] }),
+    ]);
+    const sleepFn = vi.fn(async () => {});
+
+    const result = await handleWatchReviewComments(
+      { worktreePath: "/repo" },
+      { fetchFn, port: 4000, sleepFn, nowFn: () => 0 },
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]!.text).toBe(`${ENVELOPE}\n\n${WATCH_DELIVERED_HINT}`);
+    expect(sleepFn).not.toHaveBeenCalled();
+  });
+
+  it("loops past empty pulls and returns once comments arrive", async () => {
+    const { fetchFn, calls } = makeSequenceFetch([
+      jsonResponse({ payload: "", ids: [] }),
+      jsonResponse({ payload: "", ids: [] }),
+      jsonResponse({ payload: ENVELOPE, ids: ["c1"] }),
+    ]);
+    const sleepFn = vi.fn(async () => {});
+
+    const result = await handleWatchReviewComments(
+      { worktreePath: "/repo" },
+      { fetchFn, port: 4000, sleepFn, nowFn: () => 0 },
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]!.text).toBe(`${ENVELOPE}\n\n${WATCH_DELIVERED_HINT}`);
+    expect(calls).toHaveLength(3);
+    // One sleep between each pair of pulls — never after the delivering pull.
+    expect(sleepFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("polls /api/agent/interactions with status unread and watch: true", async () => {
+    const { fetchFn, calls } = makeSequenceFetch([
+      jsonResponse({ payload: "", ids: [] }),
+      jsonResponse({ payload: ENVELOPE, ids: ["c1"] }),
+    ]);
+
+    await handleWatchReviewComments(
+      { worktreePath: "/repo" },
+      { fetchFn, port: 4000, sleepFn: async () => {}, nowFn: () => 0 },
+    );
+
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.url).toBe("http://127.0.0.1:4000/api/agent/interactions");
+      const body = JSON.parse(String(call.init?.body));
+      expect(body.watch).toBe(true);
+      expect(body.status).toBe("unread");
+      expect(body.worktreePath).toBe("/repo");
+    }
+  });
+
+  it("returns the idle message and hint once the deadline passes with nothing pending", async () => {
+    const { fetchFn, calls } = makeSequenceFetch([
+      jsonResponse({ payload: "", ids: [] }),
+    ]);
+    // Default 60s window → deadline 60000. Clock stays at 0 for three polls
+    // then jumps past the deadline.
+    const result = await handleWatchReviewComments(
+      { worktreePath: "/repo" },
+      {
+        fetchFn,
+        port: 4000,
+        sleepFn: async () => {},
+        nowFn: steppingNow([0, 0, 0, 0, 70_000]),
+      },
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]!.text).toContain(WATCH_IDLE_HINT);
+    expect(result.content[0]!.text).toContain("No reviewer comments arrived");
+    expect(calls.length).toBeGreaterThan(1);
+  });
+
+  it("clamps timeoutSeconds below MIN_TIMEOUT_SECONDS up to the minimum", async () => {
+    const { fetchFn, calls } = makeSequenceFetch([
+      jsonResponse({ payload: "", ids: [] }),
+    ]);
+    // timeoutSeconds 0 → clamped to 1s → deadline 1000. A clamp-free run would
+    // set deadline 0 and return idle after a single poll; the clamp forces a
+    // second poll before the clock (1001) crosses the deadline.
+    const result = await handleWatchReviewComments(
+      { worktreePath: "/repo", timeoutSeconds: 0 },
+      {
+        fetchFn,
+        port: 4000,
+        sleepFn: async () => {},
+        nowFn: steppingNow([0, 0, 1001]),
+      },
+    );
+
+    expect(result.content[0]!.text).toContain(WATCH_IDLE_HINT);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("clamps timeoutSeconds above MAX_TIMEOUT_SECONDS down to the maximum", async () => {
+    const { fetchFn, calls } = makeSequenceFetch([
+      jsonResponse({ payload: "", ids: [] }),
+    ]);
+    // timeoutSeconds 400 → clamped to 300s → deadline 300000. The clock reads
+    // 350000 on the first check, already past the clamped deadline, so the
+    // loop returns after one poll. Without the clamp (deadline 400000) it
+    // would poll again.
+    const result = await handleWatchReviewComments(
+      { worktreePath: "/repo", timeoutSeconds: 400 },
+      {
+        fetchFn,
+        port: 4000,
+        sleepFn: async () => {},
+        nowFn: steppingNow([0, 350_000, 450_000]),
+      },
+    );
+
+    expect(result.content[0]!.text).toContain(WATCH_IDLE_HINT);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("falls back to deps.cwd() when worktreePath is absent, explicit path wins", async () => {
+    const absent = makeSequenceFetch([
+      jsonResponse({ payload: ENVELOPE, ids: ["c1"] }),
+    ]);
+    await handleWatchReviewComments(
+      {},
+      { fetchFn: absent.fetchFn, port: 4000, cwd: () => "/tmp/cwd", sleepFn: async () => {}, nowFn: () => 0 },
+    );
+    expect(JSON.parse(String(absent.calls[0]!.init?.body)).worktreePath).toBe(
+      "/tmp/cwd",
+    );
+
+    const present = makeSequenceFetch([
+      jsonResponse({ payload: ENVELOPE, ids: ["c1"] }),
+    ]);
+    await handleWatchReviewComments(
+      { worktreePath: "/tmp/explicit" },
+      { fetchFn: present.fetchFn, port: 4000, cwd: () => "/tmp/cwd", sleepFn: async () => {}, nowFn: () => 0 },
+    );
+    expect(JSON.parse(String(present.calls[0]!.init?.body)).worktreePath).toBe(
+      "/tmp/explicit",
+    );
+  });
+
+  it("returns a structured error and exits the loop on a fetch rejection", async () => {
+    const { fetchFn, calls } = makeSequenceFetch([new Error("ECONNREFUSED")]);
+
+    const result = await handleWatchReviewComments(
+      { worktreePath: "/repo" },
+      { fetchFn, port: 7777, sleepFn: async () => {}, nowFn: () => 0 },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("ECONNREFUSED");
+    expect(result.content[0]!.text).toContain("7777");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("returns a structured error and exits the loop on a non-2xx response", async () => {
+    const { fetchFn, calls } = makeSequenceFetch([
+      new Response("oops", { status: 500 }),
+    ]);
+
+    const result = await handleWatchReviewComments(
+      { worktreePath: "/repo" },
+      { fetchFn, port: 4242, sleepFn: async () => {}, nowFn: () => 0 },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("4242");
+    expect(result.content[0]!.text).toContain("500");
+    expect(calls).toHaveLength(1);
   });
 });

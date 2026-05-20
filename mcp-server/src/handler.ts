@@ -2,6 +2,29 @@ import { discoverSidecarPort } from "./port-discovery.js";
 
 export const DEFAULT_PORT = 3001;
 
+/** How often the watch loop re-polls `/api/agent/interactions` for new comments. */
+export const POLL_INTERVAL_MS = 2000;
+
+/** Watch-loop timeout bounds. The agent re-calls, so a short window is costless. */
+export const DEFAULT_TIMEOUT_SECONDS = 60;
+export const MIN_TIMEOUT_SECONDS = 1;
+export const MAX_TIMEOUT_SECONDS = 300;
+
+/**
+ * Appended to a watch result that delivered comments. Keeps the loop
+ * self-sustaining even after the tool description fades from the model's
+ * focus (mirrors the auto-reply-hint pattern).
+ */
+export const WATCH_DELIVERED_HINT =
+  "Address the reviewer comments above. After you handle each one, post the " +
+  "outcome back with `shippable_post_review_comment`. Then call " +
+  "`shippable_watch_review_comments` again to keep watching for the next batch.";
+
+/** Appended to a watch result that timed out with nothing pending. */
+export const WATCH_IDLE_HINT =
+  "No comments arrived yet — call `shippable_watch_review_comments` again to " +
+  "keep watching. The reviewer ends watch mode by interrupting you.";
+
 export interface HandlerDeps {
   fetchFn?: typeof fetch;
   port?: number;
@@ -12,6 +35,9 @@ export interface HandlerDeps {
    * health-checks before returning a port.
    */
   discoverPortFn?: () => Promise<number | null>;
+  /** Watch-loop seams for deterministic tests. Production: real setTimeout / Date.now. */
+  sleepFn?: (ms: number) => Promise<void>;
+  nowFn?: () => number;
 }
 
 export interface ToolResult {
@@ -108,6 +134,90 @@ export async function handleCheckReviewComments(
   return {
     content: [{ type: "text", text }],
   };
+}
+
+function realSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clampTimeoutSeconds(seconds: number | undefined): number {
+  if (seconds === undefined || !Number.isFinite(seconds)) {
+    return DEFAULT_TIMEOUT_SECONDS;
+  }
+  return Math.min(MAX_TIMEOUT_SECONDS, Math.max(MIN_TIMEOUT_SECONDS, seconds));
+}
+
+/**
+ * Watch mode: poll `/api/agent/interactions` until reviewer comments arrive or
+ * the timeout elapses, then return — always. The agent loops the tool either
+ * way, so live review needs only one kickoff prompt. Each poll uses
+ * `status: "unread"` — watch mode drains the queue, same as a one-shot check.
+ */
+export async function handleWatchReviewComments(
+  input: { worktreePath?: string; timeoutSeconds?: number },
+  deps?: HandlerDeps,
+): Promise<ToolResult> {
+  const port = await resolvePort(deps);
+  const worktreePath = resolveWorktreePath(input, deps);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const url = `${baseUrl}/api/agent/interactions`;
+  const fetchFn = deps?.fetchFn ?? fetch;
+  const sleepFn = deps?.sleepFn ?? realSleep;
+  const nowFn = deps?.nowFn ?? Date.now;
+
+  const timeoutSeconds = clampTimeoutSeconds(input.timeoutSeconds);
+  const deadline = nowFn() + timeoutSeconds * 1000;
+
+  for (;;) {
+    let response: Response;
+    try {
+      response = await fetchFn(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ worktreePath, status: "unread", watch: true }),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return errorResult(
+        `Error contacting Shippable server at ${baseUrl}: ${message}`,
+      );
+    }
+
+    if (!response.ok) {
+      return errorResult(
+        `Error contacting Shippable server at ${baseUrl}: HTTP ${response.status}`,
+      );
+    }
+
+    let body: PullResponse;
+    try {
+      body = (await response.json()) as PullResponse;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return errorResult(
+        `Error contacting Shippable server at ${baseUrl}: invalid JSON response (${message})`,
+      );
+    }
+
+    if (typeof body.payload === "string" && body.payload.length > 0) {
+      return {
+        content: [
+          { type: "text", text: `${body.payload}\n\n${WATCH_DELIVERED_HINT}` },
+        ],
+      };
+    }
+    if (nowFn() >= deadline) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No reviewer comments arrived within the watch window.\n\n${WATCH_IDLE_HINT}`,
+          },
+        ],
+      };
+    }
+    await sleepFn(POLL_INTERVAL_MS);
+  }
 }
 
 export type AgentResponseIntent = "ack" | "accept" | "reject";
