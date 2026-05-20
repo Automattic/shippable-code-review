@@ -11,7 +11,7 @@ What this enables:
 - A `↗ Detach` affordance on each sidebar's header pops the panel out as a child window of the current reviewer.
 - The host window collapses the slot while the panel is detached, reusing the existing `showSidebar` / `showInspector` path so the diff gets the room.
 - The detached window is bound to its parent reviewer: it always reflects that reviewer's state, regardless of which other review windows are focused.
-- Closing the parent closes its detached children. Closing a detached child re-docks the panel in the parent (or just leaves the slot hidden — see the slices).
+- Closing the parent closes its detached children. Closing a detached child re-docks the panel in the parent, even if the user had manually hidden it before detaching — the visible action ("close that window") most naturally maps to "put it back."
 - Every interaction available in the docked panel works identically in the detached one — picking a file, jumping to a comment, expanding a thread, submitting a reply, closing a prompt run, retrying a delivery.
 
 What it explicitly does *not* try to do:
@@ -21,6 +21,8 @@ What it explicitly does *not* try to do:
 - Detaching individual sub-panels (Files only, AgentContext only). Whole-sidebar at a time. A future change could split further.
 - A browser-mode equivalent. Multi-window is Tauri-only; this rides on the same gate (`isTauri()`). Browser users get the affordance hidden, same as `supportsNewWindow` today.
 - Persisting a detached child across launches. Cold start always begins fully docked.
+- Preserving detach across review-switches in the same parent window. Going back to the picker and loading another review collapses any children. Detach is a per-review-session affordance — easier to implement and matches "no restoration across launches."
+- Saving per-kind window sizes / positions across opens. Nice-to-have, but out of scope.
 
 ## What already works (so the plan is smaller than it looks)
 
@@ -42,7 +44,7 @@ The real work: one new HTML entry, one new React mount, the parent-side push/lis
 
 **(c) Inspector detach — wire the right sidebar.** Same shape as (b), with the larger action surface: `jumpToBlock`, `toggleAck`, `startDraft`, `closeDraft`, `changeDraft`, `submitReply`, `retryReply`, `deleteReply`, `prevComment`, `nextComment`, `pickSession`, `refresh`, `verify`, `verifyAiNote`, plus the agent-context props (`mcpStatus`, `delivered`, `lastSuccessfulPollAt`, `deliveredError`). All callbacks become emits, keyed by an action `type` discriminant. The parent's listener does a single `switch` on `type` and calls into the same dispatchers `ReviewWorkspace` already wires for the docked Inspector. Local-only state inside the detached window (e.g. transient UI like expanded sections, scroll position) stays in the child — only state owned by `ReviewState` round-trips. *Done when:* the inspector in a detached window is functionally interchangeable with the docked one: draft a reply, submit, watch the pip change to ✓ delivered, all from the detached window.
 
-**(d) Re-attach UX + edge polish.** A keyboard shortcut on the parent (`⌘⇧[` for sidebar, `⌘⇧]` for inspector) toggles detach. The detached window has a header bar with the panel name, a `↙ Re-attach` button, and the parent's title for context ("Inspector — feat/auto-mode-sandbox"). Trying to detach a sidebar that is already detached focuses the existing child (mirroring the duplicate-detection idiom from multi-window). Browser users see the host menu items / buttons hidden via `isTauri()`. *Done when:* every entry point (header button, shortcut, menu) does the right thing and the user can't end up in a state where a sidebar is "detached" but no detached window exists.
+**(d) Re-attach UX + edge polish.** A keyboard shortcut on the parent (`⌘⇧[` for sidebar, `⌘⇧]` for inspector) toggles detach. App menu gains `View → Detach Sidebar` and `View → Detach Inspector` (with the same accelerators) via the existing `src-tauri/src/menu.rs` builder — same pattern as `shippable:new-window`: a `MenuItemBuilder` with id `shippable:detach-sidebar` / `shippable:detach-inspector`, `action_for` maps them to action strings, the frontend's existing `shippable:menu` listener routes to the same toggle the header button calls. Both items are disabled when the focused window isn't a review window. The detached window has a header bar with the panel name, a `↙ Re-attach` button, and the parent's title for context ("Inspector — feat/auto-mode-sandbox"). Trying to detach a sidebar that is already detached focuses the existing child (mirroring the duplicate-detection idiom from multi-window). Browser users see the host menu items / buttons hidden via `isTauri()`. *Done when:* every entry point (header button, shortcut, menu item) does the right thing and the user can't end up in a state where a sidebar is "detached" but no detached window exists.
 
 ## Architecture sketch
 
@@ -196,19 +198,12 @@ A few things stay in the child rather than mirroring across:
 - **Snapshot identity vs structural change.** React re-renders churn object identities even when contents don't change. The bridge's structural-compare must look at the leaves (`files`, `runs`, `viewModel.userCommentRows`, …). Tests in `view.test.ts` already cover the view-model invariants; we extend with bridge-level "no emit on identity churn" tests.
 - **localStorage write fan-out.** A reply submitted in the detached window updates `ReviewState` in the parent, which writes `shippable:review:v1` — already keyed by changeset id and already shared per-origin. No code change here; just listing it because it's the boundary where docked-vs-detached parity is most visible to the user.
 
-## Open questions
-
-- **Tangled detach + manual hide.** If the user manually toggled the sidebar off (existing `showSidebar=false` shortcut) *before* detaching, then closed the detached window, should the host re-show the docked sidebar? Default: re-show, because the visible action ("close that window") most naturally maps to "put it back." Slice (d) revisit if it surprises in use.
-- **Detach state persistence within a session.** Should switching changesets in the parent (back to picker, then load another review) preserve the detach? Default: no — closing/relauncing the review collapses any children, child windows close. Detach is a per-review session affordance. Easier to implement and matches "no restoration across launches" from multi-window.
-- **Menu surface.** Multi-window added `File → New Window`. Detach probably warrants `View → Detach Sidebar` / `View → Detach Inspector`, but the View menu doesn't exist yet. Out of scope for this plan; the header button + shortcut are enough for slice (d).
-- **Per-kind window sizes / positions saved across opens.** Nice-to-have. Out of scope.
-
 ## File map (anticipated)
 
 ```
 src-tauri/src/
   lib.rs                                # extend WindowRegistryState, add open_detached_window
-  menu.rs                               # optional: add detach shortcuts to View
+  menu.rs                               # add View → Detach Sidebar / Detach Inspector items + action_for mapping
 src-tauri/
   tauri.conf.json                       # whitelist /detached.html as a valid app URL if needed
 
@@ -227,7 +222,7 @@ web/src/components/
   ReviewWorkspace.tsx                   # mount DetachBridge; gate <Sidebar>/<Inspector> on "no child registered"
 ```
 
-The only components edited are the headers of `Sidebar` and `Inspector` (one button each). All new logic is additive: `detached.html`, `detached.tsx`, `detachBridge.ts`, `detachedHost.tsx`, plus three additions in `multiWindow.ts` and `lib.rs`.
+The only components edited are the headers of `Sidebar` and `Inspector` (one button each). All new logic is additive: `detached.html`, `detached.tsx`, `detachBridge.ts`, `detachedHost.tsx`, plus three additions in `multiWindow.ts` and `lib.rs`, and two new menu items in `menu.rs`.
 
 ## Testing
 
