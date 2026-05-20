@@ -53,6 +53,12 @@ After the agent fetches comments via `shippable_check_review_comments`, it posts
 
 The reviewer UI polls `GET /api/agent/replies` every 2s while the active worktree is loaded and the tab is visible. New entries surface within a poll cycle. The polled payload covers both reply-shaped entries (`parentId`) and top-level agent-started entries (`file` + `lines`), and the reducer merges both shapes into the existing interaction threads.
 
+### Watch mode and the "Agent is watching" indicator
+
+By default the agent fetches comments one batch at a time — the reviewer re-prompts `check shippable` per batch. **Watch mode** removes the repeated prompt: the reviewer prompts `watch shippable` once, the agent calls `shippable_watch_review_comments` in a loop, and every comment authored afterwards reaches the agent within ~2s. The agent ends each loop by acting on the batch, posting results back, and calling the tool again; the reviewer ends watch mode by interrupting the agent.
+
+So the reviewer can trust their comments are landing live, the panel shows an **"Agent is watching — comments deliver live"** indicator below the server-restart hint whenever an agent is actively watching this worktree. It is driven by a `watching` boolean on the same `GET /api/agent/replies` poll the panel already runs: each watch pull tags the server, which reports the worktree as watching for 90s (`WATCH_TTL_MS`) after the last watch poll. The indicator is hidden when no agent is watching. Because the signal is poll-derived it is approximate — a stopped watch loop clears the indicator within the TTL; the SSE transport follow-up makes it exact. See `docs/sdd/watch-review-comments/spec.md`.
+
 File-level top-level comments (`lines` omitted) are not supported in v0 — the reviewer UI has no file-level comment slot yet. The MCP tool input rejects them with a clear error. Follow-up: bundle file-level commenting for users and agents in one future change. See `docs/sdd/agent-comments/spec.md` for the full design.
 
 Pushback / clarification on a `declined` reply does **not** flow back through Shippable — that conversation belongs in the user-agent chat. Shippable's role is to surface what the agent did, not to host a multi-turn debate.
@@ -61,11 +67,12 @@ See `docs/sdd/agent-reply-support/spec.md` for the original reply-only design an
 
 ## MCP install affordance
 
-The panel renders a prominent install section at the top when no `shippable` MCP entry is detected in the user's Claude Code config (and the user hasn't dismissed it). Three click-to-copy chips:
+The panel renders a prominent install section at the top when no `shippable` MCP entry is detected in the user's Claude Code config (and the user hasn't dismissed it). Four click-to-copy chips:
 
 - **Install:** `claude mcp add shippable -- npx -y @shippable/mcp-server` (Claude Code; per-harness adaptation lands as more harnesses surface real demand). See `mcp-server/README.md` for the full per-harness install matrix (Codex CLI, Cursor / Cline / Claude Desktop / OpenCode).
-- **Pull comments:** `check shippable` — the magic phrase that triggers the agent to call `shippable_check_review_comments`.
+- **Pull comments:** `check shippable` — the magic phrase that triggers the agent to call `shippable_check_review_comments` once.
 - **Report back:** `report back to shippable` — the fallback phrase that nudges the agent to post per-comment replies or fresh top-level comments via `shippable_post_review_comment`.
+- **Watch live:** `watch shippable` — enters watch mode. The agent calls `shippable_watch_review_comments` in a loop and picks up each comment live as the reviewer writes it, so the reviewer prompts once instead of per batch. A one-line hint under the chip explains this.
 
 Both tool descriptions are tuned for prompt drift on adjacent phrasings ("pull review comments", "any reviewer feedback", "let shippable know what you did"), but the literal phrases are the reliable fallback.
 
@@ -89,7 +96,7 @@ Detection is server-side — `GET /api/worktrees/mcp-status` reads `~/.claude/se
 - `web/src/agentContextClient.ts` — the fetch helpers; `useDeliveredPolling.ts` drives delivered/reply polling.
 - `server/src/agent-context.ts` — JSONL parser, `cwd` matcher, commit-boundary slicer.
 - `server/src/index.ts` — endpoints `POST /api/worktrees/agent-context` (read), `POST /api/worktrees/sessions` (list candidates for manual pick), `GET /api/worktrees/mcp-status` (install detection), `POST /api/agent/enqueue|pull|unenqueue`, `GET /api/agent/delivered` (queue delivery status), and `POST /api/agent/replies` + `GET /api/agent/replies` (the agent → reviewer post-back channel for both reply-shaped and top-level agent entries).
-- `mcp-server/` — the standalone TypeScript MCP server exposing `shippable_check_review_comments` (pull pending comments) and `shippable_post_review_comment` (post per-comment replies or fresh top-level comments). Installs into Claude Code via `claude mcp add shippable -- npx -y @shippable/mcp-server`.
+- `mcp-server/` — the standalone TypeScript MCP server exposing `shippable_check_review_comments` (pull pending comments once), `shippable_watch_review_comments` (watch mode — poll loop for live delivery), and `shippable_post_review_comment` (post per-comment replies or fresh top-level comments). Installs into Claude Code via `claude mcp add shippable -- npx -y @shippable/mcp-server`.
 
 ## Out of scope for this feature
 

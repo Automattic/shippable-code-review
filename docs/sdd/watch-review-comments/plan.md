@@ -4,13 +4,16 @@ Based on: docs/sdd/watch-review-comments/spec.md
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+> **Status: complete.** All 8 tasks landed. Deviations from the plan's file
+> lists and code-shape assumptions are recorded in `implementation-notes.md`.
+
 Each package owns its own `npm test` (`server/`, `mcp-server/`, `web/`). Run the
 relevant suite per task. `npm run build` + `npm run lint` in `web/` must still
 pass after Task 7. Tasks 1 and 3 are independent and may run in parallel.
 
 ## Tasks
 
-### Task 1: Server queue watch marker
+### Task 1 ✅: Server queue watch marker
 - **Files**: `server/src/agent-queue.ts`, `server/src/agent-queue.test.ts`
 - **Do**:
   1. Write failing tests in `agent-queue.test.ts`: `markWatchPoll(path)` then `isWatching(path)` is `true`; `isWatching` is `false` once more than `WATCH_TTL_MS` has elapsed since the mark; `isWatching` is `false` for a never-marked worktree. Use the file's existing time-control pattern (inject/advance, or a `nowFn` seam consistent with the module).
@@ -21,7 +24,7 @@ pass after Task 7. Tasks 1 and 3 are independent and may run in parallel.
 - **Verify**: new `agent-queue.test.ts` cases pass; no regressions in the server suite.
 - **Depends on**: none
 
-### Task 2: Server endpoints honor watch + expose watching
+### Task 2 ✅: Server endpoints honor watch + expose watching
 - **Files**: `server/src/index.ts`, `server/src/index.test.ts`
 - **Do**:
   1. Write failing integration tests: `POST /api/agent/pull` with `{ worktreePath, watch: true }` followed by `GET /api/agent/replies?worktreePath=…` returns `watching: true`; a pull without `watch` (or `watch: false`) leaves `watching: false`.
@@ -33,7 +36,7 @@ pass after Task 7. Tasks 1 and 3 are independent and may run in parallel.
 - **Verify**: new integration tests pass; existing `/api/agent/*` tests unaffected; `typecheck` clean.
 - **Depends on**: Task 1
 
-### Task 3: MCP watch handler core
+### Task 3 ✅: MCP watch handler core
 - **Files**: `mcp-server/src/handler.ts`, `mcp-server/src/handler.test.ts`
 - **Do**:
   1. Write failing tests for a new `handleWatchReviewComments`, mirroring the mocked-`fetch` style already in `handler.test.ts`, with injected `sleepFn` (no-op spy) and `nowFn` (controllable clock): (a) first pull returns a non-empty `payload` → result text is the envelope followed by `WATCH_DELIVERED_HINT`, `isError` unset; (b) first two pulls empty, third non-empty → handler loops and returns the envelope, `sleepFn` called between pulls; (c) every pull body includes `watch: true`.
@@ -45,7 +48,7 @@ pass after Task 7. Tasks 1 and 3 are independent and may run in parallel.
 - **Verify**: core watch tests pass; existing handler tests unaffected.
 - **Depends on**: none
 
-### Task 4: MCP watch handler edge cases
+### Task 4 ✅: MCP watch handler edge cases
 - **Files**: `mcp-server/src/handler.ts`, `mcp-server/src/handler.test.ts`
 - **Do**:
   1. Write failing tests: (a) all pulls empty until `nowFn` passes the deadline → returns the idle message + `WATCH_IDLE_HINT`, `isError` unset; (b) `timeoutSeconds` below `MIN_TIMEOUT_SECONDS` and above `MAX_TIMEOUT_SECONDS` are clamped; (c) `worktreePath` absent → resolves to `cwd`, present → wins; (d) `fetchFn` rejection and a non-2xx response each return a structured `errorResult` (`isError: true`) and exit the loop without throwing.
@@ -56,7 +59,7 @@ pass after Task 7. Tasks 1 and 3 are independent and may run in parallel.
 - **Verify**: all edge-case tests pass; the loop exits on error rather than spinning.
 - **Depends on**: Task 3
 
-### Task 5: Register the watch tool
+### Task 5 ✅: Register the watch tool
 - **Files**: `mcp-server/src/index.ts`
 - **Do**:
   1. Add `WATCH_TOOL_DESCRIPTION` — explain that the tool blocks until reviewer comments arrive or it times out, that the agent must **call it again in a loop** after handling each batch, and tune it for prompt drift ("watch shippable", "address my comments as I review", "live review", "keep watching for review comments").
@@ -66,7 +69,7 @@ pass after Task 7. Tasks 1 and 3 are independent and may run in parallel.
 - **Verify**: `mcp-server/` builds; three tools registered.
 - **Depends on**: Task 4
 
-### Task 6: Web client carries watching
+### Task 6 ✅: Web client carries watching
 - **Files**: `web/src/agentContextClient.ts`
 - **Do**:
   1. Update the replies-fetch function so its return type and parsing include `watching: boolean` from the `GET /api/agent/replies` response; thread it through to callers.
@@ -75,7 +78,7 @@ pass after Task 7. Tasks 1 and 3 are independent and may run in parallel.
 - **Verify**: `web/` typechecks and builds; no client-test regressions.
 - **Depends on**: Task 2
 
-### Task 7: Web panel indicator and watch chip
+### Task 7 ✅: Web panel indicator and watch chip
 - **Files**: `web/src/components/AgentContextSection.tsx`, `web/src/components/AgentContextSection.test.tsx`
 - **Do**:
   1. Write failing component tests: the panel shows an "Agent is watching — comments deliver live" indicator when the client reports `watching: true` and hides/dims it when `false`; a `watch shippable` magic-phrase chip renders and copies to clipboard.
@@ -86,7 +89,7 @@ pass after Task 7. Tasks 1 and 3 are independent and may run in parallel.
 - **Verify**: component tests pass; `web/` lint and build clean.
 - **Depends on**: Task 6
 
-### Task 8: Documentation
+### Task 8 ✅: Documentation
 - **Files**: `mcp-server/README.md`, `docs/concepts/agent-context.md`, `docs/plans/share-review-comments.md`, `docs/features/agent-context-panel.md`
 - **Do**:
   1. `mcp-server/README.md`: document `shippable_watch_review_comments` — the watch loop, `timeoutSeconds`, and the `watch shippable` phrase.

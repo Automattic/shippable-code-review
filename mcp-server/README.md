@@ -1,17 +1,19 @@
 # @shippable/mcp-server
 
-A TypeScript MCP server that exposes two tools over stdio for the Shippable review loop:
+A TypeScript MCP server that exposes three tools over stdio for the Shippable review loop:
 
-- `shippable_check_review_comments` — pulls pending reviewer feedback from the local Shippable server.
+- `shippable_check_review_comments` — pulls pending reviewer feedback from the local Shippable server (one-shot).
+- `shippable_watch_review_comments` — watch mode: blocks and polls until reviewer comments arrive or a timeout fires, so the agent picks up feedback live in a loop after a single prompt.
 - `shippable_post_review_comment` — posts either a reply to a delivered reviewer interaction or a fresh top-level interaction anchored to the diff, so the reviewer can see what the agent did or noticed.
 
-Both tools talk to the local Shippable server over `127.0.0.1`.
+All three tools talk to the local Shippable server over `127.0.0.1`.
 
 ## Magic phrases
 
-Two phrases trigger the round-trip explicitly when prompt drift suppresses the implicit triggers in the tool descriptions:
+Three phrases trigger the round-trip explicitly when prompt drift suppresses the implicit triggers in the tool descriptions:
 
-- **`check shippable`** — pull pending reviewer interactions.
+- **`check shippable`** — pull pending reviewer interactions once.
+- **`watch shippable`** — enter watch mode: pick up reviewer comments live, looping until interrupted.
 - **`report back to shippable`** — post replies (or fresh interactions) for what the agent just looked at.
 
 The descriptions were tuned for prompt drift on adjacent phrasings ("pull review comments", "any reviewer feedback", "let shippable know what you did"). If the agent doesn't pick them up, fall back to the literal phrases.
@@ -23,6 +25,17 @@ The descriptions were tuned for prompt drift on adjacent phrasings ("pull review
 Input: `{ worktreePath?: string }` — defaults to the agent's `cwd()`.
 
 Returns the formatted reviewer-feedback envelope, or `"No pending comments."` when the queue is empty. The envelope is a `<reviewer-feedback>` element with one `<interaction id="…" target="…" intent="…" author="…" authorRole="…" file="…" lines="…">…</interaction>` child per pending entry. Capture the `id` attribute — the pending queue is drained on read, so this is the only chance to read it.
+
+### `shippable_watch_review_comments`
+
+Input: `{ worktreePath?: string, timeoutSeconds?: number }` — `worktreePath` defaults to the agent's `cwd()`; `timeoutSeconds` defaults to `60` and is clamped to `1–300`.
+
+Watch mode is a **loop**. The tool drains anything already pending, then keeps polling `POST /api/agent/interactions` with `status: "unread"` (every 2s) until reviewer comments arrive or `timeoutSeconds` elapses — it always returns:
+
+- **Comments arrived** — the same `<reviewer-feedback>` envelope `shippable_check_review_comments` returns, followed by an in-band hint to address them, post each result back via `shippable_post_review_comment`, and call `shippable_watch_review_comments` again.
+- **Timed out idle** — a short "no comments yet" message plus a hint to call the tool again to keep watching.
+
+Either way the agent calls the tool again, so live review costs the reviewer just one kickoff prompt (`watch shippable`). The reviewer ends watch mode by interrupting the agent. A short `timeoutSeconds` is costless — the agent re-loops — and keeps each call under MCP-client tool-call duration caps. A server error returns a structured error result and exits the loop rather than spinning on a dead server.
 
 ### `shippable_post_review_comment`
 
