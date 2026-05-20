@@ -189,10 +189,10 @@ test.describe("Journey 2 — local worktree", () => {
     request,
   }) => {
     // Drives the real two-step server lifecycle: the UI authors a pip, then
-    // we stand in for the agent worker by calling /api/agent/pull (claims +
-    // moves to delivered) and /api/agent/replies (posts the agent's
-    // response). Catches regressions in interaction-sync, the enqueue path,
-    // the delivered-polling loop, and the pip render order.
+    // we stand in for the agent worker by calling /api/agent/interactions with
+    // status "unread" (claims + moves to delivered) and /api/agent/replies
+    // (posts the agent's response). Catches regressions in interaction-sync,
+    // the enqueue path, the delivered-polling loop, and the pip render order.
     const own = createWorktreeRepo();
     try {
       await visit("/?cs=42");
@@ -213,14 +213,15 @@ test.describe("Journey 2 — local worktree", () => {
 
       // Stand in for the agent worker. The enqueue POST is asynchronous —
       // the optimistic pip lights up before it lands server-side — so poll
-      // /api/agent/pull until it actually claims something. Each pull is
-      // destructive (the server moves entries from pending to delivered);
-      // empty responses just mean "not enqueued yet" and we keep waiting.
+      // /api/agent/interactions (status "unread") until it actually claims
+      // something. An unread read is destructive (the server moves entries
+      // from pending to delivered); empty responses just mean "not enqueued
+      // yet" and we keep waiting.
       let parentId: string | null = null;
       const deadline = Date.now() + 10_000;
       while (Date.now() < deadline) {
-        const r = await request.post("/api/agent/pull", {
-          data: { worktreePath: own.path },
+        const r = await request.post("/api/agent/interactions", {
+          data: { worktreePath: own.path, status: "unread" },
         });
         if (r.ok()) {
           const body = (await r.json()) as { ids: string[] };

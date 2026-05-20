@@ -189,13 +189,21 @@ export function pullAndAck(worktreePath: string): StoredInteraction[] {
   });
 }
 
-/** All delivered interactions for a worktree, sorted oldest-first. */
-export function listDelivered(worktreePath: string): StoredInteraction[] {
+/**
+ * Read-only: all interactions for a worktree whose agent_queue_status is in
+ * `statuses`, sorted oldest-first. Unlike pullAndAck, this never acks.
+ */
+export function listByQueueStatus(
+  worktreePath: string,
+  statuses: AgentQueueStatus[],
+): StoredInteraction[] {
+  if (statuses.length === 0) return [];
+  const placeholders = statuses.map(() => "?").join(", ");
   const rows = getDb()
     .prepare(
-      `SELECT * FROM interactions WHERE worktree_path = ? AND agent_queue_status = '${DELIVERED}' ORDER BY created_at, id`,
+      `SELECT * FROM interactions WHERE worktree_path = ? AND agent_queue_status IN (${placeholders}) ORDER BY created_at, id`,
     )
-    .all(worktreePath) as InteractionRow[];
+    .all(worktreePath, ...statuses) as InteractionRow[];
   return rows.map(rowToStored);
 }
 

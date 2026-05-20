@@ -41,7 +41,7 @@ describe("handleCheckReviewComments", () => {
     const { fetchFn } = makeFetch(jsonResponse({ payload, ids: ["a", "b"] }));
 
     const result = await handleCheckReviewComments(
-      { worktreePath: "/repo" },
+      { worktreePath: "/repo", status: "unread" },
       { fetchFn },
     );
 
@@ -53,7 +53,7 @@ describe("handleCheckReviewComments", () => {
     const { fetchFn } = makeFetch(jsonResponse({ payload: "", ids: [] }));
 
     const result = await handleCheckReviewComments(
-      { worktreePath: "/repo" },
+      { worktreePath: "/repo", status: "unread" },
       { fetchFn },
     );
 
@@ -69,7 +69,7 @@ describe("handleCheckReviewComments", () => {
     );
 
     await handleCheckReviewComments(
-      {},
+      { status: "unread" },
       { fetchFn, cwd: () => "/tmp/x" },
     );
 
@@ -84,7 +84,7 @@ describe("handleCheckReviewComments", () => {
     );
 
     await handleCheckReviewComments(
-      { worktreePath: "/tmp/y" },
+      { worktreePath: "/tmp/y", status: "unread" },
       { fetchFn, cwd: () => "/tmp/x" },
     );
 
@@ -93,13 +93,31 @@ describe("handleCheckReviewComments", () => {
     expect(body.worktreePath).toBe("/tmp/y");
   });
 
+  it("posts the status to /api/agent/interactions for each status value", async () => {
+    for (const status of ["unread", "delivered", "all"] as const) {
+      const { fetchFn, calls } = makeFetch(
+        jsonResponse({ payload: "", ids: [] }),
+      );
+      await handleCheckReviewComments(
+        { worktreePath: "/repo", status },
+        { fetchFn, port: 4000 },
+      );
+      expect(calls[0]!.url).toBe(
+        "http://127.0.0.1:4000/api/agent/interactions",
+      );
+      const body = JSON.parse(String(calls[0]!.init?.body));
+      expect(body.status).toBe(status);
+      expect(body.worktreePath).toBe("/repo");
+    }
+  });
+
   it("returns an error result on HTTP 500 with port and status in the message", async () => {
     const { fetchFn } = makeFetch(
       new Response("oops", { status: 500 }),
     );
 
     const result = await handleCheckReviewComments(
-      { worktreePath: "/repo" },
+      { worktreePath: "/repo", status: "unread" },
       { fetchFn, port: 4242 },
     );
 
@@ -117,7 +135,7 @@ describe("handleCheckReviewComments", () => {
     );
 
     const result = await handleCheckReviewComments(
-      { worktreePath: "/repo" },
+      { worktreePath: "/repo", status: "unread" },
       { fetchFn, port: 5151 },
     );
 
@@ -129,7 +147,7 @@ describe("handleCheckReviewComments", () => {
     const { fetchFn } = makeFetch(new Error("ECONNREFUSED"));
 
     const result = await handleCheckReviewComments(
-      { worktreePath: "/repo" },
+      { worktreePath: "/repo", status: "unread" },
       { fetchFn, port: 7777 },
     );
 
@@ -144,11 +162,11 @@ describe("handleCheckReviewComments", () => {
     );
 
     await handleCheckReviewComments(
-      { worktreePath: "/repo" },
+      { worktreePath: "/repo", status: "unread" },
       { fetchFn, port: 4000 },
     );
 
-    expect(calls[0]!.url).toBe("http://127.0.0.1:4000/api/agent/pull");
+    expect(calls[0]!.url).toBe("http://127.0.0.1:4000/api/agent/interactions");
   });
 
   it("honors SHIPPABLE_PORT env when deps.port is absent", async () => {
@@ -158,11 +176,11 @@ describe("handleCheckReviewComments", () => {
     );
 
     await handleCheckReviewComments(
-      { worktreePath: "/repo" },
+      { worktreePath: "/repo", status: "unread" },
       { fetchFn },
     );
 
-    expect(calls[0]!.url).toBe("http://127.0.0.1:5000/api/agent/pull");
+    expect(calls[0]!.url).toBe("http://127.0.0.1:5000/api/agent/interactions");
   });
 
   it("falls back to DEFAULT_PORT when env is empty and discovery returns null", async () => {
@@ -172,12 +190,12 @@ describe("handleCheckReviewComments", () => {
     );
 
     await handleCheckReviewComments(
-      { worktreePath: "/repo" },
+      { worktreePath: "/repo", status: "unread" },
       { fetchFn, discoverPortFn: async () => null },
     );
 
     expect(DEFAULT_PORT).toBe(3001);
-    expect(calls[0]!.url).toBe(`http://127.0.0.1:${DEFAULT_PORT}/api/agent/pull`);
+    expect(calls[0]!.url).toBe(`http://127.0.0.1:${DEFAULT_PORT}/api/agent/interactions`);
   });
 
   it("uses the discovered sidecar port when env is empty and discovery succeeds", async () => {
@@ -187,11 +205,11 @@ describe("handleCheckReviewComments", () => {
     );
 
     await handleCheckReviewComments(
-      { worktreePath: "/repo" },
+      { worktreePath: "/repo", status: "unread" },
       { fetchFn, discoverPortFn: async () => 54118 },
     );
 
-    expect(calls[0]!.url).toBe("http://127.0.0.1:54118/api/agent/pull");
+    expect(calls[0]!.url).toBe("http://127.0.0.1:54118/api/agent/interactions");
   });
 
   it("prefers SHIPPABLE_PORT over discovery", async () => {
@@ -201,11 +219,11 @@ describe("handleCheckReviewComments", () => {
     );
     // Discovery would point us at 54118 — env wins.
     await handleCheckReviewComments(
-      { worktreePath: "/repo" },
+      { worktreePath: "/repo", status: "unread" },
       { fetchFn, discoverPortFn: async () => 54118 },
     );
 
-    expect(calls[0]!.url).toBe("http://127.0.0.1:5000/api/agent/pull");
+    expect(calls[0]!.url).toBe("http://127.0.0.1:5000/api/agent/interactions");
   });
 });
 

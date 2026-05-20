@@ -1,9 +1,10 @@
 import {
   pullAndAck as storePullAndAck,
-  listDelivered as storeListDelivered,
+  listByQueueStatus as storeListByQueueStatus,
   postAgentInteraction,
   listAgentReplies,
   isDeliveredInteractionId as storeIsDelivered,
+  type AgentQueueStatus,
   type StoredInteraction,
 } from "./db/interaction-store.ts";
 import { resetForTests as resetDb } from "./db/index.ts";
@@ -185,10 +186,18 @@ export function pullAndAck(worktreePath: string): Interaction[] {
 }
 
 export function listDelivered(worktreePath: string): DeliveredInteraction[] {
-  return storeListDelivered(worktreePath).map((row) => ({
+  return storeListByQueueStatus(worktreePath, ["delivered"]).map((row) => ({
     ...toWire(row),
     deliveredAt: row.createdAt,
   }));
+}
+
+/** Read-only: interactions for a worktree in any of `statuses`, as wire shapes. */
+export function readInteractions(
+  worktreePath: string,
+  statuses: AgentQueueStatus[],
+): Interaction[] {
+  return storeListByQueueStatus(worktreePath, statuses).map(toWire);
 }
 
 /**

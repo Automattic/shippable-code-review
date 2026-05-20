@@ -8,7 +8,7 @@ import {
 } from "./handler.js";
 
 const TOOL_DESCRIPTION =
-  "Check Shippable for pending reviewer interactions. Call this tool when the user mentions reviewing code, pulling reviewer feedback, checking shippable, or asks about review comments. Returns a `<reviewer-feedback>` envelope with one `<interaction id=\"…\" target=\"…\" intent=\"…\" author=\"…\" authorRole=\"…\" file=\"…\" lines=\"…\">…</interaction>` per pending entry. IMPORTANT: each `<interaction>` carries an `id` attribute — you MUST capture it (alongside the body) so you can later report back via `shippable_post_review_comment`. The pending queue is drained on read, so this is the only chance to read the id.";
+  "Check Shippable for reviewer interactions. Call this tool when the user mentions reviewing code, pulling reviewer feedback, checking shippable, or asks about review comments. Returns a `<reviewer-feedback>` envelope with one `<interaction id=\"…\" target=\"…\" intent=\"…\" author=\"…\" authorRole=\"…\" file=\"…\" lines=\"…\">…</interaction>` per entry. IMPORTANT: each `<interaction>` carries an `id` attribute — you MUST capture it (alongside the body) so you can later report back via `shippable_post_review_comment`. The `status` argument selects what to fetch: 'unread' returns new interactions and marks them read — the queue drains, so this is the only chance to read those ids; 'delivered' re-reads interactions already marked read; 'all' returns both.";
 
 const POST_COMMENT_DESCRIPTION =
   "Post a review interaction back to Shippable. Two modes, distinguished by which fields you supply:\n\n" +
@@ -33,10 +33,15 @@ async function main(): Promise<void> {
           .describe(
             "Absolute path to the worktree whose review interactions should be fetched. Defaults to the agent's current working directory.",
           ),
+        status: z
+          .enum(["unread", "delivered", "all"])
+          .describe(
+            "Which interactions to fetch. 'unread': new ones, marks them read (drains the queue); 'delivered': ones already read; 'all': both. Required — state your intent on every call.",
+          ),
       },
     },
-    async ({ worktreePath }) => {
-      return handleCheckReviewComments({ worktreePath });
+    async ({ worktreePath, status }) => {
+      return handleCheckReviewComments({ worktreePath, status });
     },
   );
 

@@ -25,6 +25,8 @@ interface PullResponse {
   ids: string[];
 }
 
+export type AgentInteractionStatus = "unread" | "delivered" | "all";
+
 async function resolvePort(deps?: HandlerDeps): Promise<number> {
   if (deps?.port !== undefined) return deps.port;
   const envPort = process.env.SHIPPABLE_PORT;
@@ -61,13 +63,13 @@ function errorResult(text: string): ToolResult {
 }
 
 export async function handleCheckReviewComments(
-  input: { worktreePath?: string },
+  input: { worktreePath?: string; status: AgentInteractionStatus },
   deps?: HandlerDeps,
 ): Promise<ToolResult> {
   const port = await resolvePort(deps);
   const worktreePath = resolveWorktreePath(input, deps);
   const baseUrl = `http://127.0.0.1:${port}`;
-  const url = `${baseUrl}/api/agent/pull`;
+  const url = `${baseUrl}/api/agent/interactions`;
   const fetchFn = deps?.fetchFn ?? fetch;
 
   let response: Response;
@@ -75,7 +77,7 @@ export async function handleCheckReviewComments(
     response = await fetchFn(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ worktreePath }),
+      body: JSON.stringify({ worktreePath, status: input.status }),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

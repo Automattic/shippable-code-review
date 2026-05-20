@@ -121,11 +121,12 @@ beforeEach(async () => {
   resetAuthStore();
 });
 
-describe("POST /api/agent/pull", () => {
-  it("returns the formatted envelope", async () => {
+describe("POST /api/agent/interactions", () => {
+  it("status=unread returns the formatted envelope and drains the queue", async () => {
     await seedPending(worktreePath, { commitSha: "deadbeef", body: "hello" });
-    const r = await postJson(`${baseUrl}/api/agent/pull`, {
+    const r = await postJson(`${baseUrl}/api/agent/interactions`, {
       worktreePath,
+      status: "unread",
     });
     expect(r.status).toBe(200);
     expect(r.body.payload).toMatch(/^<reviewer-feedback /);
@@ -133,19 +134,115 @@ describe("POST /api/agent/pull", () => {
     expect(r.body.payload).toContain("hello");
     expect(Array.isArray(r.body.ids)).toBe(true);
     expect(r.body.ids).toHaveLength(1);
+
+    // Drained: a second unread read finds nothing.
+    const again = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "unread",
+    });
+    expect(again.body.ids).toHaveLength(0);
+    expect(again.body.payload).toBe("");
   });
 
-  it("first wins: a second pull returns an empty queue", async () => {
+  it("status=unread first wins: a concurrent unread read returns an empty queue", async () => {
     await seedPending(worktreePath, { body: "x" });
     const [r1, r2] = await Promise.all([
-      postJson(`${baseUrl}/api/agent/pull`, { worktreePath }),
-      postJson(`${baseUrl}/api/agent/pull`, { worktreePath }),
+      postJson(`${baseUrl}/api/agent/interactions`, { worktreePath, status: "unread" }),
+      postJson(`${baseUrl}/api/agent/interactions`, { worktreePath, status: "unread" }),
     ]);
     const nonEmpty = [r1, r2].filter((r) => r.body.ids.length > 0);
     const empty = [r1, r2].filter((r) => r.body.ids.length === 0);
     expect(nonEmpty).toHaveLength(1);
     expect(empty).toHaveLength(1);
     expect(empty[0].body.payload).toBe("");
+  });
+
+  it("status=delivered returns delivered rows, read-only", async () => {
+    await seedPending(worktreePath, { body: "shipped" });
+    await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "unread",
+    });
+
+    const first = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "delivered",
+    });
+    expect(first.status).toBe(200);
+    expect(first.body.ids).toHaveLength(1);
+    expect(first.body.payload).toContain("shipped");
+
+    // Read-only — calling again returns the same row.
+    const second = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "delivered",
+    });
+    expect(second.body.ids).toHaveLength(1);
+  });
+
+  it("status=all returns pending + delivered without draining pending", async () => {
+    await seedPending(worktreePath, { body: "first" });
+    await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "unread",
+    }); // first → delivered
+    await seedPending(worktreePath, { body: "second" }); // stays pending
+
+    const all = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "all",
+    });
+    expect(all.status).toBe(200);
+    expect(all.body.ids).toHaveLength(2);
+    expect(all.body.payload).toContain("first");
+    expect(all.body.payload).toContain("second");
+
+    // 'all' did not ack — 'second' is still pending and drainable.
+    const drained = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "unread",
+    });
+    expect(drained.body.ids).toHaveLength(1);
+    expect(drained.body.payload).toContain("second");
+  });
+
+  it("rejects a missing status", async () => {
+    const r = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it("rejects an invalid status", async () => {
+    const r = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "bogus",
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it("rejects a missing worktreePath", async () => {
+    const r = await postJson(`${baseUrl}/api/agent/interactions`, {
+      status: "unread",
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it("rejects a non-git worktreePath", async () => {
+    const r = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath: path.join(os.tmpdir(), `shippable-not-git-${Date.now()}`),
+      status: "unread",
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it("rejects a malformed JSON body", async () => {
+    const res = await fetch(`${baseUrl}/api/agent/interactions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{not json",
+    });
+    expect(res.status).toBe(400);
   });
 });
 
@@ -157,9 +254,9 @@ describe("GET /api/agent/delivered", () => {
 
   it("returns delivered comments oldest-first", async () => {
     await seedPending(worktreePath, { body: "first" });
-    await postJson(`${baseUrl}/api/agent/pull`, { worktreePath });
+    await postJson(`${baseUrl}/api/agent/interactions`, { worktreePath, status: "unread" });
     await seedPending(worktreePath, { body: "second" });
-    await postJson(`${baseUrl}/api/agent/pull`, { worktreePath });
+    await postJson(`${baseUrl}/api/agent/interactions`, { worktreePath, status: "unread" });
 
     const r = await getJson(
       `${baseUrl}/api/agent/delivered?path=${encodeURIComponent(worktreePath)}`,
@@ -177,7 +274,7 @@ describe("GET /api/agent/delivered", () => {
     try {
       await execFileAsync("git", ["init"], { cwd: spacedPath });
       await seedPending(spacedPath, { body: "spaced" });
-      await postJson(`${baseUrl}/api/agent/pull`, { worktreePath: spacedPath });
+      await postJson(`${baseUrl}/api/agent/interactions`, { worktreePath: spacedPath, status: "unread" });
 
       const r = await getJson(
         `${baseUrl}/api/agent/delivered?path=${encodeURIComponent(spacedPath)}`,
@@ -323,7 +420,7 @@ describe("POST /api/agent/replies", () => {
     // endpoint validates that parentId belongs to the worktree's
     // delivered set (defensive per spec § Data Flow).
     const realCommentId = await seedPending(worktreePath, { body: "hi" });
-    await postJson(`${baseUrl}/api/agent/pull`, { worktreePath });
+    await postJson(`${baseUrl}/api/agent/interactions`, { worktreePath, status: "unread" });
 
     const r = await postJson(`${baseUrl}/api/agent/replies`, {
       worktreePath,
@@ -348,7 +445,7 @@ describe("POST /api/agent/replies", () => {
 
   it("appends multiple replies to the same parentId", async () => {
     const realCommentId = await seedPending(worktreePath, { body: "hi" });
-    await postJson(`${baseUrl}/api/agent/pull`, { worktreePath });
+    await postJson(`${baseUrl}/api/agent/interactions`, { worktreePath, status: "unread" });
 
     await postJson(`${baseUrl}/api/agent/replies`, {
       worktreePath,
@@ -374,7 +471,7 @@ describe("POST /api/agent/replies", () => {
 
   it("persists the full reply list (DB-backed, no in-memory cap)", async () => {
     const realCommentId = await seedPending(worktreePath, { body: "hi" });
-    await postJson(`${baseUrl}/api/agent/pull`, { worktreePath });
+    await postJson(`${baseUrl}/api/agent/interactions`, { worktreePath, status: "unread" });
 
     for (let i = 0; i < 30; i++) {
       await postJson(`${baseUrl}/api/agent/replies`, {

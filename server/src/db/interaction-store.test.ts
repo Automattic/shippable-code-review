@@ -7,7 +7,7 @@ import {
   getInteractionsByChangeset,
   isDeliveredInteractionId,
   listAgentReplies,
-  listDelivered,
+  listByQueueStatus,
   postAgentInteraction,
   pullAndAck,
   unenqueueFromWorktree,
@@ -277,28 +277,66 @@ describe("pullAndAck", () => {
   });
 });
 
-describe("listDelivered", () => {
-  it("returns delivered rows for the worktree", () => {
+describe("listByQueueStatus", () => {
+  it("returns only delivered rows for [\"delivered\"]", () => {
     upsertInteraction(makeIx({ id: "ld-1", changesetId: "cs-ld", createdAt: "2026-01-01T00:00:00.000Z" }));
     upsertInteraction(makeIx({ id: "ld-2", changesetId: "cs-ld", createdAt: "2026-01-01T00:00:01.000Z" }));
+    upsertInteraction(makeIx({ id: "ld-pending", changesetId: "cs-ld", createdAt: "2026-01-01T00:00:02.000Z" }));
     enqueueToWorktree("ld-1", "/wt/epsilon");
     enqueueToWorktree("ld-2", "/wt/epsilon");
+    enqueueToWorktree("ld-pending", "/wt/epsilon");
     pullAndAck("/wt/epsilon");
+    enqueueToWorktree("ld-pending", "/wt/epsilon"); // re-enqueue → pending again
 
-    const delivered = listDelivered("/wt/epsilon");
+    const delivered = listByQueueStatus("/wt/epsilon", ["delivered"]);
     expect(delivered.map((r) => r.id)).toEqual(["ld-1", "ld-2"]);
     expect(delivered.every((r) => r.agentQueueStatus === "delivered")).toBe(true);
   });
 
-  it("returns empty array when nothing delivered", () => {
-    expect(listDelivered("/wt/empty")).toEqual([]);
+  it("returns pending + delivered for [\"pending\", \"delivered\"], sorted created_at, id", () => {
+    upsertInteraction(makeIx({ id: "b", changesetId: "cs-all", createdAt: "2026-01-01T00:00:01.000Z" }));
+    upsertInteraction(makeIx({ id: "a", changesetId: "cs-all", createdAt: "2026-01-01T00:00:00.000Z" }));
+    upsertInteraction(makeIx({ id: "c", changesetId: "cs-all", createdAt: "2026-01-01T00:00:02.000Z" }));
+    enqueueToWorktree("a", "/wt/all");
+    enqueueToWorktree("b", "/wt/all");
+    enqueueToWorktree("c", "/wt/all");
+    pullAndAck("/wt/all"); // a, b, c → delivered
+    upsertInteraction(makeIx({ id: "d", changesetId: "cs-all", createdAt: "2026-01-01T00:00:03.000Z" }));
+    enqueueToWorktree("d", "/wt/all"); // d stays pending
+
+    const rows = listByQueueStatus("/wt/all", ["pending", "delivered"]);
+    expect(rows.map((r) => r.id)).toEqual(["a", "b", "c", "d"]);
   });
 
-  it("does not return pending rows", () => {
-    upsertInteraction(makeIx({ id: "still-pending", changesetId: "cs-ld2" }));
-    enqueueToWorktree("still-pending", "/wt/zeta");
+  it("is read-only — does not ack pending rows", () => {
+    upsertInteraction(makeIx({ id: "ro-1", changesetId: "cs-ro" }));
+    enqueueToWorktree("ro-1", "/wt/ro");
 
-    expect(listDelivered("/wt/zeta")).toEqual([]);
+    listByQueueStatus("/wt/ro", ["pending", "delivered"]);
+
+    const [row] = getInteractionsByChangeset("cs-ro");
+    expect(row.agentQueueStatus).toBe("pending");
+  });
+
+  it("returns empty array when nothing matches", () => {
+    expect(listByQueueStatus("/wt/empty", ["delivered"])).toEqual([]);
+  });
+
+  it("returns [] for an empty statuses array without querying", () => {
+    upsertInteraction(makeIx({ id: "es-1", changesetId: "cs-es" }));
+    enqueueToWorktree("es-1", "/wt/es");
+
+    expect(listByQueueStatus("/wt/es", [])).toEqual([]);
+  });
+
+  it("does not return rows belonging to a different worktree", () => {
+    upsertInteraction(makeIx({ id: "iso-a", changesetId: "cs-iso" }));
+    upsertInteraction(makeIx({ id: "iso-b", changesetId: "cs-iso" }));
+    enqueueToWorktree("iso-a", "/wt/iso-a");
+    enqueueToWorktree("iso-b", "/wt/iso-b");
+
+    const rows = listByQueueStatus("/wt/iso-a", ["pending", "delivered"]);
+    expect(rows.map((r) => r.id)).toEqual(["iso-a"]);
   });
 });
 

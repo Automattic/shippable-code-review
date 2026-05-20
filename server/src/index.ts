@@ -158,8 +158,8 @@ export function createApp(): Server {
     if (req.method === "POST" && req.url === "/api/github/pr/branch-lookup") {
       return await handleGithubPrBranchLookup(req, res, origin);
     }
-    if (req.method === "POST" && req.url === "/api/agent/pull") {
-      return await handleAgentPull(req, res, origin);
+    if (req.method === "POST" && req.url === "/api/agent/interactions") {
+      return await handleAgentInteractions(req, res, origin);
     }
     if (
       req.method === "GET" &&
@@ -1036,13 +1036,30 @@ function isAgentResponseIntent(value: unknown): value is AgentResponseIntent {
   );
 }
 
-async function handleAgentPull(
+type AgentInteractionStatus = "unread" | "delivered" | "all";
+
+function isAgentInteractionStatus(v: unknown): v is AgentInteractionStatus {
+  return v === "unread" || v === "delivered" || v === "all";
+}
+
+// Earliest interaction's sha; entries in one batch usually share a sha anyway.
+function earliestCommitSha(interactions: Interaction[]): string {
+  const earliest = interactions.reduce<Interaction | undefined>(
+    (acc, c) => (!acc || c.enqueuedAt < acc.enqueuedAt ? c : acc),
+    undefined,
+  );
+  return earliest?.commitSha ?? "";
+}
+
+// POST /api/agent/interactions — body { worktreePath, status }. `unread` drains
+// the pending queue (acks → delivered); `delivered`/`all` are read-only.
+async function handleAgentInteractions(
   req: IncomingMessage,
   res: ServerResponse,
   origin: string | null,
 ) {
   const body = await readBody(req);
-  let parsed: { worktreePath?: unknown };
+  let parsed: { worktreePath?: unknown; status?: unknown };
   try {
     parsed = JSON.parse(body);
   } catch {
@@ -1059,6 +1076,14 @@ async function handleAgentPull(
     res.end(JSON.stringify({ error: "expected { worktreePath: string }" }));
     return;
   }
+  if (!isAgentInteractionStatus(parsed.status)) {
+    writeCorsHeaders(res, origin);
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({ error: "status must be one of: unread, delivered, all" }),
+    );
+    return;
+  }
   try {
     await assertGitDir(wtPath);
   } catch (err) {
@@ -1068,15 +1093,13 @@ async function handleAgentPull(
     res.end(JSON.stringify({ error: message }));
     return;
   }
-  const resolved = agentQueue.pullAndAck(wtPath);
-  // Use the earliest-sent interaction's sha; in the common case all entries
-  // in one pull share a sha anyway.
-  const earliest = resolved.reduce<Interaction | undefined>(
-    (acc, c) => (!acc || c.enqueuedAt < acc.enqueuedAt ? c : acc),
-    undefined,
-  );
-  const commitSha = earliest?.commitSha ?? "";
-  const payload = agentQueue.formatPayload(resolved, commitSha);
+  const resolved =
+    parsed.status === "unread"
+      ? agentQueue.pullAndAck(wtPath)
+      : parsed.status === "delivered"
+        ? agentQueue.readInteractions(wtPath, ["delivered"])
+        : agentQueue.readInteractions(wtPath, ["pending", "delivered"]);
+  const payload = agentQueue.formatPayload(resolved, earliestCommitSha(resolved));
   const ids = resolved.map((c) => c.id);
   writeCorsHeaders(res, origin);
   res.writeHead(200, { "Content-Type": "application/json" });
