@@ -32,7 +32,11 @@ export function StatusBar({ viewModel, transientHint }: Props) {
               ? " statusbar__cell--changeset-on"
               : "")
           }
-          title="changeset signed off at this revision · Shift+S to toggle"
+          title={
+            viewModel.changesetSignedOff
+              ? "changeset signed off at this revision · Shift+S to toggle"
+              : "changeset not signed off at this revision · Shift+S to toggle"
+          }
         >
           {viewModel.changesetSignOffDisplay}
         </span>
