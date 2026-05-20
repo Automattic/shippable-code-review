@@ -134,6 +134,10 @@ function randomFileId(rand: () => number, state: ReviewState): string {
   return pick(rand, cs.files).id;
 }
 
+function randomChangesetId(rand: () => number, state: ReviewState): string {
+  return pick(rand, state.changesets).id;
+}
+
 function randomHunkRef(
   rand: () => number,
   state: ReviewState,
@@ -210,9 +214,14 @@ function nextAction(rand: () => number, state: ReviewState): Action {
       level: int(rand, -3, 5),
     };
   }
-  if (r < 0.94)
+  if (r < 0.93)
+    return {
+      type: "TOGGLE_CHANGESET_REVIEWED",
+      changesetId: randomChangesetId(rand, state),
+    };
+  if (r < 0.96)
     return { type: "TOGGLE_EXPAND_FILE", fileId: randomFileId(rand, state) };
-  if (r < 0.97)
+  if (r < 0.98)
     return { type: "TOGGLE_PREVIEW_FILE", fileId: randomFileId(rand, state) };
   return { type: "TOGGLE_FILE_REVIEWED", fileId: randomFileId(rand, state) };
 }
