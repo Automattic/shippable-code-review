@@ -1059,7 +1059,7 @@ async function handleAgentInteractions(
   origin: string | null,
 ) {
   const body = await readBody(req);
-  let parsed: { worktreePath?: unknown; status?: unknown };
+  let parsed: { worktreePath?: unknown; status?: unknown; watch?: unknown };
   try {
     parsed = JSON.parse(body);
   } catch {
@@ -1092,6 +1092,12 @@ async function handleAgentInteractions(
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: message }));
     return;
+  }
+  // A watch-mode poll tags itself so the panel can show "Agent is watching".
+  // Watch mode only ever drains (status `unread`), but the marker is
+  // status-agnostic — it records that an agent is actively polling.
+  if (parsed.watch === true) {
+    agentQueue.markWatchPoll(wtPath);
   }
   const resolved =
     parsed.status === "unread"
@@ -1296,7 +1302,7 @@ async function handleAgentListReplies(
   const replies = agentQueue.listReplies(wtPath);
   writeCorsHeaders(res, origin);
   res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ replies }));
+  res.end(JSON.stringify({ replies, watching: agentQueue.isWatching(wtPath) }));
 }
 
 function parseOrigin(value: string): string | null {

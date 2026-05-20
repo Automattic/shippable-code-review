@@ -510,6 +510,28 @@ describe("GET /api/agent/replies", () => {
     expect(r.status).toBe(200);
     expect(r.body.replies).toEqual([]);
   });
+
+  it("reports `watching` true only after an interactions read tagged watch:true", async () => {
+    const repliesUrl = `${baseUrl}/api/agent/replies?worktreePath=${encodeURIComponent(worktreePath)}`;
+
+    const before = await getJson(repliesUrl);
+    expect(before.body.watching).toBe(false);
+
+    await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "unread",
+    });
+    const afterPlain = await getJson(repliesUrl);
+    expect(afterPlain.body.watching).toBe(false);
+
+    await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "unread",
+      watch: true,
+    });
+    const afterWatch = await getJson(repliesUrl);
+    expect(afterWatch.body.watching).toBe(true);
+  });
 });
 
 describe("legacy /api/agent/enqueue + /api/agent/unenqueue routes are gone", () => {

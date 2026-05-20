@@ -14,6 +14,9 @@ import {
   resetForTests,
   isDeliveredInteractionId,
   isValidInteractionPair,
+  markWatchPoll,
+  isWatching,
+  WATCH_TTL_MS,
   type Interaction,
 } from "./agent-queue.ts";
 import { initDb } from "./db/index.ts";
@@ -305,6 +308,23 @@ describe("resetForTests", () => {
     expect(listDelivered(WT)).toHaveLength(1);
     resetForTests();
     expect(() => listDelivered(WT)).toThrow(/not initialised/);
+  });
+});
+
+describe("watch marker", () => {
+  it("isWatching is true right after markWatchPoll", () => {
+    markWatchPoll("/tmp/wt-watched");
+    expect(isWatching("/tmp/wt-watched")).toBe(true);
+  });
+
+  it("isWatching is false once WATCH_TTL_MS has elapsed since the mark", () => {
+    markWatchPoll("/tmp/wt-stale");
+    expect(isWatching("/tmp/wt-stale", Date.now() + WATCH_TTL_MS - 1)).toBe(true);
+    expect(isWatching("/tmp/wt-stale", Date.now() + WATCH_TTL_MS + 1)).toBe(false);
+  });
+
+  it("isWatching is false for a never-marked worktree", () => {
+    expect(isWatching("/tmp/wt-never")).toBe(false);
   });
 });
 

@@ -333,6 +333,34 @@ export function isDeliveredInteractionId(
 export function resetForTests(): void {
   resetDb();
   lastPostedMs = 0;
+  watchPolls.clear();
+}
+
+// ─── Watch marker ────────────────────────────────────────────────────────────
+
+/**
+ * How long after its last watch poll an agent is still considered "watching".
+ * Must outlast the agent's between-comments work phase (when it is acting, not
+ * polling) yet clear soon after a real stop. The watch loop polls every ~2s, so
+ * a live agent refreshes well inside the window; a stopped loop clears ≤ 90s
+ * later. Approximate by nature of polling — the SSE follow-up makes it exact.
+ */
+export const WATCH_TTL_MS = 90_000;
+
+// Last watch-poll timestamp per worktree. In-memory and ephemeral on purpose:
+// this only drives the UI's "Agent is watching" indicator, and a server
+// restart legitimately means nothing is watching anymore.
+const watchPolls = new Map<string, number>();
+
+/** Stamp a watch poll for `worktreePath` — called when a pull carries `watch: true`. */
+export function markWatchPoll(worktreePath: string): void {
+  watchPolls.set(worktreePath, Date.now());
+}
+
+/** True when `worktreePath` was watch-polled within the last `WATCH_TTL_MS`. */
+export function isWatching(worktreePath: string, now: number = Date.now()): boolean {
+  const at = watchPolls.get(worktreePath);
+  return at !== undefined && now - at < WATCH_TTL_MS;
 }
 
 // ─── Wire envelope ───────────────────────────────────────────────────────────
