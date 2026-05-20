@@ -87,9 +87,9 @@ Every error body is `{ error: string }`. The frontend formats it into a toast or
 
 Codes are advisory; clients that don't care keep using `error`.
 
-### 7. `/api/agent/pull` returns rendered XML
+### 7. `/api/agent/interactions` returns rendered XML
 
-The MCP queue's pull endpoint returns `{ payload: string, ids: [...] }`. `payload` is a pre-rendered XML string that the MCP server hands the agent verbatim. Fine for that one client; awkward for anything else (the gallery debugger, future webhook bridge).
+The MCP queue's fetch endpoint returns `{ payload: string, ids: [...] }`. `payload` is a pre-rendered XML string that the MCP server hands the agent verbatim. Fine for that one client; awkward for anything else (the gallery debugger, future webhook bridge).
 
 **Proposal:** add `comments: Comment[]` to the response alongside `payload`. The MCP server keeps using `payload` (no change there); other clients consume the structured form. `formatPayload()` already exists; this is a one-line `index.ts` change.
 
@@ -100,7 +100,7 @@ The endpoint surface mixes two conventions:
 - RPC-ish: `/api/library/refresh`, `/api/agent/enqueue`, `/api/worktrees/list`
 - Resource-ish: `/api/definition` (POST does the lookup), `/api/health`
 
-Picking one wholesale is a flag day. Don't do it. *Do* avoid mixing them within a feature: `/api/agent/enqueue` + `/api/agent/pull` + `/api/agent/unenqueue` is fine; if we ever add `POST /api/agent` we should resist.
+Picking one wholesale is a flag day. Don't do it. *Do* avoid mixing them within a feature: `/api/agent/enqueue` + `/api/agent/interactions` + `/api/agent/unenqueue` is fine; if we ever add `POST /api/agent` we should resist.
 
 ### 9. `workspaceRoot` dual sourcing
 
