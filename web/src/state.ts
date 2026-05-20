@@ -1333,7 +1333,7 @@ export function reviewedFilesCount(
  * keeping the id (worktree live-reload, PR fetch) recomputes the token and
  * only restores sign-off if the new revision matches a previously stored
  * entry. Rules (see `docs/concepts/review-state.md`):
- *   - worktree-backed: `wt:<sha>:<dirtyHash|-->` from `worktreeSource.state`
+ *   - worktree-backed: `wt:<sha>:<dirtyHash | ->` from `worktreeSource.state`
  *   - PR-only:         `pr:<baseSha>:<headSha>` from `prSource`
  *   - overlay:         worktree wins; the displayed diff is the worktree's
  *   - paste/upload/stub/fixture/legacy-worktree-without-state: `null`
