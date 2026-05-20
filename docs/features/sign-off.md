@@ -33,6 +33,12 @@ those as the same thing would quietly overstate confidence.
 
 Signing off the changeset does not mark its files reviewed; marking every file reviewed does not sign off the changeset. The granularity is deliberate — "I ticked these three files" carries different information than "I read the whole thing as a unit," and we keep both signals.
 
+### When each is useful
+
+- **Per-file** is incremental: tick what you've read so it stops crowding your attention. Partial progress, not a verdict — useful in a multi-session review of a large PR, or when one file is independently fine and others need more thought.
+- **Per-changeset** is the verdict: one explicit "I'm done with this revision." Hides when the revision moves and returns when you round-trip back. Useful because reviewers approve PRs as wholes, not file by file.
+- A small PR collapses both into one act. A large or multi-session review keeps them apart on purpose.
+
 ### What we do not sign off yet
 
 - Per-line or per-hunk sign-off is not implemented.
