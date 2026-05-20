@@ -8,7 +8,7 @@ import {
 } from "./handler.js";
 
 const TOOL_DESCRIPTION =
-  "Check Shippable for reviewer interactions. Call this tool when the user mentions reviewing code, pulling reviewer feedback, checking shippable, or asks about review comments. Returns a `<reviewer-feedback>` envelope with one `<interaction id=\"…\" target=\"…\" intent=\"…\" author=\"…\" authorRole=\"…\" file=\"…\" lines=\"…\">…</interaction>` per entry. IMPORTANT: each `<interaction>` carries an `id` attribute — you MUST capture it (alongside the body) so you can later report back via `shippable_post_review_comment`. The `status` argument selects what to fetch: 'unread' returns new interactions and marks them read — the queue drains, so this is the only chance to read those ids; 'delivered' re-reads interactions already marked read; 'all' returns both.";
+  "Check Shippable for reviewer interactions. Call this tool when the user mentions reviewing code, pulling reviewer feedback, checking shippable, or asks about review comments. Returns a `<reviewer-feedback>` envelope with one `<interaction id=\"…\" target=\"…\" intent=\"…\" author=\"…\" authorRole=\"…\" file=\"…\" lines=\"…\">…</interaction>` per entry. IMPORTANT: each `<interaction>` carries an `id` attribute — you SHOULD capture it (alongside the body) so you can later report back via `shippable_post_review_comment`. The `status` argument selects what to fetch: 'unread' returns interactions not yet marked read and marks them read, draining them from the unread queue; 'delivered' re-reads interactions already marked read; 'all' returns both. As a last resort, a missing id previously returned under 'unread' could be re-fetched with 'delivered' or 'all'.";
 
 const POST_COMMENT_DESCRIPTION =
   "Post a review interaction back to Shippable. Two modes, distinguished by which fields you supply:\n\n" +
@@ -54,7 +54,7 @@ async function main(): Promise<void> {
           .string()
           .optional()
           .describe(
-            "Reply mode only: the id of the reviewer interaction this reply answers. Capture from a `<interaction id=\"…\">` element returned by `shippable_check_review_comments` — the queue drains on pull. Omit when starting a fresh top-level thread.",
+            "Reply mode only: the id of the reviewer interaction this reply answers. Capture from a `<interaction id=\"…\">` element returned by `shippable_check_review_comments`. Omit when starting a fresh top-level thread.",
           ),
         target: z
           .enum(["line", "block"])
