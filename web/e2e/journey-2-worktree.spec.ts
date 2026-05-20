@@ -300,6 +300,47 @@ test.describe("Journey 2 — local worktree", () => {
     }
   });
 
+  test("watch indicator: a watch-tagged agent read lights the 'Agent is watching' row", async ({
+    visit,
+    page,
+    request,
+  }) => {
+    // The watch-mode counterpart to the pip lifecycle. Lower tiers already
+    // cover the HTTP contract (server index.test.ts) and the React render
+    // (AgentContextSection.test.tsx) in isolation; only this drives the full
+    // wire — an interactions read tagged `watch: true` → the server's
+    // `watching` flag → the live /api/agent/replies poll → the panel
+    // indicator — in a browser.
+    const own = createWorktreeRepo();
+    try {
+      await visit("/?cs=42");
+      await expectWorkspaceLoaded(page);
+      await loadFixtureWorktree(page, own.path);
+      await dismissPlanOverlay(page);
+
+      const inspector = page.getByRole("complementary", { name: "inspector" });
+      // Baseline: a freshly loaded worktree has nobody watching it.
+      await expect(inspector.locator(".ac__watching")).toHaveCount(0);
+
+      // Stand in for an agent in watch mode — its poll is an `unread` read
+      // tagged watch:true. One is enough; the server treats the worktree as
+      // watched for WATCH_TTL_MS.
+      const pull = await request.post("/api/agent/interactions", {
+        data: { worktreePath: own.path, status: "unread", watch: true },
+      });
+      expect(pull.ok()).toBeTruthy();
+
+      // The 2s replies poll carries `watching: true` back and the indicator
+      // appears. 12s absorbs poll-cycle jitter on a busy CI host.
+      await expect(inspector.locator(".ac__watching")).toContainText(
+        "Agent is watching — comments deliver live.",
+        { timeout: 12_000 },
+      );
+    } finally {
+      own.cleanup();
+    }
+  });
+
   test("worktree review progress persists across reload", async ({
     visit,
     page,
