@@ -189,9 +189,12 @@ describe("reviewedChangesets — Want (W1–W6)", () => {
   });
 
   it("W5: clean picked range survives HEAD movement (token follows ChangeSet, not display id)", () => {
-    // Picked-range cs captures state.sha = B (the range's "to" end) at load.
-    // External HEAD movement does not mutate the loaded ChangeSet — the token
-    // is derived from worktreeSource.state, which is unchanged.
+    // External HEAD movement on the worktree (e.g. `git checkout foo` outside
+    // the app) does not, by itself, reload the loaded ChangeSet. The cs object
+    // — including its `worktreeSource.state` — is untouched, so the derived
+    // token stays at (sha=B, dirtyHash=null) and the sign-off lookup still
+    // resolves. MOVE_LINE stands in for "any in-app navigation that isn't a
+    // reload"; the live-reload path is covered separately below.
     const cs = wtCs("cs1", {
       worktreePath: "/w",
       commitSha: "B",
@@ -201,11 +204,38 @@ describe("reviewedChangesets — Want (W1–W6)", () => {
     });
     let s = initialState([cs]);
     s = reducer(s, { type: "TOGGLE_CHANGESET_REVIEWED", changesetId: "cs1" });
-    // No reload — just navigate around. (HEAD movement without re-loading the
-    // changeset doesn't touch state.changesets[*].worktreeSource.)
     s = reducer(s, { type: "MOVE_LINE", delta: 1 });
     expect(isChangesetSignedOff(cs, s.reviewedChangesets)).toBe(true);
     expect(getChangesetReviewToken(cs)).toBe("wt:B:-");
+  });
+
+  it("W1 via RELOAD_CHANGESET: live-reload noise refresh preserves sign-off", () => {
+    // W1 through LOAD_CHANGESET is covered above. Live-reload uses
+    // RELOAD_CHANGESET (App.tsx:336) instead so the anchoring pass runs over
+    // existing replies. That reducer rebuilds interactions/detached but must
+    // pass `reviewedChangesets` through; this asserts it does.
+    const cs = wtCs("cs1", {
+      worktreePath: "/w",
+      commitSha: "A",
+      branch: "main",
+      state: wtState("A", null),
+    });
+    let s = initialState([cs]);
+    s = reducer(s, { type: "TOGGLE_CHANGESET_REVIEWED", changesetId: "cs1" });
+    // Same id, same token — the poll returned the same state. The reload
+    // still runs the anchoring pass.
+    const refreshed = wtCs("cs1", {
+      worktreePath: "/w",
+      commitSha: "A",
+      branch: "main",
+      state: wtState("A", null),
+    });
+    s = reducer(s, {
+      type: "RELOAD_CHANGESET",
+      prevChangesetId: "cs1",
+      changeset: refreshed,
+    });
+    expect(isChangesetSignedOff(refreshed, s.reviewedChangesets)).toBe(true);
   });
 
   it("W6: explicit unsign-off scopes to the current revision", () => {
