@@ -14,9 +14,4 @@ The local state model for an in-progress review session.
 
 ## Sign-off
 
-Two independent fields carry sign-off: `reviewedFiles: Set<fileId>` and `reviewedChangesets: Record<changesetId, reviewToken[]>`. Behavior, keybindings, and the review-token derivation are documented in [docs/features/sign-off.md](../features/sign-off.md). They're kept independent on purpose — per-file ticks and "I've read this as a whole" carry different information, and neither cascades into the other.
-
-We do not have per-line or per-hunk sign-off yet. At that granularity the
-prototype only tracks read progress (`readLines`) and comment threads. That is
-deliberate: adding another explicit verdict layer at line/hunk scope would
-create four overlapping review signals before we have a clear product need.
+Two independent fields carry sign-off: `reviewedFiles: Set<fileId>` and `reviewedChangesets: Record<changesetId, reviewToken[]>`. Behavior, keybindings, the review-token derivation, and what is and isn't in scope are documented in [docs/features/sign-off.md](../features/sign-off.md). They're kept independent on purpose — per-file ticks and "I've read this as a whole" carry different information, and neither cascades into the other.
