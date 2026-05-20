@@ -47,7 +47,8 @@ export type ContextPredicate =
   | "hasSelection"
   | "hasPlan"
   | "hasPicker"
-  | "hasCommandPalette";
+  | "hasCommandPalette"
+  | "hasChangesetToken";
 
 export type KeyGroup = "navigation" | "review" | "guide" | "ui" | "testing";
 
@@ -100,7 +101,7 @@ export const KEYMAP: KeyEntry[] = [
   { key: "c", label: "start a new comment on current line",  group: "review", action: "START_COMMENT" },
   { key: "e", label: "run current hunk (or block selection) in code runner", group: "review", action: "RUN_SELECTION" },
   { key: "M", shift: true, label: "sign off on current file (toggle)", group: "review", action: "TOGGLE_FILE_REVIEWED" },
-  { key: "S", shift: true, label: "sign off on current changeset at this revision (toggle)", group: "review", action: "TOGGLE_CHANGESET_REVIEWED" },
+  { key: "S", shift: true, when: "hasChangesetToken", label: "sign off on current changeset at this revision (toggle)", group: "review", action: "TOGGLE_CHANGESET_REVIEWED" },
 
   // ── guide ───────────────────────────────────────────────────────────────────
   { key: "Enter",  label: "accept guide", group: "guide", action: "ACCEPT_GUIDE",  when: "hasSuggestion" },

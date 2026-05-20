@@ -1483,6 +1483,7 @@ function WorkspaceStage({
         hasSelection: !!state.selection,
         hasPlan: showPlan,
         hasPicker: showPicker,
+        hasChangesetToken: false,
       };
 
       const entry = KEYMAP.find(

@@ -462,6 +462,7 @@ export function ReviewWorkspace({
     hasPlan: showPlan,
     hasPicker: showPicker,
     hasCommandPalette: showCommandPalette,
+    hasChangesetToken: getChangesetReviewToken(cs) !== null,
   };
 
   // Mouse interactions on the diff are disabled while a modal-style overlay
