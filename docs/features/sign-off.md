@@ -57,7 +57,7 @@ Signing off the changeset does not mark its files reviewed; marking every file r
 
 Both fields ride in the localStorage snapshot at `v: 5`; `hasProgress()` counts either. See [session persistence](./session-persistence.md).
 
-The server-owned SQLite DB holds shared review data (interactions: comments, replies, acks). Sign-off stays in localStorage because it's local-session UI state — multi-reviewer / shared sign-off is out of scope (see above), so there's nothing else that needs to read it.
+Interactions (comments, replies, acks) are in the server-owned SQLite DB because the server and MCP/agent bridge need to read and write them — neither can see the browser's localStorage. Sign-off doesn't cross that boundary today: no server endpoint or agent acts on it, so localStorage is enough.
 
 ## Screenshot
 ![Sign-off](./assets/workspace-file-reviewed.png)
