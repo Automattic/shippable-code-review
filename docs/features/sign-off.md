@@ -1,7 +1,12 @@
 # Sign-off
 
 ## What it is
-Two independent ways to mark review progress in a session: per-file and per-changeset.
+Two independent ways to mark explicit review verdicts in a session: per-file
+and per-changeset.
+
+Read progress is separate. Cursor visits and `readLines` answer "what did I
+look at?"; sign-off answers "what am I willing to mark reviewed?" Treating
+those as the same thing would quietly overstate confidence.
 
 ## What it does
 
@@ -27,6 +32,13 @@ Two independent ways to mark review progress in a session: per-file and per-chan
 ### The two are independent
 
 Signing off the changeset does not mark its files reviewed; marking every file reviewed does not sign off the changeset. The granularity is deliberate — "I ticked these three files" carries different information than "I read the whole thing as a unit," and we keep both signals.
+
+### What we do not sign off yet
+
+- Per-line or per-hunk sign-off is not implemented.
+- At those scopes we only track read progress and comment threads.
+- That keeps the model simpler while we validate whether finer-grained verdicts
+  are actually useful instead of just more state.
 
 ## Out of scope
 
