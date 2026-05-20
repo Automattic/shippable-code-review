@@ -308,6 +308,7 @@ export function ReviewWorkspace({
   const {
     delivered: deliveredComments,
     agentReplies: polledAgentReplies,
+    watching: agentWatching,
     lastSuccessfulPollAt: deliveredLastSuccessAt,
     error: deliveredErrorState,
   } = useDeliveredPolling({ worktreePath: wtPath });
@@ -1502,6 +1503,7 @@ export function ReviewWorkspace({
                     delivered: deliveredComments,
                     lastSuccessfulPollAt: deliveredLastSuccessAt,
                     deliveredError: deliveredErrorState,
+                    watching: agentWatching,
                     agentStartedThreads: agentStartedThreads(state.interactions),
                     onPickSession: (fp) => setPinnedSession(fp),
                     onRefresh: () => setAgentRefreshTick((t) => t + 1),

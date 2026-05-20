@@ -74,6 +74,11 @@ export interface AgentContextProps {
    */
   deliveredError: boolean;
   /**
+   * True while an agent is in watch mode for this worktree. Drives the
+   * panel's "Agent is watching" indicator.
+   */
+  watching: boolean;
+  /**
    * Agent-started threads (top-level Interactions whose first entry is
    * authored by the agent). Drives the "Comments" rollup at the bottom
    * of the panel — a sidebar overview separate from the inline render
@@ -377,6 +382,7 @@ export function Inspector({
           delivered={agentContext.delivered}
           lastSuccessfulPollAt={agentContext.lastSuccessfulPollAt}
           deliveredError={agentContext.deliveredError}
+          watching={agentContext.watching}
           agentStartedThreads={agentContext.agentStartedThreads}
           onJump={onJump}
           onPickSession={agentContext.onPickSession}

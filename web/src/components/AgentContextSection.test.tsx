@@ -36,6 +36,7 @@ function delivered(over: Partial<DeliveredInteraction> = {}): DeliveredInteracti
 interface RenderOpts {
   delivered?: DeliveredInteraction[];
   deliveredError?: boolean;
+  watching?: boolean;
   lastSuccessfulPollAt?: string | null;
   mcpStatus?: { installed: boolean; installCommand: string } | null;
 }
@@ -61,6 +62,7 @@ function renderPanel(opts: RenderOpts = {}) {
       delivered={opts.delivered ?? []}
       lastSuccessfulPollAt={opts.lastSuccessfulPollAt ?? null}
       deliveredError={opts.deliveredError ?? false}
+      watching={opts.watching ?? false}
       agentStartedThreads={[]}
       onPickSession={noop}
       onRefresh={noop}
@@ -195,15 +197,16 @@ describe("AgentContextSection — MCP install affordance (slice 5)", () => {
     const block = container.querySelector(".ac__mcp");
     expect(block).not.toBeNull();
     expect(block?.classList.contains("ac__mcp--ok")).toBe(false);
-    // Three copy chips: install line + two magic phrases (pull + report).
+    // Four copy chips: install line + three magic phrases (pull, report, watch).
     const chips = container.querySelectorAll(".ac__mcp-chip");
-    expect(chips.length).toBe(3);
+    expect(chips.length).toBe(4);
     // The install line is exactly what the server returned (local-build
-    // form here) and both magic phrases are still rendered verbatim.
+    // form here) and all three magic phrases are rendered verbatim.
     const text = block?.textContent ?? "";
     expect(text).toContain(LOCAL_BUILD_LINE);
     expect(text).toContain("check shippable");
     expect(text).toContain("report back to shippable");
+    expect(text).toContain("watch shippable");
     // The dismiss button renders.
     expect(container.querySelector(".ac__mcp-dismiss")).not.toBeNull();
   });
@@ -235,6 +238,23 @@ describe("AgentContextSection — MCP install affordance (slice 5)", () => {
     expect(container.querySelector(".ac__mcp")).toBeNull();
   });
 
+  it("copies the `watch shippable` phrase to the clipboard on click", async () => {
+    const writes: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (t: string) => void writes.push(t) },
+    });
+    const { container } = renderPanel({
+      mcpStatus: { installed: false, installCommand: LOCAL_BUILD_LINE },
+    });
+    const watchChip = [...container.querySelectorAll(".ac__mcp-chip")].find(
+      (c) => c.textContent?.includes("watch shippable"),
+    );
+    expect(watchChip).toBeTruthy();
+    fireEvent.click(watchChip!);
+    await Promise.resolve();
+    expect(writes).toContain("watch shippable");
+  });
   it("hides the install section after the user clicks 'I installed it' and persists across remount", () => {
     const { container, unmount } = renderPanel({
       mcpStatus: { installed: false, installCommand: LOCAL_BUILD_LINE },
@@ -260,5 +280,21 @@ describe("AgentContextSection — MCP install affordance (slice 5)", () => {
     });
     expect(c2.querySelector(".ac__mcp--ok")).not.toBeNull();
     expect(c2.querySelector(".ac__mcp-dismiss")).toBeNull();
+  });
+});
+
+describe("AgentContextSection — watch indicator", () => {
+  it("shows the 'Agent is watching' indicator when watching is true", () => {
+    const { container } = renderPanel({ watching: true });
+    const indicator = container.querySelector(".ac__watching");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain(
+      "Agent is watching — comments deliver live.",
+    );
+  });
+
+  it("hides the indicator when watching is false", () => {
+    const { container } = renderPanel({ watching: false });
+    expect(container.querySelector(".ac__watching")).toBeNull();
   });
 });

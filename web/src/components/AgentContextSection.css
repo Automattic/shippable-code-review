@@ -286,6 +286,26 @@
   margin: 2px 0 6px 0;
   font-style: italic;
 }
+.ac__watching {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--green, #6c6);
+  font-size: 10.5px;
+  margin: 2px 0 6px 0;
+}
+.ac__watching-dot {
+  animation: ac-watching-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ac-watching-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
 .ac__poll-banner {
   color: var(--yellow, #c8a44a);
   background: var(--bg);
@@ -438,6 +458,15 @@
   letter-spacing: 0.06em;
   flex-shrink: 0;
   min-width: 56px;
+}
+.ac__mcp-hint {
+  color: var(--fg-mute);
+  font-size: 10px;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+.ac__mcp-hint code {
+  color: var(--fg-dim);
 }
 .ac__mcp-chip {
   display: inline-flex;

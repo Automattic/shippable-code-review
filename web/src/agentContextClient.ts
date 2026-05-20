@@ -65,13 +65,20 @@ export async function fetchDelivered(
   return delivered;
 }
 
+export interface AgentRepliesResult {
+  replies: PolledAgentReply[];
+  /** True while an agent is in watch mode for this worktree (see WATCH_TTL_MS). */
+  watching: boolean;
+}
+
 export async function fetchAgentReplies(
   worktreePath: string,
-): Promise<PolledAgentReply[]> {
-  const { replies } = await getJson<{ replies: PolledAgentReply[] }>(
-    `/api/agent/replies?worktreePath=${encodeURIComponent(worktreePath)}`,
-  );
-  return replies;
+): Promise<AgentRepliesResult> {
+  const { replies, watching } = await getJson<{
+    replies: PolledAgentReply[];
+    watching: boolean;
+  }>(`/api/agent/replies?worktreePath=${encodeURIComponent(worktreePath)}`);
+  return { replies, watching };
 }
 
 /**

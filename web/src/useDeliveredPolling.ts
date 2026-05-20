@@ -18,7 +18,11 @@
 //   - Tests can inject `fetcher` and a fake `setInterval`/clock.
 
 import { useEffect, useRef, useState } from "react";
-import { fetchAgentReplies, fetchDelivered } from "./agentContextClient";
+import {
+  fetchAgentReplies,
+  fetchDelivered,
+  type AgentRepliesResult,
+} from "./agentContextClient";
 import type { PolledAgentReply } from "./state";
 import type { DeliveredInteraction } from "./types";
 
@@ -34,6 +38,12 @@ export interface DeliveredPollingResult {
    * (file, lines) → hunkId for top-level entries.
    */
   agentReplies: PolledAgentReply[];
+  /**
+   * True while an agent is in watch mode for this worktree — drives the
+   * panel's "Agent is watching" indicator. Frozen at last-known on a failed
+   * replies poll, same as `agentReplies`.
+   */
+  watching: boolean;
   /** ISO of the last successful fetch; null until the first one lands. */
   lastSuccessfulPollAt: string | null;
   /** True iff the most recent fetch errored. */
@@ -55,7 +65,7 @@ export interface UseDeliveredPollingArgs {
    * Override the agent-replies fetcher. Defaults to the real
    * `fetchAgentReplies` from `agentContextClient`.
    */
-  repliesFetcher?: (worktreePath: string) => Promise<PolledAgentReply[]>;
+  repliesFetcher?: (worktreePath: string) => Promise<AgentRepliesResult>;
 }
 
 export function useDeliveredPolling({
@@ -65,6 +75,7 @@ export function useDeliveredPolling({
 }: UseDeliveredPollingArgs): DeliveredPollingResult {
   const [delivered, setDelivered] = useState<DeliveredInteraction[]>([]);
   const [agentReplies, setAgentReplies] = useState<PolledAgentReply[]>([]);
+  const [watching, setWatching] = useState(false);
   const [lastSuccessfulPollAt, setLastSuccessfulPollAt] = useState<
     string | null
   >(null);
@@ -81,6 +92,7 @@ export function useDeliveredPolling({
     setLastResetWorktree(worktreePath);
     setDelivered([]);
     setAgentReplies([]);
+    setWatching(false);
     setLastSuccessfulPollAt(null);
     setError(false);
   }
@@ -117,7 +129,8 @@ export function useDeliveredPolling({
         anyOk = true;
       }
       if (repliesResult.status === "fulfilled") {
-        setAgentReplies(repliesResult.value);
+        setAgentReplies(repliesResult.value.replies);
+        setWatching(repliesResult.value.watching);
         anyOk = true;
       }
       if (anyOk) setLastSuccessfulPollAt(new Date().toISOString());
@@ -160,5 +173,5 @@ export function useDeliveredPolling({
     };
   }, [worktreePath]);
 
-  return { delivered, agentReplies, lastSuccessfulPollAt, error };
+  return { delivered, agentReplies, watching, lastSuccessfulPollAt, error };
 }

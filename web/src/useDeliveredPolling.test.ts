@@ -11,6 +11,7 @@ import {
   POLL_INTERVAL_MS,
   useDeliveredPolling,
 } from "./useDeliveredPolling";
+import type { AgentRepliesResult } from "./agentContextClient";
 import type { PolledAgentReply } from "./state";
 import type { DeliveredInteraction } from "./types";
 
@@ -122,8 +123,8 @@ describe("useDeliveredPolling — polling lifecycle", () => {
       .fn<(p: string) => Promise<DeliveredInteraction[]>>()
       .mockResolvedValueOnce([delivered("cmt_1")])
       .mockRejectedValue(new Error("ECONNREFUSED"));
-    const repliesFetcher = vi.fn<(p: string) => Promise<PolledAgentReply[]>>(
-      async () => [],
+    const repliesFetcher = vi.fn<(p: string) => Promise<AgentRepliesResult>>(
+      async () => ({ replies: [], watching: false }),
     );
 
     const r = renderHook(() =>
@@ -168,12 +169,18 @@ describe("useDeliveredPolling — polling lifecycle", () => {
       .mockResolvedValueOnce([delivered("cmt_1")])
       .mockRejectedValue(new Error("ECONNREFUSED"));
     const repliesFetcher = vi
-      .fn<(p: string) => Promise<PolledAgentReply[]>>()
-      .mockResolvedValueOnce([ar("ar1", "2026-05-06T12:01:00.000Z")])
-      .mockResolvedValueOnce([
-        ar("ar1", "2026-05-06T12:01:00.000Z"),
-        ar("ar2", "2026-05-06T12:02:00.000Z"),
-      ]);
+      .fn<(p: string) => Promise<AgentRepliesResult>>()
+      .mockResolvedValueOnce({
+        replies: [ar("ar1", "2026-05-06T12:01:00.000Z")],
+        watching: false,
+      })
+      .mockResolvedValueOnce({
+        replies: [
+          ar("ar1", "2026-05-06T12:01:00.000Z"),
+          ar("ar2", "2026-05-06T12:02:00.000Z"),
+        ],
+        watching: false,
+      });
 
     const r = renderHook(() =>
       useDeliveredPolling({ worktreePath: "/wt", fetcher, repliesFetcher }),
@@ -207,19 +214,22 @@ describe("useDeliveredPolling — polling lifecycle", () => {
       .mockResolvedValueOnce([delivered("cmt_1")])
       .mockResolvedValueOnce([delivered("cmt_1"), delivered("cmt_2")]);
     const repliesFetcher = vi
-      .fn<(p: string) => Promise<PolledAgentReply[]>>()
-      .mockResolvedValueOnce([
-        {
-          id: "ar1",
-          parentId: "cmt_1",
-          body: "fixed",
-          intent: "accept",
-          author: "agent",
-          authorRole: "agent",
-          target: "reply",
-          postedAt: "2026-05-06T12:01:00.000Z",
-        },
-      ])
+      .fn<(p: string) => Promise<AgentRepliesResult>>()
+      .mockResolvedValueOnce({
+        replies: [
+          {
+            id: "ar1",
+            parentId: "cmt_1",
+            body: "fixed",
+            intent: "accept",
+            author: "agent",
+            authorRole: "agent",
+            target: "reply",
+            postedAt: "2026-05-06T12:01:00.000Z",
+          },
+        ],
+        watching: false,
+      })
       .mockRejectedValue(new Error("ECONNREFUSED"));
 
     const r = renderHook(() =>
@@ -243,19 +253,22 @@ describe("useDeliveredPolling — polling lifecycle", () => {
 
   it("polls agent replies in parallel and exposes them on the result", async () => {
     const fetcher = vi.fn(async () => [delivered("cmt_1")]);
-    const repliesFetcher = vi.fn<(p: string) => Promise<PolledAgentReply[]>>(
-      async () => [
-        {
-          id: "ar1",
-          parentId: "cmt_1",
-          body: "fixed",
-          intent: "accept",
-          author: "agent",
-          authorRole: "agent",
-          target: "reply",
-          postedAt: "2026-05-06T12:01:00.000Z",
-        },
-      ],
+    const repliesFetcher = vi.fn<(p: string) => Promise<AgentRepliesResult>>(
+      async () => ({
+        replies: [
+          {
+            id: "ar1",
+            parentId: "cmt_1",
+            body: "fixed",
+            intent: "accept",
+            author: "agent",
+            authorRole: "agent",
+            target: "reply",
+            postedAt: "2026-05-06T12:01:00.000Z",
+          },
+        ],
+        watching: true,
+      }),
     );
     const r = renderHook(() =>
       useDeliveredPolling({
@@ -269,6 +282,8 @@ describe("useDeliveredPolling — polling lifecycle", () => {
     expect(r.result.current.agentReplies).toHaveLength(1);
     const first = r.result.current.agentReplies[0];
     expect("parentId" in first ? first.parentId : null).toBe("cmt_1");
+    // The replies poll also carries watch state through to the panel.
+    expect(r.result.current.watching).toBe(true);
   });
 
   it("resets state when worktreePath changes", async () => {
@@ -277,8 +292,8 @@ describe("useDeliveredPolling — polling lifecycle", () => {
     const fetcher = vi.fn<(p: string) => Promise<DeliveredInteraction[]>>(
       async (p) => (p === "/wt1" ? wt1Delivered : wt2Delivered),
     );
-    const repliesFetcher = vi.fn<(p: string) => Promise<PolledAgentReply[]>>(
-      async () => [],
+    const repliesFetcher = vi.fn<(p: string) => Promise<AgentRepliesResult>>(
+      async () => ({ replies: [], watching: false }),
     );
 
     const r = renderHook(

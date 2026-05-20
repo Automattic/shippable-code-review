@@ -1318,6 +1318,7 @@ function WorkspaceStage({
       delivered: snap.delivered,
       lastSuccessfulPollAt: new Date().toISOString(),
       deliveredError: false,
+      watching: false,
       agentStartedThreads: [],
       onPickSession: () => {},
       onRefresh: () => {},

@@ -59,6 +59,12 @@ interface Props {
    */
   deliveredError: boolean;
   /**
+   * `true` while an agent is in watch mode for this worktree — drives the
+   * "Agent is watching" indicator so the reviewer knows comments deliver
+   * live and they need not re-prompt. Polled off `GET /api/agent/replies`.
+   */
+  watching: boolean;
+  /**
    * Agent-started threads — top-level Interactions whose first entry is
    * authored by the agent. Surfaced as a "Comments" rollup so a reviewer
    * lands on them even when they're outside the current cursor's hunk.
@@ -84,6 +90,7 @@ export function AgentContextSection({
   delivered,
   lastSuccessfulPollAt,
   deliveredError,
+  watching,
   agentStartedThreads,
   onPickSession,
   onRefresh,
@@ -120,6 +127,15 @@ export function AgentContextSection({
       <div className="ac__restart-hint">
         Queue is in-memory — server restart drops unpulled comments.
       </div>
+
+      {watching && (
+        <div className="ac__watching" role="status">
+          <span className="ac__watching-dot" aria-hidden>
+            ●
+          </span>
+          Agent is watching — comments deliver live.
+        </div>
+      )}
 
       {deliveredError && (
         <div className="ac__poll-banner" role="status">
@@ -526,6 +542,13 @@ function tokenizeBackticks(text: string, symbols: SymbolIndex): MsgPart[] {
  */
 const MAGIC_PHRASE_PULL = "check shippable";
 const MAGIC_PHRASE_REPORT = "report back to shippable";
+/**
+ * `watch shippable` enters watch mode: the agent loops on
+ * `shippable_watch_review_comments` and picks up every comment live, so the
+ * reviewer prompts once instead of per batch. See
+ * docs/sdd/watch-review-comments/spec.md.
+ */
+const MAGIC_PHRASE_WATCH = "watch shippable";
 
 function McpInstallAffordance({
   mcpStatus,
@@ -593,6 +616,14 @@ function McpInstallAffordance({
       <div className="ac__mcp-row">
         <div className="ac__mcp-label">Report back:</div>
         <CopyChip text={MAGIC_PHRASE_REPORT} />
+      </div>
+      <div className="ac__mcp-row">
+        <div className="ac__mcp-label">Watch live:</div>
+        <CopyChip text={MAGIC_PHRASE_WATCH} />
+      </div>
+      <div className="ac__mcp-hint">
+        Prompt <code>watch shippable</code> once — the agent then picks up each
+        comment live as you write it, no re-prompting.
       </div>
       <div className="ac__mcp-actions">
         <button
