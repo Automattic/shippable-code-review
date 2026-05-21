@@ -160,6 +160,22 @@ vi.mock("../auth/client", () => ({
   AuthClientError: class AuthClientError extends Error {},
 }));
 
+// ReviewWorkspace's detach plumbing reaches into multiWindow, which in turn
+// pulls in @tauri-apps/api/webviewWindow when isTauri() returns true. The
+// jsdom tests force isTauri true for some PR-refresh paths; without this
+// mock, those tests leak an unhandled rejection from getCurrentWindow().
+vi.mock("../multiWindow", () => ({
+  currentWindowLabel: vi.fn().mockResolvedValue(null),
+  openDetachedWindow: vi.fn().mockResolvedValue(undefined),
+  listDetachedChildren: vi.fn().mockResolvedValue([]),
+  closeDetachedChildrenOf: vi.fn().mockResolvedValue(undefined),
+  focusIfDuplicate: vi.fn().mockResolvedValue(false),
+  openChangesetInWindow: vi.fn().mockResolvedValue("not-tauri"),
+  setWindowChangeset: vi.fn().mockResolvedValue(undefined),
+  setWindowTitle: vi.fn().mockResolvedValue(undefined),
+  onToastEvent: vi.fn().mockReturnValue(() => {}),
+}));
+
 afterEach(cleanup);
 afterEach(() => {
   fetchDefinitionCapabilitiesMock.mockReset();

@@ -88,6 +88,27 @@ export async function listDetachedChildren(
   return invoke<DetachedChildEntry[]>("list_detached_children", { parent });
 }
 
+/**
+ * Close every detached child currently owned by `parent`. Called when the
+ * parent loads a different review — detach is a per-review-session
+ * affordance, so stale children get torn down. Each `.close()` schedules
+ * a destroy that flows through the same Rust Destroyed arm as a manual
+ * close, so the parent's bridge state self-heals via children-changed.
+ */
+export async function closeDetachedChildrenOf(parent: string): Promise<void> {
+  if (!isTauri()) return;
+  const { getAllWebviewWindows } = await import(
+    "@tauri-apps/api/webviewWindow"
+  );
+  const prefix = `detached-${parent}-`;
+  const all = await getAllWebviewWindows();
+  await Promise.all(
+    all
+      .filter((w) => w.label.startsWith(prefix))
+      .map((w) => w.close().catch(() => {})),
+  );
+}
+
 export async function focusWindow(label: string): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");

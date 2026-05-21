@@ -1,16 +1,16 @@
 import { useEffect, useState } from "react";
-
-/**
- * Slice (a) — foundation only. This host reads its kind+parent from the URL
- * the Rust side baked in, announces itself to the parent, and renders a
- * placeholder card with a re-attach button that closes the window.
- *
- * Slices (b)/(c) replace the placeholder body with the real <Sidebar> /
- * <Inspector> rendered against a snapshot received over the event bus
- * (`shippable:detach-state:<parent>` push, `shippable:detach-action:<parent>`
- * dispatch-back). The shell here — params parsing, ready emit, close-on-
- * re-attach — stays the same.
- */
+import { Sidebar } from "./components/Sidebar";
+import "./components/Sidebar.css";
+import "./components/PromptRunsPanel.css";
+import {
+  detachActionEvent,
+  detachReadyEvent,
+  detachStateEvent,
+  type DetachActionMsg,
+  type DetachStateMsg,
+  type SidebarAction,
+  type SidebarSnapshot,
+} from "./detachBridge";
 
 type Kind = "sidebar" | "inspector";
 
@@ -27,30 +27,23 @@ function readParams(): DetachParams | null {
   return { kind, parent };
 }
 
+async function emitAction(parent: string, action: SidebarAction): Promise<void> {
+  const { emit } = await import("@tauri-apps/api/event");
+  await emit(detachActionEvent(parent), {
+    kind: "sidebar",
+    action,
+  } satisfies DetachActionMsg);
+}
+
+async function reattachClose(): Promise<void> {
+  const { getCurrentWebviewWindow } = await import(
+    "@tauri-apps/api/webviewWindow"
+  );
+  await getCurrentWebviewWindow().close();
+}
+
 export function DetachedHost() {
   const [params] = useState<DetachParams | null>(() => readParams());
-
-  useEffect(() => {
-    if (!params) return;
-    let cancelled = false;
-    void (async () => {
-      const { emit } = await import("@tauri-apps/api/event");
-      if (cancelled) return;
-      await emit(`shippable:detach-ready:${params.parent}`, {
-        kind: params.kind,
-      });
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [params]);
-
-  async function handleReattach() {
-    const { getCurrentWebviewWindow } = await import(
-      "@tauri-apps/api/webviewWindow"
-    );
-    await getCurrentWebviewWindow().close();
-  }
 
   if (!params) {
     return (
@@ -73,18 +66,89 @@ export function DetachedHost() {
         <button
           type="button"
           className="detached-shell__reattach"
-          onClick={handleReattach}
+          onClick={() => void reattachClose()}
           title="Re-attach to the parent window"
         >
           ↙ re-attach
         </button>
       </header>
       <div className="detached-shell__body">
-        <p className="detached-shell__placeholder">
-          Foundation only — the {params.kind} bridge lands in the next slice.
-          Closing this window or the parent re-docks the panel automatically.
-        </p>
+        {params.kind === "sidebar" ? (
+          <SidebarBody parent={params.parent} />
+        ) : (
+          <p className="detached-shell__placeholder">
+            Inspector wiring lands in the next slice. Closing this window or
+            the parent re-docks the panel automatically.
+          </p>
+        )}
       </div>
     </div>
+  );
+}
+
+interface SidebarBodyProps {
+  parent: string;
+}
+
+/**
+ * Renders the docked <Sidebar> against snapshots pushed by the parent.
+ * Mounts → subscribes to detach-state → announces ready → waits for the
+ * first snapshot. Callbacks emit detach-action messages back; ReviewState
+ * lives in the parent and reflects back through the next snapshot push.
+ */
+function SidebarBody({ parent }: SidebarBodyProps) {
+  const [snapshot, setSnapshot] = useState<SidebarSnapshot | null>(null);
+
+  useEffect(() => {
+    let stopState: (() => void) | null = null;
+    let cancelled = false;
+
+    void (async () => {
+      const { listen, emit } = await import("@tauri-apps/api/event");
+      if (cancelled) return;
+      stopState = await listen<DetachStateMsg>(
+        detachStateEvent(parent),
+        (ev) => {
+          if (ev.payload.kind === "sidebar") setSnapshot(ev.payload.snapshot);
+        },
+      );
+      if (cancelled) {
+        stopState();
+        return;
+      }
+      // Announce we're listening so the parent pushes the current snapshot.
+      // Subsequent emits ride the normal "snapshot changed" path.
+      await emit(detachReadyEvent(parent), { kind: "sidebar" });
+    })();
+
+    return () => {
+      cancelled = true;
+      stopState?.();
+    };
+  }, [parent]);
+
+  if (!snapshot) {
+    return (
+      <p className="detached-shell__placeholder">Loading file list…</p>
+    );
+  }
+  return (
+    <Sidebar
+      viewModel={snapshot.viewModel}
+      runs={snapshot.runs}
+      wide={snapshot.wide}
+      onPickFile={(fileId) =>
+        void emitAction(parent, { type: "pick-file", fileId })
+      }
+      onJumpToFirstComment={(fileId) =>
+        void emitAction(parent, { type: "jump-to-first-comment", fileId })
+      }
+      onCloseRun={(id) =>
+        void emitAction(parent, { type: "close-run", id })
+      }
+      onToggleWide={() =>
+        void emitAction(parent, { type: "toggle-wide" })
+      }
+    />
   );
 }

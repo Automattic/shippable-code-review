@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, ReactNode } from "react";
 import {
   buildCommentStops,
@@ -89,7 +89,16 @@ import {
 } from "../useGithubPrLoad";
 import { GitHubTokenModal } from "./GitHubTokenModal";
 import { isTauri, keychainGet } from "../keychain";
-import { openDetachedWindow } from "../multiWindow";
+import {
+  closeDetachedChildrenOf,
+  currentWindowLabel,
+  openDetachedWindow,
+} from "../multiWindow";
+import {
+  useDetachBridge,
+  type SidebarAction,
+  type SidebarSnapshot,
+} from "../detachBridge";
 import { fetchFileAt } from "../fileAt";
 import {
   buildDiffViewModel,
@@ -175,6 +184,12 @@ export function ReviewWorkspace({
     lineIdx: number;
   } | null>(null);
   const [mouseTip, setMouseTip] = useState<string | null>(null);
+  /** Tauri window label of the current page. `null` in browser dev — the
+   *  detach bridge becomes a no-op and the affordance hides itself. */
+  const [selfLabel, setSelfLabel] = useState<string | null>(null);
+  useEffect(() => {
+    void currentWindowLabel().then(setSelfLabel);
+  }, []);
   const [runs, setRuns] = useState<PromptRunView[]>([]);
   const [sidebarWide, setSidebarWide] = useState(false);
   const [definitionCapabilities, setDefinitionCapabilities] =
@@ -806,6 +821,92 @@ export function ReviewWorkspace({
     setRuns((prev) => prev.filter((r) => r.id !== id));
   }
 
+  // ── Detach bridge ───────────────────────────────────────────────────────
+  // The sidebar snapshot is built once per render and passed both to the
+  // docked <Sidebar> and to the bridge. React Compiler auto-memoizes; the
+  // bridge's emit-on-change effect doubles up with a JSON.stringify gate
+  // so identity churn from any source can't trigger wire chatter.
+  const sidebarViewModel = buildSidebarViewModel({
+    files: cs.files,
+    currentFileId: state.cursor.fileId,
+    readLines: state.readLines,
+    reviewedFiles: state.reviewedFiles,
+    interactions: state.interactions,
+  });
+  const sidebarSnapshot: SidebarSnapshot = {
+    viewModel: sidebarViewModel,
+    runs,
+    wide: sidebarWide,
+  };
+
+  const handleSidebarAction = useCallback(
+    (action: SidebarAction) => {
+      switch (action.type) {
+        case "pick-file": {
+          const f = cs.files.find((ff) => ff.id === action.fileId);
+          if (!f) return;
+          dispatch({
+            type: "SET_CURSOR",
+            cursor: {
+              changesetId: cs.id,
+              fileId: action.fileId,
+              hunkId: f.hunks[0].id,
+              lineIdx: 0,
+            },
+          });
+          break;
+        }
+        case "jump-to-first-comment": {
+          const stop = buildCommentStops(cs, state.interactions).find(
+            (s) => s.fileId === action.fileId,
+          );
+          if (!stop) return;
+          dispatch({
+            type: "SET_CURSOR",
+            cursor: {
+              changesetId: cs.id,
+              fileId: stop.fileId,
+              hunkId: stop.hunkId,
+              lineIdx: stop.lineIdx,
+            },
+          });
+          break;
+        }
+        case "close-run":
+          closePromptRun(action.id);
+          break;
+        case "toggle-wide":
+          setSidebarWide((v) => !v);
+          break;
+      }
+    },
+    [cs, state.interactions, dispatch],
+  );
+
+  const { isSidebarDetached } = useDetachBridge({
+    selfLabel,
+    sidebarSnapshot,
+    onSidebarAction: handleSidebarAction,
+  });
+
+  // When the panel re-docks (detached → not detached), restore visibility
+  // even if the user had manually hidden it before detaching. The visible
+  // action "close that window" most naturally maps to "put it back."
+  const wasSidebarDetachedRef = useRef(false);
+  useEffect(() => {
+    if (wasSidebarDetachedRef.current && !isSidebarDetached) {
+      setShowSidebar(true);
+    }
+    wasSidebarDetachedRef.current = isSidebarDetached;
+  }, [isSidebarDetached]);
+
+  // Detach is a per-review-session affordance — switching reviews collapses
+  // any children so they can't outlive the changeset they were anchored to.
+  useEffect(() => {
+    if (!selfLabel) return;
+    void closeDetachedChildrenOf(selfLabel);
+  }, [cs.id, selfLabel]);
+
   async function handleSymbolClick(target: DefinitionClickTarget) {
     const inDiffTarget = symbolIndex.get(target.symbol);
     if (inDiffTarget) {
@@ -1172,22 +1273,16 @@ export function ReviewWorkspace({
         className={[
           "main",
           showInspector && "main--with-inspector",
-          !showSidebar
+          !showSidebar || isSidebarDetached
             ? "main--no-sidebar"
             : sidebarWide && "main--wide-sidebar",
         ]
           .filter(Boolean)
           .join(" ")}
       >
-        {showSidebar && (
+        {showSidebar && !isSidebarDetached && (
           <Sidebar
-            viewModel={buildSidebarViewModel({
-              files: cs.files,
-              currentFileId: state.cursor.fileId,
-              readLines: state.readLines,
-              reviewedFiles: state.reviewedFiles,
-              interactions: state.interactions,
-            })}
+            viewModel={sidebarViewModel}
             onPickFile={(fileId) => {
               const f = cs.files.find((ff) => ff.id === fileId)!;
               dispatch({
@@ -1539,9 +1634,8 @@ export function ReviewWorkspace({
                 hint,
               });
             }}
-            onDetach={
-              isTauri() ? () => void openDetachedWindow("inspector") : undefined
-            }
+            // Slice (c) re-wires the inspector ↗ button. Until then, leave
+            // it undefined so users can't open a placeholder-only child.
           />
         )}
       </div>
