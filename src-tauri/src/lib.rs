@@ -234,10 +234,7 @@ fn reattach_detached_window(
         reg.by_label.remove(&label).and_then(|e| e.parent)
     };
     if let Some(parent) = parent {
-        let _ = app.emit(
-            &format!("shippable:detach-children-changed:{parent}"),
-            (),
-        );
+        let _ = app.emit(&format!("shippable:detach-children-changed:{parent}"), ());
     }
     if let Some(win) = app.get_webview_window(&label) {
         let _ = win.destroy();
@@ -649,10 +646,7 @@ pub fn run() {
                 }
             }
             if let Some(parent) = child_parent {
-                let _ = app_handle.emit(
-                    &format!("shippable:detach-children-changed:{parent}"),
-                    (),
-                );
+                let _ = app_handle.emit(&format!("shippable:detach-children-changed:{parent}"), ());
             }
             // Quit when the last window closes. Tauri 2 keeps the macOS app
             // alive by default; for a per-window reviewer that just means

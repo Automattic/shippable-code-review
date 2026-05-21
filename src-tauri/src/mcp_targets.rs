@@ -227,7 +227,11 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
     }
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
-        format!("could not rename {} → {}: {e}", tmp.display(), path.display())
+        format!(
+            "could not rename {} → {}: {e}",
+            tmp.display(),
+            path.display()
+        )
     })
 }
 
