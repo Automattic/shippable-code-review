@@ -9,7 +9,10 @@ import { remarkAlert } from "remark-github-blockquote-alert";
 import rehypeSlug from "rehype-slug";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import { highlightCode } from "../highlight";
-import { ensureMermaidReady } from "./mermaidClient";
+import {
+  ensureMermaidReadyForUntrustedMarkdown,
+  stripMermaidClickDirectives,
+} from "./mermaidClient";
 import { MediaLightbox } from "./MediaLightbox";
 import {
   resolveImageSrc,
@@ -102,7 +105,7 @@ function MermaidBlock({ source }: { source: string }) {
   const [zoomed, setZoomed] = useState(false);
 
   useEffect(() => {
-    ensureMermaidReady();
+    ensureMermaidReadyForUntrustedMarkdown();
   }, []);
 
   useEffect(() => {
@@ -110,8 +113,15 @@ function MermaidBlock({ source }: { source: string }) {
     const target = containerRef.current;
     if (!target) return;
     setError(null);
+    // Reapply strict config right before render. PlanDiagramView shares the
+    // same mermaid singleton and reinitialises it to "loose" for its own use;
+    // if its render interleaves with ours, strict mode here keeps
+    // attacker-controlled markdown from emitting `javascript:` URLs.
+    // stripMermaidClickDirectives is the matching source-level defense and
+    // holds even if the global config flips.
+    ensureMermaidReadyForUntrustedMarkdown();
     mermaid
-      .render(`md-mermaid-${renderId}`, source)
+      .render(`md-mermaid-${renderId}`, stripMermaidClickDirectives(source))
       .then((result) => {
         if (cancelled || !target) return;
         target.innerHTML = result.svg;

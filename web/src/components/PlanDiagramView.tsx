@@ -4,7 +4,7 @@ import "./PlanDiagramView.css";
 import type { PlanDiagram, PlanDiagramNode } from "../planDiagram";
 import type { EvidenceRef, FileRole, SymbolShape } from "../types";
 import { CopyButton } from "./CopyButton";
-import { ensureMermaidReady } from "./mermaidClient";
+import { ensureMermaidReadyForTrustedDiagram } from "./mermaidClient";
 
 // What each role means in plain language, surfaced as the hover tooltip
 // on every node. Reviewers don't need to know about path-floor vs LSP-shape
@@ -62,7 +62,7 @@ export function PlanDiagramView({
   );
 
   useEffect(() => {
-    ensureMermaidReady();
+    ensureMermaidReadyForTrustedDiagram();
     // Mermaid invokes the global named in `click f0 callback "..."`. We
     // register a single dispatcher keyed on path; the diagram embeds
     // `click <id> __shippableDiagramClick "<path>"` per node.
