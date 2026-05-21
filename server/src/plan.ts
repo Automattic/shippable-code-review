@@ -111,6 +111,30 @@ Do NOT fabricate paths, hunk ids, or symbol names. If you cannot cite evidence, 
 
 To keep the diff under token limits, files that are auto-generated (e.g. \`package-lock.json\`) or that match common binary asset extensions are listed in the diff with their path and status but **without** hunk content — they appear as \`### <path> (<status>) — content elided: <reason>\`. Treat their content as unreviewable here, but you can still cite them with \`{ kind: "file", path: "..." }\` evidence for claims like "bumps dependency X" inferred from the rest of the changeset.
 
+## Comprehension questions
+
+In addition to intent and entryPoints, return **3 to 8 comprehension questions** that test whether a reviewer understands this change. They are not graded — the reviewer compares their answer to yours and self-evaluates. Write \`claudeAnswer\` the way a reviewer would, not the way a doc would.
+
+Distribute across scope:
+- Roughly **one** changeset-level Q1 ("what does this PR do?"). Target: \`{ kind: "changeset" }\`.
+- **Most** as file-level Q1s. Target: \`{ kind: "file", path: <path from StructureMap.files> }\`.
+- **One or two** as hunk- or symbol-level Q2s. Target: \`{ kind: "hunk", hunkId: <id> }\` or \`{ kind: "symbol", name, definedIn }\`.
+
+Question types (set \`type\` accordingly):
+- \`"q1"\`: short-prose "what does this do?" — fits changeset, file, or symbol targets.
+- \`"q2"\`: "will this break if we send it X?" — fits hunk or symbol targets where there's a concrete input value and an expected behavior derivable from the diff. **Include the concrete input value in the prompt** (e.g., "What happens if loadPrefs is called when localStorage has the string \"undefined\"?").
+
+For every question:
+- \`id\`: a short stable string unique within the response (e.g., \`"q-cs"\`, \`"q-file-storage"\`, \`"q-hunk-1"\`).
+- \`target\` MUST resolve in the StructureMap (the same validator that drops bad claim evidence drops bad question targets).
+- \`prompt\`: ONE sentence. End with a question mark.
+- \`claudeAnswer\`: 1–3 short sentences. Concrete, falsifiable, grounded in the diff.
+
+Do NOT emit questions that:
+- Depend on context outside the diff.
+- Have only stylistic answers ("is this readable?").
+- Could be answered by reading the file list alone.
+
 You will be called via structured output (JSON schema). Return only the schema-conformant object. Do not include prose outside the structured output.`;
 
 export async function generatePlan(
