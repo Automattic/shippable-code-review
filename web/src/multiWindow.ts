@@ -16,6 +16,13 @@ export interface WindowEntry {
   changesetId: string | null;
 }
 
+export type DetachedKind = "sidebar" | "inspector";
+
+export interface DetachedChildEntry {
+  label: string;
+  kind: DetachedKind;
+}
+
 const TOAST_EVENT = "shippable:toast";
 
 let cachedLabel: string | null = null;
@@ -53,6 +60,73 @@ export async function listWindowChangesets(): Promise<WindowEntry[]> {
   if (!isTauri()) return [];
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<WindowEntry[]>("list_window_changesets");
+}
+
+/**
+ * Pop the sidebar or inspector out as a child window of the calling
+ * review window. The Rust side derives the parent label from the calling
+ * webview, so the JS side doesn't need to know its own label. Idempotent:
+ * if a child of the requested kind already exists for this parent, the
+ * existing one is focused.
+ */
+export async function openDetachedWindow(kind: DetachedKind): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_detached_window", { kind });
+}
+
+/**
+ * List the detached children currently owned by `parent`. Used by the
+ * parent-side bridge to gate "hide docked panel" on the registry, the
+ * single source of truth for whether a child actually exists.
+ */
+export async function listDetachedChildren(
+  parent: string,
+): Promise<DetachedChildEntry[]> {
+  if (!isTauri()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<DetachedChildEntry[]>("list_detached_children", { parent });
+}
+
+/**
+ * Close every detached child currently owned by `parent`. Called when the
+ * parent loads a different review — detach is a per-review-session
+ * affordance, so stale children get torn down. Each `.close()` schedules
+ * a destroy that flows through the same Rust Destroyed arm as a manual
+ * close, so the parent's bridge state self-heals via children-changed.
+ */
+export async function closeDetachedChildrenOf(parent: string): Promise<void> {
+  if (!isTauri()) return;
+  const { getAllWebviewWindows } = await import(
+    "@tauri-apps/api/webviewWindow"
+  );
+  const prefix = `detached-${parent}-`;
+  const all = await getAllWebviewWindows();
+  await Promise.all(
+    all
+      .filter((w) => w.label.startsWith(prefix))
+      .map((w) => w.close().catch(() => {})),
+  );
+}
+
+/**
+ * Close one kind of detached child for `parent`. Used by the
+ * detach-toggle path (shortcut / menu / future button-as-toggle) so a
+ * second invocation re-attaches instead of stacking another window.
+ */
+export async function closeDetachedChildOf(
+  parent: string,
+  kind: DetachedKind,
+): Promise<void> {
+  if (!isTauri()) return;
+  const { getAllWebviewWindows } = await import(
+    "@tauri-apps/api/webviewWindow"
+  );
+  const label = `detached-${parent}-${kind}`;
+  const all = await getAllWebviewWindows();
+  await Promise.all(
+    all.filter((w) => w.label === label).map((w) => w.close().catch(() => {})),
+  );
 }
 
 export async function focusWindow(label: string): Promise<void> {

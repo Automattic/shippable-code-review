@@ -90,13 +90,32 @@ import { KEYMAP, type ActionId } from "../keymap";
 import { clearSession } from "../persist";
 import type { ThemeId } from "../tokens";
 import type { RecentSource } from "../recents";
-import { loadGithubPr, GithubFetchError } from "../githubPrClient";
+import {
+  GH_ERROR_MESSAGES,
+  GithubFetchError,
+  loadGithubPr,
+  lookupPrForBranch,
+  type PrMatch,
+} from "../githubPrClient";
 import {
   asTokenRejectionHint,
   type TokenRejectionHint,
 } from "../useGithubPrLoad";
 import { GitHubTokenModal } from "./GitHubTokenModal";
 import { isTauri, keychainGet } from "../keychain";
+import {
+  closeDetachedChildOf,
+  closeDetachedChildrenOf,
+  currentWindowLabel,
+  openDetachedWindow,
+} from "../multiWindow";
+import {
+  useDetachBridge,
+  type InspectorAction,
+  type InspectorSnapshot,
+  type SidebarAction,
+  type SidebarSnapshot,
+} from "../detachBridge";
 import { fetchFileAt } from "../fileAt";
 import {
   buildDiffViewModel,
@@ -228,6 +247,12 @@ export function ReviewWorkspace({
     lineIdx: number;
   } | null>(null);
   const [mouseTip, setMouseTip] = useState<string | null>(null);
+  /** Tauri window label of the current page. `null` in browser dev — the
+   *  detach bridge becomes a no-op and the affordance hides itself. */
+  const [selfLabel, setSelfLabel] = useState<string | null>(null);
+  useEffect(() => {
+    void currentWindowLabel().then(setSelfLabel);
+  }, []);
   const [runs, setRuns] = useState<PromptRunView[]>([]);
   const [sidebarWide, setSidebarWide] = useState(false);
   const [definitionCapabilities, setDefinitionCapabilities] =
@@ -299,6 +324,14 @@ export function ReviewWorkspace({
   const [agentLoading, setAgentLoading] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
   const [agentRefreshTick, setAgentRefreshTick] = useState(0);
+
+  // PR pill state — lifted out of Inspector so the detached child window
+  // can render against the same lookup result. The match comes from the
+  // server's branch→PR lookup; busy/error track the merge flow. See
+  // docs/plans/detached-sidebars.md slice (e).
+  const [pillMatch, setPillMatch] = useState<PrMatch | null>(null);
+  const [pillBusy, setPillBusy] = useState(false);
+  const [pillError, setPillError] = useState<string | null>(null);
 
   // PR refresh state — tracks per-cs whether a refresh is in flight,
   // and whether the last refresh failed with auth-rejected (surfaces a banner).
@@ -718,6 +751,27 @@ export function ReviewWorkspace({
           ),
         });
         break;
+      case "TOGGLE_DETACH_SIDEBAR":
+        void toggleDetachedKind("sidebar");
+        break;
+      case "TOGGLE_DETACH_INSPECTOR":
+        void toggleDetachedKind("inspector");
+        break;
+    }
+  }
+
+  // Forward-references the bridge state declared further below; both
+  // `runAction` and the menu listener call this. The function and
+  // variables it closes over are all hoisted into the same component
+  // scope, so the closure resolves at call time (post-mount, post-bridge).
+  async function toggleDetachedKind(kind: "sidebar" | "inspector"): Promise<void> {
+    if (!selfLabel) return;
+    const currentlyDetached =
+      kind === "sidebar" ? isSidebarDetached : isInspectorDetached;
+    if (currentlyDetached) {
+      await closeDetachedChildOf(selfLabel, kind);
+    } else {
+      await openDetachedWindow(kind);
     }
   }
 
@@ -840,8 +894,8 @@ export function ReviewWorkspace({
     ? buildGuidePromptViewModel(suggestion, symbolIndex, cs.id)
     : null;
 
-  function startPromptRun(prompt: Prompt, rendered: string) {
-    const id = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const startPromptRun = (prompt: Prompt, rendered: string) => {
+    const id = newPromptRunId();
     const controller = new AbortController();
     runControllersRef.current.set(id, controller);
     setRuns((prev) => [
@@ -865,13 +919,435 @@ export function ReviewWorkspace({
         },
       },
     );
-  }
+  };
 
-  function closePromptRun(id: string) {
+  const closePromptRun = (id: string) => {
     runControllersRef.current.get(id)?.abort();
     runControllersRef.current.delete(id);
     setRuns((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  // ── Detach bridge ───────────────────────────────────────────────────────
+  // The sidebar snapshot is built once per render and passed both to the
+  // docked <Sidebar> and to the bridge. React Compiler auto-memoizes; the
+  // bridge's emit-on-change effect doubles up with a JSON.stringify gate
+  // so identity churn from any source can't trigger wire chatter.
+  const sidebarViewModel = buildSidebarViewModel({
+    files: cs.files,
+    currentFileId: state.cursor.fileId,
+    readLines: state.readLines,
+    reviewedFiles: state.reviewedFiles,
+    interactions: state.interactions,
+  });
+  const parentTitle = cs.prSource?.title ?? cs.title ?? cs.branch;
+  const sidebarSnapshot: SidebarSnapshot = {
+    viewModel: sidebarViewModel,
+    runs,
+    wide: sidebarWide,
+    parentTitle,
+  };
+
+  const handleSidebarAction = (action: SidebarAction) => {
+    switch (action.type) {
+      case "pick-file": {
+        const f = cs.files.find((ff) => ff.id === action.fileId);
+        if (!f) return;
+        dispatch({
+          type: "SET_CURSOR",
+          cursor: {
+            changesetId: cs.id,
+            fileId: action.fileId,
+            hunkId: f.hunks[0].id,
+            lineIdx: 0,
+          },
+        });
+        break;
+      }
+      case "jump-to-first-comment": {
+        const stop = buildCommentStops(cs, state.interactions).find(
+          (s) => s.fileId === action.fileId,
+        );
+        if (!stop) return;
+        dispatch({
+          type: "SET_CURSOR",
+          cursor: {
+            changesetId: cs.id,
+            fileId: stop.fileId,
+            hunkId: stop.hunkId,
+            lineIdx: stop.lineIdx,
+          },
+        });
+        break;
+      }
+      case "close-run":
+        closePromptRun(action.id);
+        break;
+      case "toggle-wide":
+        setSidebarWide((v) => !v);
+        break;
+    }
+  };
+
+  // ── Inspector snapshot + handlers ───────────────────────────────────────
+  // The docked Inspector's many callbacks fan out from one
+  // handleInspectorAction switch so the detached child's emits land on the
+  // same code path. Each extracted handler matches what the docked JSX
+  // used to call inline. The view model is also shared by the inline-mode
+  // thread render in DiffView so the two modes stay in lockstep.
+  const inspectorViewModel = buildInspectorViewModel({
+    file,
+    hunk,
+    line,
+    cursor: state.cursor,
+    symbols: symbolIndex,
+    acked: ackedSet,
+    replies: state.interactions,
+    draftingKey,
+    signals: ingestSignals,
+    detachedInteractions: state.detachedInteractions,
+  });
+  const commentStops = buildCommentStops(cs, state.interactions);
+
+  // Mirror Inspector's own derivation: delivered comments indexed by id,
+  // undefined when no worktree backs the changeset.
+  const deliveredById: Record<string, DeliveredInteraction> | undefined =
+    activeWorktreeSource
+      ? Object.fromEntries(deliveredComments.map((d) => [d.id, d]))
+      : undefined;
+
+  const handleJumpToBlock = (cursor: Cursor, selection: LineSelection) =>
+    dispatch({ type: "SET_CURSOR", cursor, selection });
+
+  const handleToggleAck = (hunkId: string, lineIdx: number) =>
+    dispatch({ type: "TOGGLE_ACK", hunkId, lineIdx });
+
+  const handleStartDraft = (key: string) => setDraftingKey(key);
+  const handleStartNewComment = () => setDraftingKey(newCommentKey());
+  const handleCloseDraft = () => setDraftingKey(null);
+  const handleChangeDraft = (key: string, body: string) =>
+    setDrafts((prev) => ({ ...prev, [key]: body }));
+
+  const handleSubmitReply = (key: string, body: string) => {
+    const createdAt = new Date();
+    const interactionId = newReviewerInteractionId();
+    const isFirst = (state.interactions[key]?.length ?? 0) === 0;
+    const interaction: Interaction = {
+      id: interactionId,
+      threadKey: key,
+      target: isFirst ? firstTargetForKey(key) : replyTarget(),
+      intent: "comment",
+      author: "you",
+      authorRole: "user",
+      body,
+      createdAt: createdAt.toISOString(),
+      ...buildReplyAnchor(key, cs),
+      ...(activeWorktreeSource ? { agentQueueStatus: "pending" } : {}),
+    };
+    const addAction = {
+      type: "ADD_INTERACTION" as const,
+      targetKey: key,
+      interaction,
+    };
+    if (activeWorktreeSource) {
+      rawDispatch(addAction);
+    } else {
+      dispatch(addAction);
+    }
+    setDrafts((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setDraftingKey(null);
+    if (activeWorktreeSource) {
+      const worktreePath = activeWorktreeSource.worktreePath;
+      upsertInteraction(interaction, cs.id)
+        .then(() => enqueueInteraction(interactionId, worktreePath))
+        .catch((err: unknown) => {
+          console.error("[shippable] enqueue failed:", err);
+          dispatch({
+            type: "SET_INTERACTION_ENQUEUE_ERROR",
+            targetKey: key,
+            interactionId,
+            error: true,
+          });
+        });
+    }
+  };
+
+  const handleRetryReply = (key: string, replyId: string) => {
+    if (!activeWorktreeSource) return;
+    const ix = state.interactions[key]?.find((entry) => entry.id === replyId);
+    if (!ix) return;
+    const worktreePath = activeWorktreeSource.worktreePath;
+    dispatch({
+      type: "SET_INTERACTION_ENQUEUE_ERROR",
+      targetKey: key,
+      interactionId: replyId,
+      error: false,
+    });
+    upsertInteraction(ix, cs.id)
+      .then(() => enqueueInteraction(replyId, worktreePath))
+      .catch((err: unknown) => {
+        console.error("[shippable] retry enqueue failed:", err);
+        dispatch({
+          type: "SET_INTERACTION_ENQUEUE_ERROR",
+          targetKey: key,
+          interactionId: replyId,
+          error: true,
+        });
+      });
+  };
+
+  const handleDeleteReply = (key: string, replyId: string) => {
+    const target = state.interactions[key]?.find((ix) => ix.id === replyId);
+    if (target?.agentQueueStatus === "pending" && activeWorktreeSource) {
+      unenqueueInteraction(replyId).catch((err: unknown) => {
+        console.error("[shippable] unenqueue failed:", err);
+      });
+    }
+    dispatch({
+      type: "DELETE_INTERACTION",
+      targetKey: key,
+      interactionId: replyId,
+    });
+  };
+
+  const handleVerifyAiNote = (recipe: {
+    source: string;
+    inputs: Record<string, string>;
+  }) => {
+    setRunRequest((prev) => ({
+      tick: (prev?.tick ?? 0) + 1,
+      source: recipe.source,
+      inputs: recipe.inputs,
+    }));
+  };
+
+  // PR-pill machinery — owned by ReviewWorkspace so the detached Inspector
+  // window can drive the same pill from a snapshot push. The lookup runs
+  // once per worktreePath change; the click handler dispatches the merge
+  // or surfaces the token modal through the existing prRefresh path.
+  const worktreePathForPill = activeWorktreeSource?.worktreePath ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      setPillMatch(null);
+      setPillError(null);
+      if (!worktreePathForPill) return;
+      try {
+        const { matched } = await lookupPrForBranch(worktreePathForPill);
+        if (!cancelled) setPillMatch(matched);
+      } catch (err) {
+        console.warn("[shippable] PR branch-lookup failed:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [worktreePathForPill]);
+
+  async function handlePillClick(): Promise<void> {
+    if (!pillMatch || cs.prSource) return;
+    setPillBusy(true);
+    setPillError(null);
+    try {
+      const result = await loadGithubPr(pillMatch.htmlUrl);
+      setPillBusy(false);
+      dispatch({
+        type: "MERGE_PR_OVERLAY",
+        changesetId: cs.id,
+        prSource: result.changeSet.prSource!,
+        prConversation: result.changeSet.prConversation ?? [],
+      });
+      dispatch({
+        type: "MERGE_PR_INTERACTIONS",
+        changesetId: cs.id,
+        prInteractions: result.prInteractions,
+        prDetached: result.prDetached,
+      });
+    } catch (err) {
+      setPillBusy(false);
+      if (err instanceof GithubFetchError) {
+        if (err.discriminator === "github_token_required") {
+          setPrRefreshTokenModal({
+            host: err.host ?? "github.com",
+            reason: "first-time",
+            pendingHtmlUrl: "",
+            pendingAction: () => handlePillClick(),
+          });
+        } else if (err.discriminator === "github_auth_failed") {
+          setPrRefreshTokenModal({
+            host: err.host ?? "github.com",
+            reason: "rejected",
+            pendingHtmlUrl: "",
+            pendingAction: () => handlePillClick(),
+            hint: asTokenRejectionHint(err.hint),
+          });
+        } else {
+          setPillError(
+            GH_ERROR_MESSAGES[err.discriminator] ??
+              "Couldn't load PR overlay.",
+          );
+        }
+      } else {
+        setPillError("Couldn't load PR overlay.");
+      }
+    }
   }
+
+  const inspectorAgentContext = activeWorktreeSource
+    ? {
+        slice: agentSlice,
+        candidates: agentSessions,
+        selectedSessionFilePath:
+          pinnedSession ?? agentSlice?.session.filePath ?? null,
+        loading: agentLoading,
+        error: agentError,
+        mcpStatus,
+        delivered: deliveredComments,
+        lastSuccessfulPollAt: deliveredLastSuccessAt,
+        deliveredError: deliveredErrorState,
+        watching: agentWatching,
+        agentStartedThreads: agentStartedThreads(state.interactions),
+      }
+    : null;
+
+  const inspectorSnapshot: InspectorSnapshot = {
+    viewModel: inspectorViewModel,
+    commentCount: commentStops.length,
+    lineHasAiNote,
+    agentContext: inspectorAgentContext,
+    parentTitle,
+    worktreePath: worktreePathForPill,
+    pillMatch: cs.prSource ? null : pillMatch,
+    pillBusy,
+    pillError,
+  };
+
+  const handleInspectorAction = (action: InspectorAction) => {
+    switch (action.type) {
+      case "jump":
+        dispatch({ type: "SET_CURSOR", cursor: action.cursor });
+        break;
+      case "jump-to-block":
+        dispatch({
+          type: "SET_CURSOR",
+          cursor: action.cursor,
+          selection: action.selection,
+        });
+        break;
+      case "toggle-ack":
+        dispatch({
+          type: "TOGGLE_ACK",
+          hunkId: action.hunkId,
+          lineIdx: action.lineIdx,
+        });
+        break;
+      case "start-draft":
+        setDraftingKey(action.key);
+        break;
+      case "start-new-comment":
+        handleStartNewComment();
+        break;
+      case "close-draft":
+        setDraftingKey(null);
+        break;
+      case "submit-reply":
+        handleSubmitReply(action.key, action.body);
+        break;
+      case "retry-reply":
+        handleRetryReply(action.key, action.replyId);
+        break;
+      case "delete-reply":
+        handleDeleteReply(action.key, action.replyId);
+        break;
+      case "prev-comment":
+        dispatch({ type: "MOVE_TO_COMMENT", delta: -1 });
+        break;
+      case "next-comment":
+        dispatch({ type: "MOVE_TO_COMMENT", delta: 1 });
+        break;
+      case "pick-session":
+        setPinnedSession(action.sessionFilePath);
+        break;
+      case "refresh":
+        setAgentRefreshTick((t) => t + 1);
+        break;
+      case "verify-ai-note":
+        handleVerifyAiNote(action.recipe);
+        break;
+      case "pill-click":
+        void handlePillClick();
+        break;
+    }
+  };
+
+  const { isSidebarDetached, isInspectorDetached } = useDetachBridge({
+    selfLabel,
+    sidebarSnapshot,
+    onSidebarAction: handleSidebarAction,
+    inspectorSnapshot,
+    onInspectorAction: handleInspectorAction,
+  });
+
+  // Mirror the sidebar's re-dock-visibility behaviour for the inspector.
+  const wasInspectorDetachedRef = useRef(false);
+  useEffect(() => {
+    if (wasInspectorDetachedRef.current && !isInspectorDetached) {
+      setShowInspector(true);
+    }
+    wasInspectorDetachedRef.current = isInspectorDetached;
+  }, [isInspectorDetached]);
+
+  // When the panel re-docks (detached → not detached), restore visibility
+  // even if the user had manually hidden it before detaching. The visible
+  // action "close that window" most naturally maps to "put it back."
+  const wasSidebarDetachedRef = useRef(false);
+  useEffect(() => {
+    if (wasSidebarDetachedRef.current && !isSidebarDetached) {
+      setShowSidebar(true);
+    }
+    wasSidebarDetachedRef.current = isSidebarDetached;
+  }, [isSidebarDetached]);
+
+  // Detach is a per-review-session affordance — switching reviews collapses
+  // any children so they can't outlive the changeset they were anchored to.
+  useEffect(() => {
+    if (!selfLabel) return;
+    void closeDetachedChildrenOf(selfLabel);
+  }, [cs.id, selfLabel]);
+
+  // Menu actions for View → Detach Sidebar / Detach Inspector route to the
+  // same toggle as the keyboard shortcut. Each entry runs only in review
+  // windows; detached children would otherwise try to spawn grandchildren.
+  useEffect(() => {
+    if (!isTauri()) return;
+    if (selfLabel && selfLabel.startsWith("detached-")) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const off = await listen<string>("shippable:menu", (e) => {
+        if (e.payload === "detach-sidebar") {
+          void toggleDetachedKind("sidebar");
+        } else if (e.payload === "detach-inspector") {
+          void toggleDetachedKind("inspector");
+        }
+      });
+      if (cancelled) off();
+      else unlisten = off;
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+    // toggleDetachedKind is re-created each render but closes over the
+    // latest selfLabel / isSidebarDetached / isInspectorDetached. Listing
+    // it isn't useful; the closure reads the right values at call time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selfLabel]);
 
   async function handleSymbolClick(target: DefinitionClickTarget) {
     const inDiffTarget = symbolIndex.get(target.symbol);
@@ -971,160 +1447,6 @@ export function ReviewWorkspace({
       });
     }
   }
-
-  // Interaction view model + handlers. Shared by the Inspector panel and the
-  // inline-mode thread render in DiffView so the two modes stay in lockstep.
-  const inspectorViewModel = buildInspectorViewModel({
-    file,
-    hunk,
-    line,
-    cursor: state.cursor,
-    symbols: symbolIndex,
-    acked: ackedSet,
-    replies: state.interactions,
-    draftingKey,
-    signals: ingestSignals,
-    detachedInteractions: state.detachedInteractions,
-  });
-
-  // Mirror Inspector's own derivation: delivered comments indexed by id,
-  // undefined when no worktree backs the changeset.
-  const deliveredById: Record<string, DeliveredInteraction> | undefined =
-    activeWorktreeSource
-      ? Object.fromEntries(deliveredComments.map((d) => [d.id, d]))
-      : undefined;
-
-  const handleJumpToBlock = (cursor: Cursor, selection: LineSelection) =>
-    dispatch({ type: "SET_CURSOR", cursor, selection });
-
-  const handleToggleAck = (hunkId: string, lineIdx: number) =>
-    dispatch({ type: "TOGGLE_ACK", hunkId, lineIdx });
-
-  const handleStartDraft = (key: string) => setDraftingKey(key);
-  const handleStartNewComment = () => setDraftingKey(newCommentKey());
-  const handleCloseDraft = () => setDraftingKey(null);
-  const handleChangeDraft = (key: string, body: string) =>
-    setDrafts((prev) => ({ ...prev, [key]: body }));
-
-  const handleSubmitReply = (key: string, body: string) => {
-    const createdAt = new Date();
-    const interactionId = newReviewerInteractionId();
-    const isFirst = (state.interactions[key]?.length ?? 0) === 0;
-    const interaction: Interaction = {
-      id: interactionId,
-      threadKey: key,
-      target: isFirst ? firstTargetForKey(key) : replyTarget(),
-      intent: "comment",
-      author: "you",
-      authorRole: "user",
-      body,
-      createdAt: createdAt.toISOString(),
-      ...buildReplyAnchor(key, cs),
-      // Optimistically mark as queued so the pip appears immediately
-      // in the submit→delivered window. The server's enqueue POST
-      // sets the same column server-side; no mismatch risk.
-      ...(activeWorktreeSource ? { agentQueueStatus: "pending" } : {}),
-    };
-    // Worktree path: bypass the sync hook — this code manages its
-    // own upsert→enqueue sequence, and going through syncedDispatch
-    // would fire a concurrent duplicate upsert for the same row.
-    // Non-worktree path: go through the sync hook (its upsert is the
-    // only persistence path for paste/url/upload changesets).
-    const addAction = {
-      type: "ADD_INTERACTION" as const,
-      targetKey: key,
-      interaction,
-    };
-    if (activeWorktreeSource) {
-      rawDispatch(addAction);
-    } else {
-      dispatch(addAction);
-    }
-    setDrafts((prev) => {
-      if (!(key in prev)) return prev;
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
-    setDraftingKey(null);
-    // When a worktree is loaded, enqueue the interaction for the
-    // agent. The DB row must exist before /enqueue can reference
-    // it, so upsert here and enqueue on success rather than
-    // racing the background sync. Non-worktree loads (paste/url/
-    // upload) just persist the interaction; no pip appears.
-    if (activeWorktreeSource) {
-      const worktreePath = activeWorktreeSource.worktreePath;
-      upsertInteraction(interaction, cs.id)
-        .then(() => enqueueInteraction(interactionId, worktreePath))
-        .catch((err: unknown) => {
-          console.error("[shippable] enqueue failed:", err);
-          // Surface the failure as a retry pip; the interaction
-          // itself stays in place so nothing is lost.
-          dispatch({
-            type: "SET_INTERACTION_ENQUEUE_ERROR",
-            targetKey: key,
-            interactionId,
-            error: true,
-          });
-        });
-    }
-  };
-
-  const handleRetryReply = (key: string, replyId: string) => {
-    // Errored-pip retry. The original upsert may have failed too
-    // (that's why we're retrying), so re-upsert first to guarantee
-    // the row exists before re-enqueueing.
-    if (!activeWorktreeSource) return;
-    const ix = state.interactions[key]?.find((entry) => entry.id === replyId);
-    if (!ix) return;
-    const worktreePath = activeWorktreeSource.worktreePath;
-    // Optimistically clear the error so the pip flips back to ◌
-    // queued the moment the user clicks; restore it on failure.
-    dispatch({
-      type: "SET_INTERACTION_ENQUEUE_ERROR",
-      targetKey: key,
-      interactionId: replyId,
-      error: false,
-    });
-    upsertInteraction(ix, cs.id)
-      .then(() => enqueueInteraction(replyId, worktreePath))
-      .catch((err: unknown) => {
-        console.error("[shippable] retry enqueue failed:", err);
-        dispatch({
-          type: "SET_INTERACTION_ENQUEUE_ERROR",
-          targetKey: key,
-          interactionId: replyId,
-          error: true,
-        });
-      });
-  };
-
-  const handleDeleteReply = (key: string, replyId: string) => {
-    // Unenqueue first when the interaction is still pending — the
-    // agent hasn't pulled it, so it should leave the queue
-    // cleanly. (DELETE_INTERACTION's sync would drop the row too,
-    // but unenqueue is the explicit, race-free signal and a
-    // no-op 404 if the row's already gone.) Delivered entries
-    // stay in the agent's hands; we only drop the local view.
-    const target = state.interactions[key]?.find((ix) => ix.id === replyId);
-    if (target?.agentQueueStatus === "pending" && activeWorktreeSource) {
-      unenqueueInteraction(replyId).catch((err: unknown) => {
-        console.error("[shippable] unenqueue failed:", err);
-      });
-    }
-    dispatch({ type: "DELETE_INTERACTION", targetKey: key, interactionId: replyId });
-  };
-
-  const handleVerifyAiNote = (recipe: {
-    source: string;
-    inputs: Record<string, string>;
-  }) => {
-    setRunRequest((prev) => ({
-      tick: (prev?.tick ?? 0) + 1,
-      source: recipe.source,
-      inputs: recipe.inputs,
-    }));
-  };
 
   const inlineThreadsPayload: Omit<
     InlineThreadStackProps,
@@ -1437,23 +1759,17 @@ export function ReviewWorkspace({
       <div
         className={[
           "main",
-          inspectorVisible && "main--with-inspector",
-          !showSidebar
+          showInspector && !isInspectorDetached && "main--with-inspector",
+          !showSidebar || isSidebarDetached
             ? "main--no-sidebar"
             : sidebarWide && "main--wide-sidebar",
         ]
           .filter(Boolean)
           .join(" ")}
       >
-        {showSidebar && (
+        {showSidebar && !isSidebarDetached && (
           <Sidebar
-            viewModel={buildSidebarViewModel({
-              files: cs.files,
-              currentFileId: state.cursor.fileId,
-              readLines: state.readLines,
-              reviewedFiles: state.reviewedFiles,
-              interactions: state.interactions,
-            })}
+            viewModel={sidebarViewModel}
             onPickFile={(fileId) => {
               const f = cs.files.find((ff) => ff.id === fileId)!;
               dispatch({
@@ -1485,6 +1801,9 @@ export function ReviewWorkspace({
             onCloseRun={closePromptRun}
             wide={sidebarWide}
             onToggleWide={() => setSidebarWide((v) => !v)}
+            onDetach={
+              isTauri() ? () => void openDetachedWindow("sidebar") : undefined
+            }
           />
         )}
         <div className="reviewpane">
@@ -1621,10 +1940,10 @@ export function ReviewWorkspace({
             lineThreads={inlineComments ? lineThreads : undefined}
           />
         </div>
-        {inspectorVisible && (
+        {showInspector && !isInspectorDetached && (
           <Inspector
             viewModel={inspectorViewModel}
-            commentCount={buildCommentStops(cs, state.interactions).length}
+            commentCount={commentStops.length}
             onPrevComment={() => dispatch({ type: "MOVE_TO_COMMENT", delta: -1 })}
             onNextComment={() => dispatch({ type: "MOVE_TO_COMMENT", delta: 1 })}
             lineHasAiNote={lineHasAiNote}
@@ -1642,53 +1961,26 @@ export function ReviewWorkspace({
             onDeleteReply={handleDeleteReply}
             onVerifyAiNote={handleVerifyAiNote}
             agentContext={
-              activeWorktreeSource
+              inspectorAgentContext
                 ? {
-                    slice: agentSlice,
-                    candidates: agentSessions,
-                    selectedSessionFilePath:
-                      pinnedSession ?? agentSlice?.session.filePath ?? null,
-                    loading: agentLoading,
-                    error: agentError,
-                    mcpStatus,
-                    delivered: deliveredComments,
-                    lastSuccessfulPollAt: deliveredLastSuccessAt,
-                    deliveredError: deliveredErrorState,
-                    watching: agentWatching,
-                    agentStartedThreads: agentStartedThreads(state.interactions),
+                    ...inspectorAgentContext,
                     onPickSession: (fp) => setPinnedSession(fp),
                     onRefresh: () => setAgentRefreshTick((t) => t + 1),
                   }
                 : undefined
             }
             prConversation={cs.prConversation}
-            worktreeSource={activeWorktreeSource ?? undefined}
-            prSource={cs.prSource}
-            changesetId={cs.id}
-            onMergePrOverlay={(csId, prSource, prConversation, prInteractions, prDetached) => {
-              dispatch({
-                type: "MERGE_PR_OVERLAY",
-                changesetId: csId,
-                prSource,
-                prConversation,
-              });
-              dispatch({
-                type: "MERGE_PR_INTERACTIONS",
-                changesetId: csId,
-                prInteractions,
-                prDetached,
-              });
-            }}
-            onAuthError={(host, reason, retry, hint) => {
-              setPrRefreshTokenModal({
-                host,
-                reason,
-                pendingHtmlUrl: "",
-                pendingAction: retry,
-                hint,
-              });
-            }}
+            worktreePath={worktreePathForPill}
+            pillMatch={cs.prSource ? null : pillMatch}
+            pillBusy={pillBusy}
+            pillError={pillError}
+            onPillClick={() => void handlePillClick()}
             interactionsShownInline={inlineComments}
+            onDetach={
+              isTauri()
+                ? () => void openDetachedWindow("inspector")
+                : undefined
+            }
           />
         )}
       </div>
@@ -1947,6 +2239,13 @@ type DefinitionPeekState =
  * per thread (the head). Drives the AgentContextSection "Comments"
  * rollup.
  */
+// Outside the component so React Compiler's purity rule doesn't flag the
+// Date.now() / Math.random() calls — they belong in an effect/handler
+// world, not in render.
+function newPromptRunId(): string {
+  return `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function agentStartedThreads(
   interactions: Record<string, Interaction[]>,
 ): Array<{ threadKey: string; head: Interaction }> {

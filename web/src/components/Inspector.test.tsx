@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 import { Inspector } from "./Inspector";
-import type { PrConversationItem, WorktreeSource, PrSource } from "../types";
+import type { PrConversationItem } from "../types";
+import type { PrMatch } from "../githubPrClient";
 import type { InspectorViewModel } from "../view";
 
 // jsdom does not implement scrollIntoView; mock it globally so effects that
@@ -184,245 +185,49 @@ describe("Inspector — prConversation", () => {
   });
 });
 
-const WORKTREE_SOURCE: WorktreeSource = {
-  worktreePath: "/workspace/test-repo",
-  commitSha: "abc123",
-  branch: "feat/my-feature",
-};
-
-const PR_SOURCE: PrSource = {
+const PILL_MATCH: PrMatch = {
   host: "github.com",
   owner: "owner",
   repo: "repo",
   number: 42,
-  htmlUrl: "https://github.com/owner/repo/pull/42",
-  headSha: "headsha",
-  baseSha: "basesha",
-  state: "open",
   title: "My feature",
-  body: "",
-  baseRef: "main",
-  headRef: "feat/my-feature",
-  lastFetchedAt: new Date().toISOString(),
+  state: "open",
+  htmlUrl: "https://github.com/owner/repo/pull/42",
 };
 
-describe("Inspector — PR pill", () => {
+describe("Inspector — PR pill (presentation)", () => {
+  // The pill's behavior (branch lookup, click → fetch, auth-error flow)
+  // moved to ReviewWorkspace as part of detached-sidebars slice (e), so
+  // these tests now cover only how Inspector renders the pill given the
+  // parent-supplied props.
   afterEach(() => vi.resetAllMocks());
 
-  it("renders the pill when worktreeSource is set and lookup returns a match", async () => {
-    const { lookupPrForBranch: mockLookup } = await import("../githubPrClient");
-    (mockLookup as ReturnType<typeof vi.fn>).mockResolvedValue({
-      matched: {
-        host: "github.com",
-        owner: "owner",
-        repo: "repo",
-        number: 42,
-        title: "My feature",
-        state: "open",
-        htmlUrl: "https://github.com/owner/repo/pull/42",
-      },
-    });
-
-    renderInspector({ worktreeSource: WORKTREE_SOURCE, changesetId: "wt:test" });
-
-    await waitFor(() => {
-      expect(screen.getByText(/Matching PR: #42/)).toBeTruthy();
-    });
+  it("renders the pill when a pillMatch prop is provided", () => {
+    renderInspector({ pillMatch: PILL_MATCH });
+    expect(screen.getByText(/Matching PR: #42/)).toBeTruthy();
   });
 
-  it("does not render the pill when worktreeSource is absent", async () => {
-    renderInspector({});
-    // Give any async effects time to fire
-    await new Promise((r) => setTimeout(r, 10));
+  it("does not render the pill when pillMatch is null", () => {
+    renderInspector({ pillMatch: null });
     expect(screen.queryByText(/Matching PR/)).toBeNull();
   });
 
-  it("does not render the pill when prSource is already set", async () => {
-    const { lookupPrForBranch: mockLookup } = await import("../githubPrClient");
-    (mockLookup as ReturnType<typeof vi.fn>).mockResolvedValue({
-      matched: {
-        host: "github.com",
-        owner: "owner",
-        repo: "repo",
-        number: 42,
-        title: "My feature",
-        state: "open",
-        htmlUrl: "https://github.com/owner/repo/pull/42",
-      },
-    });
-
-    renderInspector({
-      worktreeSource: WORKTREE_SOURCE,
-      prSource: PR_SOURCE,
-      changesetId: "wt:test",
-    });
-
-    await new Promise((r) => setTimeout(r, 10));
-    expect(screen.queryByText(/Matching PR/)).toBeNull();
+  it("disables the button while pillBusy", () => {
+    renderInspector({ pillMatch: PILL_MATCH, pillBusy: true });
+    const button = screen.getByRole("button", { name: /Loading PR overlay/ });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("does not render the pill when lookup returns { matched: null }", async () => {
-    const { lookupPrForBranch: mockLookup } = await import("../githubPrClient");
-    (mockLookup as ReturnType<typeof vi.fn>).mockResolvedValue({ matched: null });
-
-    renderInspector({ worktreeSource: WORKTREE_SOURCE, changesetId: "wt:test" });
-
-    await new Promise((r) => setTimeout(r, 10));
-    expect(screen.queryByText(/Matching PR/)).toBeNull();
+  it("shows pillError text alongside the pill", () => {
+    renderInspector({ pillMatch: PILL_MATCH, pillError: "Network down" });
+    expect(screen.getByText("Network down")).toBeTruthy();
   });
 
-  it("pill click with github_token_required calls onAuthError and does NOT set pillError", async () => {
-    const { lookupPrForBranch: mockLookup, loadGithubPr: mockLoad, GithubFetchError: MockGithubFetchError } =
-      await import("../githubPrClient");
-    (mockLookup as ReturnType<typeof vi.fn>).mockResolvedValue({
-      matched: {
-        host: "github.com",
-        owner: "owner",
-        repo: "repo",
-        number: 7,
-        title: "Token required PR",
-        state: "open",
-        htmlUrl: "https://github.com/owner/repo/pull/7",
-      },
-    });
-    (mockLoad as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new (MockGithubFetchError as new (d: string, m: string, h?: string) => unknown)(
-        "github_token_required",
-        "github_token_required",
-        "github.com",
-      ),
-    );
-
-    const onAuthError = vi.fn();
-    renderInspector({
-      worktreeSource: WORKTREE_SOURCE,
-      changesetId: "wt:test",
-      onAuthError,
-      onMergePrOverlay: vi.fn(),
-    });
-
-    await waitFor(() => screen.getByText(/Matching PR: #7/));
-    fireEvent.click(screen.getByText(/Matching PR: #7/));
-
-    await waitFor(() => {
-      expect(onAuthError).toHaveBeenCalledOnce();
-      const [host, reason, retry] = onAuthError.mock.calls[0];
-      expect(host).toBe("github.com");
-      expect(reason).toBe("first-time");
-      expect(typeof retry).toBe("function");
-    });
-    // pillError must NOT be set
-    expect(document.querySelector(".inspector__pr-pill-err")).toBeNull();
-  });
-
-  it("pill click with github_auth_failed calls onAuthError with reason=rejected and does NOT set pillError", async () => {
-    const { lookupPrForBranch: mockLookup, loadGithubPr: mockLoad, GithubFetchError: MockGithubFetchError } =
-      await import("../githubPrClient");
-    (mockLookup as ReturnType<typeof vi.fn>).mockResolvedValue({
-      matched: {
-        host: "github.com",
-        owner: "owner",
-        repo: "repo",
-        number: 8,
-        title: "Auth failed PR",
-        state: "open",
-        htmlUrl: "https://github.com/owner/repo/pull/8",
-      },
-    });
-    (mockLoad as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new (MockGithubFetchError as new (d: string, m: string, h?: string) => unknown)(
-        "github_auth_failed",
-        "github_auth_failed",
-        "github.com",
-      ),
-    );
-
-    const onAuthError = vi.fn();
-    renderInspector({
-      worktreeSource: WORKTREE_SOURCE,
-      changesetId: "wt:test",
-      onAuthError,
-      onMergePrOverlay: vi.fn(),
-    });
-
-    await waitFor(() => screen.getByText(/Matching PR: #8/));
-    fireEvent.click(screen.getByText(/Matching PR: #8/));
-
-    await waitFor(() => {
-      expect(onAuthError).toHaveBeenCalledOnce();
-      const [host, reason] = onAuthError.mock.calls[0];
-      expect(host).toBe("github.com");
-      expect(reason).toBe("rejected");
-    });
-    expect(document.querySelector(".inspector__pr-pill-err")).toBeNull();
-  });
-
-  it("pill click calls loadGithubPr and dispatches MERGE_PR_OVERLAY via onMergePrOverlay", async () => {
-    const { lookupPrForBranch: mockLookup, loadGithubPr: mockLoad } =
-      await import("../githubPrClient");
-    (mockLookup as ReturnType<typeof vi.fn>).mockResolvedValue({
-      matched: {
-        host: "github.com",
-        owner: "owner",
-        repo: "repo",
-        number: 42,
-        title: "My feature",
-        state: "open",
-        htmlUrl: "https://github.com/owner/repo/pull/42",
-      },
-    });
-
-    const fakePrSource = {
-      host: "github.com",
-      owner: "owner",
-      repo: "repo",
-      number: 42,
-      htmlUrl: "https://github.com/owner/repo/pull/42",
-      headSha: "h",
-      baseSha: "b",
-      state: "open" as const,
-      title: "My feature",
-      body: "",
-      baseRef: "main",
-      headRef: "feat/branch",
-      lastFetchedAt: "2026-05-07T00:00:00Z",
-    };
-    const fakePrCs = {
-      id: "pr:github.com:owner:repo:42",
-      title: "My feature",
-      files: [],
-      prSource: fakePrSource,
-      prConversation: [],
-    };
-    (mockLoad as ReturnType<typeof vi.fn>).mockResolvedValue({
-      changeSet: fakePrCs,
-      prInteractions: {},
-      prDetached: [],
-    });
-
-    const onMergePrOverlay = vi.fn();
-    renderInspector({
-      worktreeSource: WORKTREE_SOURCE,
-      changesetId: "wt:test",
-      onMergePrOverlay,
-    });
-
-    await waitFor(() => screen.getByText(/Matching PR: #42/));
-
-    fireEvent.click(screen.getByText(/Matching PR: #42/));
-
-    await waitFor(() => {
-      expect(mockLoad).toHaveBeenCalledWith(
-        "https://github.com/owner/repo/pull/42",
-      );
-      expect(onMergePrOverlay).toHaveBeenCalledWith(
-        "wt:test",
-        fakePrSource,
-        [],
-        {},
-        [],
-      );
-    });
+  it("calls onPillClick when the pill is clicked", () => {
+    const onPillClick = vi.fn();
+    renderInspector({ pillMatch: PILL_MATCH, onPillClick });
+    fireEvent.click(screen.getByRole("button", { name: /Matching PR: #42/ }));
+    expect(onPillClick).toHaveBeenCalledOnce();
   });
 });
 
@@ -493,73 +298,7 @@ describe("Inspector — interactionsShownInline", () => {
   });
 });
 
-describe("Inspector — pill cleared on worktreePath change", () => {
-  afterEach(() => vi.resetAllMocks());
-
-  it("clears #42 pill when worktreePath changes to a path returning null", async () => {
-    const { lookupPrForBranch: mockLookup } = await import("../githubPrClient");
-    (mockLookup as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      matched: {
-        host: "github.com",
-        owner: "owner",
-        repo: "repo",
-        number: 42,
-        title: "My feature",
-        state: "open",
-        htmlUrl: "https://github.com/owner/repo/pull/42",
-      },
-    }).mockResolvedValueOnce({ matched: null });
-
-    const sourceA: WorktreeSource = {
-      worktreePath: "/a",
-      commitSha: "aaa",
-      branch: "feat/a",
-    };
-    const sourceB: WorktreeSource = {
-      worktreePath: "/b",
-      commitSha: "bbb",
-      branch: "feat/b",
-    };
-
-    const { rerender } = renderInspector({
-      worktreeSource: sourceA,
-      changesetId: "wt:a",
-    });
-
-    // Wait for #42 pill to appear
-    await waitFor(() => screen.getByText(/Matching PR: #42/));
-
-    // Change worktreePath — stale pill should disappear immediately
-    rerender(
-      <Inspector
-        viewModel={minimalViewModel()}
-        commentCount={0}
-        onPrevComment={NOOP}
-        onNextComment={NOOP}
-        lineHasAiNote={false}
-        symbols={EMPTY_SYMBOLS}
-        draftBodies={{}}
-        onJump={NOOP}
-        onToggleAck={NOOP}
-        onStartDraft={NOOP}
-        onStartNewComment={NOOP}
-        onCloseDraft={NOOP}
-        onChangeDraft={NOOP}
-        onSubmitReply={NOOP}
-        onDeleteReply={NOOP}
-        onRetryReply={NOOP}
-        onVerifyAiNote={NOOP}
-        interactionsShownInline={false}
-        worktreeSource={sourceB}
-        changesetId="wt:b"
-      />,
-    );
-
-    // The #42 pill must be gone immediately (synchronous state reset)
-    expect(screen.queryByText(/Matching PR: #42/)).toBeNull();
-
-    // And the new lookup for /b returns null, so no pill ever appears
-    await new Promise((r) => setTimeout(r, 20));
-    expect(screen.queryByText(/Matching PR/)).toBeNull();
-  });
-});
+// ── Legacy in-Inspector pill behaviour ──────────────────────────────────
+// Lookup + fetch + error handling moved to ReviewWorkspace as part of
+// detached-sidebars slice (e). The pill-cleared-on-worktree-change test
+// that used to live here belongs there now.

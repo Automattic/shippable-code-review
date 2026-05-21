@@ -39,21 +39,59 @@ fn get_sidecar_port(state: State<SidecarState>) -> Option<u16> {
 }
 
 // ── Multi-window registry ──────────────────────────────────────────────
-// One entry per OS window. Label is the Tauri window label; the value is
-// the changeset id currently loaded in that window (None when the window
-// is on the picker/welcome). Used to:
+// One entry per OS window. The label is the Tauri window label; the entry
+// carries the changeset id loaded in the window (None on picker/welcome),
+// its `kind` (review window vs detached child), and — for children — the
+// label of their parent review window. Used to:
 //   - power duplicate-window detection (refuse opening the same id twice;
-//     focus the existing window instead),
+//     focus the existing window instead) — only Review-kind entries count,
+//   - bind detached sidebar/inspector children to their parent so we can
+//     cascade-close them and route per-parent events,
 //   - keep counter monotonically increasing so labels aren't reused after
 //     a window closes (an old label rejoining would collide with stale
 //     bookkeeping on the JS side).
 
 const MAIN_WINDOW_LABEL: &str = "main";
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WindowKind {
+    Review,
+    Sidebar,
+    Inspector,
+}
+
+impl WindowKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            WindowKind::Review => "review",
+            WindowKind::Sidebar => "sidebar",
+            WindowKind::Inspector => "inspector",
+        }
+    }
+}
+
+struct RegistryEntry {
+    changeset_id: Option<String>,
+    /// Label of the parent review window, when this entry is a detached child.
+    /// None for Review windows.
+    parent: Option<String>,
+    kind: WindowKind,
+}
+
+impl RegistryEntry {
+    fn review() -> Self {
+        Self {
+            changeset_id: None,
+            parent: None,
+            kind: WindowKind::Review,
+        }
+    }
+}
+
 #[derive(Default)]
 struct WindowRegistry {
     next_label: u32,
-    by_label: HashMap<String, Option<String>>,
+    by_label: HashMap<String, RegistryEntry>,
 }
 
 struct WindowRegistryState {
@@ -67,6 +105,12 @@ struct WindowEntry {
     changeset_id: Option<String>,
 }
 
+#[derive(serde::Serialize, Clone)]
+struct DetachedChildEntry {
+    label: String,
+    kind: &'static str,
+}
+
 #[tauri::command]
 fn open_new_window(
     app: tauri::AppHandle,
@@ -76,6 +120,98 @@ fn open_new_window(
     open_window_impl(&app, &state, changeset_id)
 }
 
+/// Spawn a detached child window (the sidebar/inspector popped out of a
+/// review window). Called by the parent review window via `multiWindow.ts`;
+/// the caller's window label is the parent. Idempotent: if a child of the
+/// same kind already exists for this parent, the existing one is focused
+/// and its label returned instead of building a second window.
+#[tauri::command]
+fn open_detached_window(
+    app: tauri::AppHandle,
+    state: State<WindowRegistryState>,
+    window: tauri::WebviewWindow,
+    kind: String,
+) -> Result<String, String> {
+    let parent_label = window.label().to_string();
+    let kind_enum = match kind.as_str() {
+        "sidebar" => WindowKind::Sidebar,
+        "inspector" => WindowKind::Inspector,
+        other => return Err(format!("unknown detached kind: {other}")),
+    };
+    let child_label = format!("detached-{parent_label}-{}", kind_enum.as_str());
+
+    // Idempotent open. The registry is authoritative; only spawn when the
+    // slot is empty. This mirrors the duplicate-focus path in multiWindow.ts.
+    let already_open = state
+        .inner
+        .lock()
+        .unwrap()
+        .by_label
+        .contains_key(&child_label);
+    if already_open {
+        if let Some(existing) = app.get_webview_window(&child_label) {
+            if existing.is_minimized().unwrap_or(false) {
+                let _ = existing.unminimize();
+            }
+            let _ = existing.set_focus();
+        }
+        return Ok(child_label);
+    }
+
+    // Per-kind defaults. Sidebar mirrors the docked file list shape;
+    // inspector is wider to fit the AI/comment thread cards.
+    let (width, height) = match kind_enum {
+        WindowKind::Sidebar => (360.0, 800.0),
+        WindowKind::Inspector => (480.0, 900.0),
+        WindowKind::Review => unreachable!(),
+    };
+    let title = match kind_enum {
+        WindowKind::Sidebar => "Files — Shippable",
+        WindowKind::Inspector => "Inspector — Shippable",
+        WindowKind::Review => unreachable!(),
+    };
+
+    // Cascade offset from the parent's position so a fresh child doesn't
+    // land pixel-perfect over the parent. Same idiom as open_new_window.
+    let (base_x, base_y) = app
+        .get_webview_window(&parent_label)
+        .and_then(|w| w.outer_position().ok())
+        .map(|p| (p.x, p.y))
+        .unwrap_or((100, 100));
+
+    let url_path = format!(
+        "detached.html?kind={kind}&parent={parent}",
+        kind = kind_enum.as_str(),
+        parent = url_encode(&parent_label),
+    );
+    let url = WebviewUrl::App(std::path::PathBuf::from(url_path));
+
+    // Reserve the slot before building so the JS side sees a coherent
+    // registry from the moment the child loads. Roll back on build failure.
+    state.inner.lock().unwrap().by_label.insert(
+        child_label.clone(),
+        RegistryEntry {
+            changeset_id: None,
+            parent: Some(parent_label.clone()),
+            kind: kind_enum,
+        },
+    );
+
+    let builder = WebviewWindowBuilder::new(&app, &child_label, url)
+        .title(title)
+        .inner_size(width, height)
+        .min_inner_size(280.0, 360.0)
+        .position((base_x + 30) as f64, (base_y + 30) as f64)
+        .resizable(true);
+
+    if let Err(e) = builder.build() {
+        state.inner.lock().unwrap().by_label.remove(&child_label);
+        return Err(e.to_string());
+    }
+
+    Ok(child_label)
+}
+
 #[tauri::command]
 fn set_window_changeset(
     window: tauri::WebviewWindow,
@@ -83,12 +219,24 @@ fn set_window_changeset(
     changeset_id: Option<String>,
 ) {
     let label = window.label().to_string();
-    state
-        .inner
-        .lock()
-        .unwrap()
-        .by_label
-        .insert(label, changeset_id);
+    let mut reg = state.inner.lock().unwrap();
+    match reg.by_label.get_mut(&label) {
+        Some(entry) => entry.changeset_id = changeset_id,
+        None => {
+            // Defensive: if the window somehow reports before its seed
+            // landed (shouldn't happen in practice — open_window_impl and
+            // the main-window setup both insert up-front), insert a Review
+            // entry rather than dropping the value silently.
+            reg.by_label.insert(
+                label,
+                RegistryEntry {
+                    changeset_id,
+                    parent: None,
+                    kind: WindowKind::Review,
+                },
+            );
+        }
+    }
 }
 
 #[tauri::command]
@@ -99,9 +247,29 @@ fn list_window_changesets(state: State<WindowRegistryState>) -> Vec<WindowEntry>
         .unwrap()
         .by_label
         .iter()
-        .map(|(label, id)| WindowEntry {
+        .filter(|(_, entry)| entry.kind == WindowKind::Review)
+        .map(|(label, entry)| WindowEntry {
             label: label.clone(),
-            changeset_id: id.clone(),
+            changeset_id: entry.changeset_id.clone(),
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn list_detached_children(
+    state: State<WindowRegistryState>,
+    parent: String,
+) -> Vec<DetachedChildEntry> {
+    state
+        .inner
+        .lock()
+        .unwrap()
+        .by_label
+        .iter()
+        .filter(|(_, entry)| entry.parent.as_deref() == Some(parent.as_str()))
+        .map(|(label, entry)| DetachedChildEntry {
+            label: label.clone(),
+            kind: entry.kind.as_str(),
         })
         .collect()
 }
@@ -130,7 +298,7 @@ fn open_window_impl(
         let mut reg = state.inner.lock().unwrap();
         reg.next_label += 1;
         let label = format!("window-{}", reg.next_label);
-        reg.by_label.insert(label.clone(), None);
+        reg.by_label.insert(label.clone(), RegistryEntry::review());
         label
     };
 
@@ -340,8 +508,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_sidecar_port,
             open_new_window,
+            open_detached_window,
             set_window_changeset,
             list_window_changesets,
+            list_detached_children,
             focus_window,
             keychain::keychain_get,
             keychain::keychain_set,
@@ -376,7 +546,7 @@ pub fn run() {
                 .lock()
                 .unwrap()
                 .by_label
-                .insert(MAIN_WINDOW_LABEL.to_string(), None);
+                .insert(MAIN_WINDOW_LABEL.to_string(), RegistryEntry::review());
             app.manage(registry);
 
             let menu = menu::build(app.handle())?;
@@ -414,12 +584,49 @@ pub fn run() {
             event: WindowEvent::Destroyed,
             ..
         } => {
+            // Drop the entry first so subsequent registry queries are
+            // consistent. Capture parent + kind out of the removed entry
+            // so we can drive cascade-close (when a Review dies) and the
+            // children-changed signal (when a detached child dies) without
+            // holding the lock across `.close()` calls.
+            let mut to_cascade_close: Vec<String> = Vec::new();
+            let mut child_parent: Option<String> = None;
             if let Some(state) = app_handle.try_state::<WindowRegistryState>() {
-                state.inner.lock().unwrap().by_label.remove(&label);
+                let mut reg = state.inner.lock().unwrap();
+                let removed = reg.by_label.remove(&label);
+                if let Some(entry) = removed {
+                    match entry.kind {
+                        WindowKind::Review => {
+                            for (child_label, child_entry) in reg.by_label.iter() {
+                                if child_entry.parent.as_deref() == Some(label.as_str()) {
+                                    to_cascade_close.push(child_label.clone());
+                                }
+                            }
+                        }
+                        WindowKind::Sidebar | WindowKind::Inspector => {
+                            child_parent = entry.parent;
+                        }
+                    }
+                }
+            }
+            for child_label in &to_cascade_close {
+                if let Some(win) = app_handle.get_webview_window(child_label) {
+                    let _ = win.close();
+                }
+            }
+            if let Some(parent) = child_parent {
+                let _ = app_handle.emit(
+                    &format!("shippable:detach-children-changed:{parent}"),
+                    (),
+                );
             }
             // Quit when the last window closes. Tauri 2 keeps the macOS app
             // alive by default; for a per-window reviewer that just means
-            // an invisible orphan process holding the sidecar.
+            // an invisible orphan process holding the sidecar. Cascade-
+            // initiated child closes are still in flight here (`.close()`
+            // is async), so `webview_windows()` is non-empty and we don't
+            // quit prematurely — the children's own Destroyed events tip
+            // the count to zero at the right moment.
             if app_handle.webview_windows().is_empty() {
                 app_handle.exit(0);
             }

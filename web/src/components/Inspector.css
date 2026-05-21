@@ -66,6 +66,22 @@
   min-width: 6.5em;
   text-align: center;
 }
+.inspector__h-detach {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 1px 6px;
+  border-radius: 2px;
+  cursor: pointer;
+  margin-left: 4px;
+}
+.inspector__h-detach:hover {
+  color: var(--fg);
+  background: var(--bg-3);
+}
 .inspector__sec {
   padding: 10px 12px;
   border-bottom: 1px dashed var(--border);

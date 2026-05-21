@@ -40,7 +40,9 @@ export type ActionId =
   | "OPEN_PROMPT_PICKER"
   | "CLOSE_PROMPT_PICKER"
   | "OPEN_COMMAND_PALETTE"
-  | "CLOSE_COMMAND_PALETTE";
+  | "CLOSE_COMMAND_PALETTE"
+  | "TOGGLE_DETACH_SIDEBAR"
+  | "TOGGLE_DETACH_INSPECTOR";
 
 export type ContextPredicate =
   | "hasSuggestion"
@@ -130,6 +132,13 @@ export const KEYMAP: KeyEntry[] = [
   { key: "k", meta: true, label: "open command palette", group: "ui", action: "OPEN_COMMAND_PALETTE" },
   { key: "k", ctrl: true, label: "open command palette", group: "ui", action: "OPEN_COMMAND_PALETTE" },
   { key: "Escape", when: "hasCommandPalette", label: "close command palette", group: "ui", action: "CLOSE_COMMAND_PALETTE" },
+  // ⌘⇧[ / ⌘⇧] toggle detach for the sidebar / inspector. Browser dev
+  // never reaches the toggle handler — the multiWindow helpers no-op
+  // there. The shifted-bracket characters arrive as { / } in
+  // KeyboardEvent.key on macOS; meta:true keeps these from colliding
+  // with the "{}" sample-changeset shortcuts under "testing".
+  { key: "{", shift: true, meta: true, label: "toggle detach sidebar", group: "ui", action: "TOGGLE_DETACH_SIDEBAR", palette: "global" },
+  { key: "}", shift: true, meta: true, label: "toggle detach inspector", group: "ui", action: "TOGGLE_DETACH_INSPECTOR", palette: "global" },
 
   // ── testing ─────────────────────────────────────────────────────────────────
   { key: "{", label: "previous sample changeset", group: "testing", action: "PREV_CHANGESET" },
