@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { buildSnapshot, loadSession, peekSession, saveSession } from "./persist";
 import { initialState } from "./state";
-import type { ChangeSet, DiffFile, DiffLine, Hunk } from "./types";
+import type { ChangeSet, DiffFile, DiffLine, Hunk, ReviewState } from "./types";
 
 const STORAGE_KEY = "shippable:review:v1";
 
@@ -51,7 +51,7 @@ describe("persist v5 — snapshot shape only contains progress fields", () => {
     const state = initialState([cs]);
     const snap = buildSnapshot(state, { "some:key": "draft text" });
 
-    expect(snap.v).toBe(5);
+    expect(snap.v).toBe(6);
     expect(snap.cursor).toEqual(state.cursor);
     expect(snap.readLines).toBeDefined();
     expect(snap.reviewedFiles).toBeDefined();
@@ -196,13 +196,14 @@ describe("persist v5 — empty / unusable changeset boot path", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        v: 5,
+        v: 6,
         cursor: { changesetId: "wt-clean", fileId: "x", hunkId: "y", lineIdx: 0 },
         readLines: {},
         reviewedFiles: [],
         reviewedChangesets: {},
         dismissedGuides: [],
         drafts: {},
+        quiz: { questions: {}, answers: {}, active: null, lastQuizAt: null, asked: [] },
       }),
     );
 
@@ -220,17 +221,67 @@ describe("persist v5 — empty / unusable changeset boot path", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        v: 5,
+        v: 6,
         cursor: { changesetId: "cs1", fileId: "cs1/f1", hunkId: "missing", lineIdx: 0 },
         readLines: {},
         reviewedFiles: [],
         reviewedChangesets: {},
         dismissedGuides: [],
         drafts: {},
+        quiz: { questions: {}, answers: {}, active: null, lastQuizAt: null, asked: [] },
       }),
     );
 
     expect(() => loadSession([cs])).not.toThrow();
     expect(loadSession([cs])).toEqual({ state: null, drafts: {} });
+  });
+});
+
+describe("v:6 quiz persistence", () => {
+  it("round-trips the quiz slice", () => {
+    const cs: ChangeSet = {
+      id: "cs-1", title: "x", description: "", branch: "f", base: "main", author: "u",
+      files: [{
+        id: "cs-1/a.ts", path: "a.ts", language: "ts", status: "modified",
+        hunks: [{ id: "h-a-1", header: "@@", oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, lines: [] }],
+      }],
+    } as ChangeSet;
+    const state = initialState([cs], {});
+    const stateWithQuiz: ReviewState = {
+      ...state,
+      quiz: {
+        questions: {
+          "cs-1": [
+            { id: "q-1", type: "q1", target: { kind: "file", path: "a.ts" },
+              prompt: "what?", claudeAnswer: "answer" },
+          ],
+        },
+        answers: {
+          "q-1": { answer: "my take", submittedAt: 123, selfEval: "got_it" },
+        },
+        active: null,
+        lastQuizAt: 123,
+        asked: ["q-1"],
+      },
+    };
+    const snap = buildSnapshot(stateWithQuiz, {});
+    expect(snap.v).toBe(6);
+    const wire = JSON.parse(JSON.stringify(snap));
+    localStorage.setItem("shippable:review:v1", JSON.stringify(wire));
+    const hydrated = loadSession([cs]);
+    expect(hydrated.state).not.toBeNull();
+    expect(hydrated.state!.quiz).toEqual(stateWithQuiz.quiz);
+    localStorage.clear();
+  });
+
+  it("boots empty when snapshot is v:5", () => {
+    localStorage.setItem(
+      "shippable:review:v1",
+      JSON.stringify({ v: 5, cursor: {}, readLines: {}, reviewedFiles: [],
+        reviewedChangesets: {}, dismissedGuides: [], drafts: {} }),
+    );
+    const hydrated = loadSession([]);
+    expect(hydrated.state).toBeNull();
+    localStorage.clear();
   });
 });

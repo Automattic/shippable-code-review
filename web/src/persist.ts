@@ -12,7 +12,7 @@
  * review progress (cursor, readLines, reviewedFiles, dismissedGuides, drafts).
  */
 
-import type { ChangeSet, Cursor, ReviewState } from "./types";
+import type { ChangeSet, Cursor, QuizState, ReviewState } from "./types";
 
 const STORAGE_KEY = "shippable:review:v1";
 
@@ -59,15 +59,17 @@ export function setLiveReloadEnabled(
   }
 }
 
-// Head schema version is 5. Snapshots whose `v` isn't exactly 5 are rejected
+// Head schema version is 6. Snapshots whose `v` isn't exactly 6 are rejected
 // at load and the store boots empty. The prototype has no users to migrate.
 // v3 → v4: interactions and detachedInteractions removed (moved to SQLite).
 // v4 → v5: reviewedChangesets added (revision-scoped changeset sign-off,
 // see docs/concepts/review-state.md § Review tokens).
+// v5 → v6: quiz slice added (comprehension questions + answers + cooldown,
+// see docs/plans/comprehension-quiz.md).
 
 /** What we actually serialize — Sets become arrays, ephemeral fields drop. */
 interface PersistedSnapshot {
-  v: 5;
+  v: 6;
   cursor: Cursor;
   /** Set<number> → number[] per hunk id. */
   readLines: Record<string, number[]>;
@@ -76,6 +78,7 @@ interface PersistedSnapshot {
   reviewedChangesets: Record<string, string[]>;
   dismissedGuides: string[];
   drafts: Record<string, string>;
+  quiz: QuizState;
 }
 
 /** What hydration returns after validation. Both fields default to "no
@@ -87,6 +90,7 @@ export interface HydratedSession {
     reviewedFiles: Set<string>;
     reviewedChangesets: Record<string, string[]>;
     dismissedGuides: Set<string>;
+    quiz: QuizState;
   } | null;
   drafts: Record<string, string>;
 }
@@ -110,13 +114,14 @@ export function buildSnapshot(
     reviewedChangesets[csId] = [...tokens];
   }
   return {
-    v: 5,
+    v: 6,
     cursor: state.cursor,
     readLines,
     reviewedFiles: Array.from(state.reviewedFiles).sort(),
     reviewedChangesets,
     dismissedGuides: Array.from(state.dismissedGuides).sort(),
     drafts,
+    quiz: state.quiz,
   };
 }
 
@@ -255,6 +260,7 @@ export function loadSession(changesets: ChangeSet[]): HydratedSession {
       reviewedFiles: new Set(snapshot.reviewedFiles.filter((id) => validFileIds.has(id))),
       reviewedChangesets,
       dismissedGuides: new Set(snapshot.dismissedGuides),
+      quiz: snapshot.quiz,
     },
     drafts: filterDraftsByHunk(snapshot.drafts, validHunkIds),
   };
@@ -266,13 +272,14 @@ function isPersistedSnapshot(x: unknown): x is PersistedSnapshot {
   if (!x || typeof x !== "object") return false;
   const o = x as Record<string, unknown>;
   if (
-    o.v !== 5 ||
+    o.v !== 6 ||
     typeof o.cursor !== "object" ||
     typeof o.readLines !== "object" ||
     !Array.isArray(o.reviewedFiles) ||
     typeof o.reviewedChangesets !== "object" || o.reviewedChangesets === null ||
     !Array.isArray(o.dismissedGuides) ||
-    typeof o.drafts !== "object"
+    typeof o.drafts !== "object" ||
+    typeof o.quiz !== "object" || o.quiz === null
   ) {
     return false;
   }
