@@ -2,10 +2,8 @@ import type { SqliteDb } from "./adapter.ts";
 
 // The `interactions` table and a `schema_meta` version row. `runMigrations`
 // applies ordered forward steps from the stored version up to `SCHEMA_HEAD`.
-// This is a fresh v1 schema — no real migrations to write yet, but the runner
-// exists so a future v2 column is one array entry.
 
-export const SCHEMA_HEAD = 1;
+export const SCHEMA_HEAD = 2;
 
 type Migration = (db: SqliteDb) => void;
 
@@ -38,6 +36,25 @@ const MIGRATIONS: Migration[] = [
     db.exec(
       "CREATE INDEX idx_interactions_worktree ON interactions (worktree_path, agent_queue_status)"
     );
+  },
+  // v1 → v2: stats tracking. stat_dedup backs recordStatOnce — one row per
+  // distinct (stat, dedup key). settings is a generic key/value store holding
+  // the install id and the MC consent flag.
+  (db) => {
+    db.exec(`
+      CREATE TABLE stat_dedup (
+        name        TEXT NOT NULL,
+        dedup_key   TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        PRIMARY KEY (name, dedup_key)
+      )
+    `);
+    db.exec(`
+      CREATE TABLE settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
   },
 ];
 

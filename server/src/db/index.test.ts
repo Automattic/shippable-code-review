@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 
 import { initDb, getDb, getDbStatus, resetForTests } from "./index.ts";
+import { SCHEMA_HEAD } from "./schema.ts";
 
 afterEach(() => {
   resetForTests();
@@ -31,7 +32,7 @@ describe("initDb — happy path", () => {
     const row = db
       .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
       .get() as { value: string } | undefined;
-    expect(row?.value).toBe("1");
+    expect(row?.value).toBe(String(SCHEMA_HEAD));
   });
 });
 

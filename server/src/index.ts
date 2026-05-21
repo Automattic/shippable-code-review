@@ -30,6 +30,13 @@ import {
 } from "./db/interaction-endpoints.ts";
 import { initDb, getDbStatus } from "./db/index.ts";
 import {
+  handleStatsEvent,
+  handleStatsConsentGet,
+  handleStatsConsentSet,
+} from "./stats/endpoints.ts";
+import { recordInstallStats } from "./stats/install.ts";
+import { recordStat } from "./stats/record.ts";
+import {
   RequestBodyTooLargeError,
   readBody,
   writeCorsHeaders,
@@ -177,6 +184,15 @@ export function createApp(): Server {
       req.url.startsWith("/api/agent/replies")
     ) {
       return await handleAgentListReplies(req, res, origin);
+    }
+    if (req.method === "POST" && req.url === "/api/stats/event") {
+      return await handleStatsEvent(req, res, origin);
+    }
+    if (req.method === "GET" && req.url === "/api/stats/consent") {
+      return await handleStatsConsentGet(req, res, origin);
+    }
+    if (req.method === "POST" && req.url === "/api/stats/consent") {
+      return await handleStatsConsentSet(req, res, origin);
     }
     if (req.method === "GET" && req.url === "/api/health") {
       writeCorsHeaders(res, origin);
@@ -1248,6 +1264,7 @@ async function handleAgentPostReply(
       intent: parsed.intent,
       agentLabel,
     });
+    recordStat("comment-posted-agent");
     writeCorsHeaders(res, origin);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ id }));
@@ -1299,6 +1316,7 @@ async function handleAgentPostReply(
       typeof parsed.suggestedFix === "string" ? parsed.suggestedFix : undefined,
     confidence: parsed.confidence,
   });
+  recordStat("comment-posted-agent");
   writeCorsHeaders(res, origin);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ id }));
@@ -1436,6 +1454,8 @@ async function main() {
   const dbStatus = getDbStatus();
   if (dbStatus.status === "error") {
     console.error(`[server] database unavailable: ${dbStatus.error}`);
+  } else {
+    recordInstallStats();
   }
   const server = createApp();
   server.listen(PORT, HOST, () => {

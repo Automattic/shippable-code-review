@@ -14,7 +14,9 @@ import {
   isInteractionTarget,
   isInteractionIntent,
   isAuthorRole,
+  isAskIntent,
 } from "../agent-queue.ts";
+import { recordStatOnce } from "../stats/record.ts";
 import {
   upsertInteraction,
   getInteractionsByChangeset,
@@ -133,6 +135,11 @@ export async function handleInteractionsUpsert(
   };
 
   upsertInteraction(ix);
+  // Dedup on the interaction id so an upsert counts a distinct comment once,
+  // not on every re-save or edit.
+  if (isAskIntent(b.intent) && b.authorRole === "user") {
+    recordStatOnce("comment-posted-user", ix.id);
+  }
   writeJson(res, origin, 200, { ok: true });
 }
 

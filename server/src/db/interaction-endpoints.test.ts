@@ -8,6 +8,11 @@ import {
 import type { Server } from "node:http";
 import { createApp } from "../index.ts";
 import { initDb, resetForTests } from "./index.ts";
+import {
+  resetStatSinksForTests,
+  setStatSinksForTests,
+} from "../stats/record.ts";
+import type { StatSink } from "../stats/sink.ts";
 
 // Integration-tier: real createApp() in-process, DB isolated to :memory:.
 // Each test gets a fresh DB — beforeEach inits, afterEach tears down.
@@ -69,6 +74,7 @@ afterEach(async () => {
     server.close((err) => (err ? reject(err) : resolve())),
   );
   resetForTests();
+  resetStatSinksForTests();
 });
 
 // ─── GET /api/interactions ───────────────────────────────────────────────────
@@ -365,5 +371,54 @@ describe("DELETE /api/interactions", () => {
       `${baseUrl}/api/interactions?changesetId=cs-abc`,
     );
     expect(get.body.interactions).toHaveLength(0);
+  });
+});
+
+// ─── comment-posted-user stat ────────────────────────────────────────────────
+
+class RecordingSink implements StatSink {
+  calls: string[] = [];
+  record(name: string): void {
+    this.calls.push(name);
+  }
+}
+
+describe("POST /api/interactions stat wiring", () => {
+  it("counts comment-posted-user once for a user ask interaction", async () => {
+    const sink = new RecordingSink();
+    setStatSinksForTests(sink, sink);
+
+    await postJson(`${baseUrl}/api/interactions`, makeInteraction());
+
+    expect(sink.calls.filter((n) => n === "comment-posted-user")).toHaveLength(
+      1,
+    );
+  });
+
+  it("does not re-count when the same interaction id is re-saved", async () => {
+    const sink = new RecordingSink();
+    setStatSinksForTests(sink, sink);
+
+    await postJson(`${baseUrl}/api/interactions`, makeInteraction());
+    await postJson(
+      `${baseUrl}/api/interactions`,
+      makeInteraction({ body: "edited" }),
+    );
+
+    expect(sink.calls.filter((n) => n === "comment-posted-user")).toHaveLength(
+      1,
+    );
+  });
+
+  it("does not count an agent-authored interaction", async () => {
+    const sink = new RecordingSink();
+    setStatSinksForTests(sink, sink);
+
+    await postJson(
+      `${baseUrl}/api/interactions`,
+      makeInteraction({ authorRole: "agent" }),
+    );
+
+    expect(sink.calls).not.toContain("comment-posted-user");
   });
 });

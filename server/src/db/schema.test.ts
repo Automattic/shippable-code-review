@@ -141,9 +141,59 @@ describe("schema migrations", () => {
     });
   });
 
+  describe("schema v2", () => {
+    it("creates the stat_dedup table", () => {
+      db = openDb(":memory:");
+      runMigrations(db);
+
+      db.prepare(
+        "INSERT INTO stat_dedup (name, dedup_key, recorded_at) VALUES (?, ?, ?)"
+      ).run("review-started", "cs-abc", "2026-01-01T00:00:00.000Z");
+
+      const row = db
+        .prepare("SELECT * FROM stat_dedup WHERE name = ? AND dedup_key = ?")
+        .get("review-started", "cs-abc") as Record<string, unknown>;
+      expect(row).toMatchObject({
+        name: "review-started",
+        dedup_key: "cs-abc",
+        recorded_at: "2026-01-01T00:00:00.000Z",
+      });
+    });
+
+    it("makes (name, dedup_key) the stat_dedup primary key", () => {
+      db = openDb(":memory:");
+      runMigrations(db);
+
+      const insert = db.prepare(
+        "INSERT OR IGNORE INTO stat_dedup (name, dedup_key, recorded_at) VALUES (?, ?, ?)"
+      );
+      insert.run("install-active", "id:2026-01-01", "2026-01-01T00:00:00.000Z");
+      const second = insert.run(
+        "install-active",
+        "id:2026-01-01",
+        "2026-01-01T01:00:00.000Z",
+      );
+      expect(second.changes).toBe(0);
+    });
+
+    it("creates the settings table", () => {
+      db = openDb(":memory:");
+      runMigrations(db);
+
+      db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run(
+        "install_id",
+        "uuid-xyz",
+      );
+      const row = db
+        .prepare("SELECT value FROM settings WHERE key = ?")
+        .get("install_id") as { value: string };
+      expect(row.value).toBe("uuid-xyz");
+    });
+  });
+
   describe("SCHEMA_HEAD", () => {
-    it("is 1", () => {
-      expect(SCHEMA_HEAD).toBe(1);
+    it("is 2", () => {
+      expect(SCHEMA_HEAD).toBe(2);
     });
   });
 });

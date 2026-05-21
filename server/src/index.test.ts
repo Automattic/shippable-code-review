@@ -15,6 +15,12 @@ import os from "node:os";
 import path from "node:path";
 import type { Server } from "node:http";
 
+import {
+  resetStatSinksForTests,
+  setStatSinksForTests,
+} from "./stats/record.ts";
+import type { StatSink } from "./stats/sink.ts";
+
 const execFileAsync = promisify(execFile);
 
 // Defensive: index.ts no longer requires ANTHROPIC_API_KEY at import time
@@ -592,6 +598,60 @@ describe("POST /api/agent/replies", () => {
       confidence: "extreme",
     });
     expect(r.status).toBe(400);
+  });
+});
+
+describe("POST /api/agent/replies stat wiring", () => {
+  class RecordingSink implements StatSink {
+    calls: string[] = [];
+    record(name: string): void {
+      this.calls.push(name);
+    }
+  }
+
+  let sink: RecordingSink;
+
+  beforeEach(() => {
+    sink = new RecordingSink();
+    setStatSinksForTests(sink, sink);
+  });
+
+  afterEach(() => {
+    resetStatSinksForTests();
+  });
+
+  it("counts comment-posted-agent for a reply", async () => {
+    const parentId = await seedPending(worktreePath, { body: "hi" });
+    await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "unread",
+    });
+
+    await postJson(`${baseUrl}/api/agent/replies`, {
+      worktreePath,
+      parentId,
+      body: "fixed it",
+      intent: "accept",
+    });
+
+    expect(sink.calls.filter((n) => n === "comment-posted-agent")).toHaveLength(
+      1,
+    );
+  });
+
+  it("counts comment-posted-agent for a top-level agent comment", async () => {
+    await postJson(`${baseUrl}/api/agent/replies`, {
+      worktreePath,
+      file: "src/foo.ts",
+      lines: "10-12",
+      target: "block",
+      body: "consider handling the null case",
+      intent: "comment",
+    });
+
+    expect(sink.calls.filter((n) => n === "comment-posted-agent")).toHaveLength(
+      1,
+    );
   });
 });
 

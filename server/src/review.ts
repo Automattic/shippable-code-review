@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getCredential } from "./auth/store.ts";
+import { recordStat } from "./stats/record.ts";
 
 const RequestSchema = z.object({
   // Pre-rendered prompt text. The frontend renders templates client-side;
@@ -31,6 +32,8 @@ export async function streamReview(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
+  recordStat("ai-review-request");
+
   let parsed: z.infer<typeof RequestSchema>;
   try {
     parsed = RequestSchema.parse(JSON.parse(body));
@@ -109,6 +112,7 @@ export async function streamReview(
       stop_reason: stopReason ?? null,
       usage: { input_tokens: inputTokens, output_tokens: outputTokens },
     });
+    recordStat("comment-posted-ai");
     const ms = Date.now() - started;
     console.log(
       `[server] /api/review ok in ${ms}ms in=${inputTokens} out=${outputTokens} stop=${stopReason ?? "?"}`,
