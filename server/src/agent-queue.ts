@@ -35,6 +35,9 @@ export type InteractionIntent = AskIntent | ResponseIntent;
 
 export type InteractionAuthorRole = "user" | "ai" | "agent";
 
+/** Agent's self-reported confidence in a top-level comment. */
+export type Confidence = "low" | "medium" | "high";
+
 export function isAskIntent(i: InteractionIntent): i is AskIntent {
   return i === "comment" || i === "question" || i === "request" || i === "blocker";
 }
@@ -243,9 +246,19 @@ export function postTopLevel(
     body: string;
     intent: AskIntent;
     agentLabel?: string;
+    rationale?: string;
+    suggestedFix?: string;
+    confidence?: Confidence;
   },
 ): string {
   const id = newAgentInteractionId();
+  const bag: Record<string, unknown> = {
+    file: payload.file,
+    lines: payload.lines,
+  };
+  if (payload.rationale !== undefined) bag.rationale = payload.rationale;
+  if (payload.suggestedFix !== undefined) bag.suggestedFix = payload.suggestedFix;
+  if (payload.confidence !== undefined) bag.confidence = payload.confidence;
   postAgentInteraction({
     id,
     worktreePath,
@@ -255,7 +268,7 @@ export function postTopLevel(
     author: payload.agentLabel ?? "agent",
     body: payload.body,
     createdAt: nextCreatedAt(),
-    payload: { file: payload.file, lines: payload.lines },
+    payload: bag,
   });
   return id;
 }
@@ -286,6 +299,10 @@ export type AgentReplyWireItem =
       authorRole: "agent";
       target: "line" | "block";
       postedAt: string;
+      /** Structured fields, present only when the agent supplied them. */
+      rationale?: string;
+      suggestedFix?: string;
+      confidence?: Confidence;
     };
 
 export function listReplies(worktreePath: string): AgentReplyWireItem[] {
@@ -303,7 +320,7 @@ export function listReplies(worktreePath: string): AgentReplyWireItem[] {
         postedAt: row.createdAt,
       };
     }
-    return {
+    const item: Extract<AgentReplyWireItem, { target: "line" | "block" }> = {
       id: row.id,
       file: payloadString(row.payload, "file"),
       lines: payloadString(row.payload, "lines"),
@@ -314,6 +331,15 @@ export function listReplies(worktreePath: string): AgentReplyWireItem[] {
       target: row.target as "line" | "block",
       postedAt: row.createdAt,
     };
+    const rationale = payloadString(row.payload, "rationale");
+    if (rationale.length > 0) item.rationale = rationale;
+    const suggestedFix = payloadString(row.payload, "suggestedFix");
+    if (suggestedFix.length > 0) item.suggestedFix = suggestedFix;
+    const confidence = row.payload.confidence;
+    if (confidence === "low" || confidence === "medium" || confidence === "high") {
+      item.confidence = confidence;
+    }
+    return item;
   });
 }
 

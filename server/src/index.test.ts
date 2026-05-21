@@ -488,6 +488,43 @@ describe("POST /api/agent/replies", () => {
     expect(list.body.replies[0].body).toBe("reply-0");
     expect(list.body.replies[29].body).toBe("reply-29");
   });
+
+  it("persists rationale/suggestedFix/confidence on a top-level post", async () => {
+    const r = await postJson(`${baseUrl}/api/agent/replies`, {
+      worktreePath,
+      target: "line",
+      file: "src/a.ts",
+      lines: "12",
+      body: "noticed this",
+      intent: "request",
+      rationale: "this leaks a handle",
+      suggestedFix: "close(fd)",
+      confidence: "high",
+    });
+    expect(r.status).toBe(200);
+
+    const list = await getJson(
+      `${baseUrl}/api/agent/replies?worktreePath=${encodeURIComponent(worktreePath)}`,
+    );
+    expect(list.body.replies).toHaveLength(1);
+    expect(list.body.replies[0].rationale).toBe("this leaks a handle");
+    expect(list.body.replies[0].suggestedFix).toBe("close(fd)");
+    expect(list.body.replies[0].confidence).toBe("high");
+  });
+
+  it("rejects a top-level post with an out-of-enum confidence", async () => {
+    const r = await postJson(`${baseUrl}/api/agent/replies`, {
+      worktreePath,
+      target: "line",
+      file: "src/a.ts",
+      lines: "12",
+      body: "noticed this",
+      intent: "request",
+      rationale: "matters",
+      confidence: "extreme",
+    });
+    expect(r.status).toBe(400);
+  });
 });
 
 describe("GET /api/agent/replies", () => {

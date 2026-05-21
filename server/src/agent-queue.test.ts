@@ -268,6 +268,28 @@ describe("postReply / postTopLevel / listReplies", () => {
     }
   });
 
+  it("postTopLevel carries rationale/suggestedFix/confidence through listReplies", () => {
+    const id = postTopLevel(WT, {
+      file: "src/a.ts",
+      lines: "3",
+      target: "line",
+      body: "agent note",
+      intent: "request",
+      rationale: "this leaks a handle",
+      suggestedFix: "close(fd)",
+      confidence: "high",
+    });
+    const replies = listReplies(WT);
+    expect(replies).toHaveLength(1);
+    const first = replies[0];
+    expect(first.id).toBe(id);
+    if (!("parentId" in first)) {
+      expect(first.rationale).toBe("this leaks a handle");
+      expect(first.suggestedFix).toBe("close(fd)");
+      expect(first.confidence).toBe("high");
+    }
+  });
+
   it("appends rather than overwrites repeated replies to the same parentId", async () => {
     postReply(WT, { parentId: "c1", body: "first", intent: "ack" });
     // Distinct createdAt so the store's (created_at, id) ordering is stable —

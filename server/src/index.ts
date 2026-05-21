@@ -1157,6 +1157,9 @@ async function handleAgentPostReply(
     body?: unknown;
     intent?: unknown;
     agentLabel?: unknown;
+    rationale?: unknown;
+    suggestedFix?: unknown;
+    confidence?: unknown;
   };
   try {
     parsed = JSON.parse(body);
@@ -1264,6 +1267,19 @@ async function handleAgentPostReply(
     res.end(JSON.stringify({ error: "top-level target must be line | block" }));
     return;
   }
+  // The MCP boundary enforces the `rationale`-required rule; the server only
+  // light-validates `confidence` against the enum.
+  if (
+    parsed.confidence !== undefined &&
+    parsed.confidence !== "low" &&
+    parsed.confidence !== "medium" &&
+    parsed.confidence !== "high"
+  ) {
+    writeCorsHeaders(res, origin);
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "confidence must be low | medium | high" }));
+    return;
+  }
   const id = agentQueue.postTopLevel(wtPath, {
     file: parsed.file as string,
     lines: parsed.lines as string,
@@ -1271,6 +1287,11 @@ async function handleAgentPostReply(
     body: replyBody,
     intent: parsed.intent as AskIntent,
     agentLabel,
+    rationale:
+      typeof parsed.rationale === "string" ? parsed.rationale : undefined,
+    suggestedFix:
+      typeof parsed.suggestedFix === "string" ? parsed.suggestedFix : undefined,
+    confidence: parsed.confidence,
   });
   writeCorsHeaders(res, origin);
   res.writeHead(200, { "Content-Type": "application/json" });
