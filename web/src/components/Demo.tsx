@@ -1714,8 +1714,10 @@ function WorkspaceStage({
             viewModel={buildSidebarViewModel({
               files: cs.files,
               currentFileId: state.cursor.fileId,
+              changesetId: cs.id,
               readLines: state.readLines,
               reviewedFiles: state.reviewedFiles,
+              quiz: state.quiz,
               interactions: state.interactions,
             })}
             onPickFile={(fileId) => {

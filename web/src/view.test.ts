@@ -7,7 +7,7 @@ import {
   filterActiveLineThreads,
 } from "./view";
 import type { BuildStatusBarViewModelArgs } from "./view";
-import type { Cursor, DiffFile, DiffLine, Hunk, Interaction } from "./types";
+import type { Cursor, DiffFile, DiffLine, Hunk, Interaction, QuizState } from "./types";
 import {
   blockCommentKey,
   hunkSummaryReplyKey,
@@ -49,14 +49,24 @@ const files = [
   },
 ];
 
+const EMPTY_QUIZ: QuizState = {
+  questions: {},
+  answers: {},
+  active: null,
+  lastQuizAt: null,
+  asked: [],
+};
+
 function commentCountByFileId(
   interactions: Record<string, Interaction[]>,
 ): Map<string, number> {
   const vm = buildSidebarViewModel({
     files,
     currentFileId: "f-normal",
+    changesetId: "cs1",
     readLines: {},
     reviewedFiles: new Set(),
+    quiz: EMPTY_QUIZ,
     interactions,
   });
   return new Map(vm.files.map((f) => [f.fileId, f.commentCount]));

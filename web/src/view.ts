@@ -16,6 +16,7 @@ import type {
   Interaction,
   LineSelection,
   ParsedReplyKey,
+  QuizState,
 } from "./types";
 import {
   lineNoteReplyKey,
@@ -427,6 +428,8 @@ export interface SidebarFileItem {
 
 export interface SidebarViewModel {
   files: SidebarFileItem[];
+  changesetId: string;
+  quiz: QuizState;
 }
 
 function fileStatusChar(s: string): string {
@@ -442,8 +445,10 @@ function fileStatusChar(s: string): string {
 export interface BuildSidebarViewModelArgs {
   files: Array<{ id: string; path: string; status: FileStatus; hunks: { id: string; lines: unknown[] }[] }>;
   currentFileId: string;
+  changesetId: string;
   readLines: Record<string, Set<number>>;
   reviewedFiles: Set<string>;
+  quiz: QuizState;
   /**
    * Interaction threads, keyed as in `types.ts` (`user:HUNK:LINE`,
    * `block:HUNK:LO-HI`, `note:HUNK:LINE`, `hunkSummary:HUNK`,
@@ -492,8 +497,10 @@ function buildCommentCounts(
 export function buildSidebarViewModel({
   files,
   currentFileId,
+  changesetId,
   readLines,
   reviewedFiles,
+  quiz,
   interactions = {},
 }: BuildSidebarViewModelArgs): SidebarViewModel {
   const commentCounts = buildCommentCounts(files, interactions);
@@ -520,6 +527,8 @@ export function buildSidebarViewModel({
 
   return {
     files: fileItems,
+    changesetId,
+    quiz,
   };
 }
 

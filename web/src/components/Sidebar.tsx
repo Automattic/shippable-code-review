@@ -1,6 +1,7 @@
 import "./Sidebar.css";
 import type { SidebarFileItem, SidebarViewModel } from "../view";
 import { PromptRunsPanel, type PromptRunView } from "./PromptRunsPanel";
+import { QuizPanel } from "./QuizPanel";
 
 interface Props {
   viewModel: SidebarViewModel;
@@ -43,6 +44,7 @@ export function Sidebar({
           </button>
         </div>
       )}
+      <QuizPanel changesetId={viewModel.changesetId} quiz={viewModel.quiz} />
       <PromptRunsPanel
         runs={runs}
         onClose={onCloseRun}
