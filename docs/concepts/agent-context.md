@@ -65,6 +65,14 @@ The free-form composer and the `freeform` `CommentKind` are gone — reply suppo
 
 See `docs/plans/share-review-comments.md` for the original pull design, `docs/sdd/agent-reply-support/spec.md` for the original post-back half, `docs/sdd/agent-comments/spec.md` for the top-level extension, and `docs/sdd/auto-reply-hint/spec.md` for the in-band hint that reinforces the loop.
 
+**Structured fields on top-level comments.** Top-level mode carries three extra fields so an agent comment is self-explanatory without re-prompting the agent:
+
+- `rationale` — **required** for top-level posts. Why the comment matters. Enforced at the MCP boundary (`mcp-server/`); a top-level call without it is rejected.
+- `suggestedFix` — optional. Free-form code or text the reviewer applies by hand (no diff anchoring, no one-click apply).
+- `confidence` — optional. `low | medium | high`.
+
+The fields apply to **top-level mode only** — reply-mode posts and pre-existing rows carry none of them and render unchanged. They ride the existing channel: flat keys on `/api/agent/replies`, stored in the `interactions` table's `payload_json` bag (no migration), projected onto the `Interaction`. `AgentRow` renders `confidence` as a chip in the head row and `rationale` / `suggestedFix` as collapsible `<details>` sections, collapsed by default — a glance shows body + intent + chip. See `docs/sdd/structured-comment-fields/spec.md`.
+
 Concretely:
 
 - **Transport:** `POST /api/agent/interactions`, `POST /api/agent/replies`, `GET /api/agent/replies` on the local server ← `mcp-server/` shim ← agent's MCP client. Localhost-only bind; no LAN exposure, no token in v0. One replies endpoint pair covers both reply-shaped (`parentId`) and top-level (`file` + `lines`) post-back entries.
