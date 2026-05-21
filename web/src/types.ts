@@ -604,17 +604,32 @@ export function hunkSummaryReplyKey(hunkId: string): string {
 export function teammateReplyKey(hunkId: string): string {
   return `teammate:${hunkId}`;
 }
-/** Fresh user-started comment on a line (not a reply to AI/teammate). */
-export function userCommentKey(hunkId: string, lineIdx: number): string {
-  return `user:${hunkId}:${lineIdx}`;
+/**
+ * Fresh user-started comment on a line (not a reply to AI/teammate). The
+ * trailing `id` segment makes each comment its own thread — two comments on
+ * the same line no longer collapse into one.
+ */
+export function userCommentKey(hunkId: string, lineIdx: number, id: string): string {
+  return `user:${hunkId}:${lineIdx}:${id}`;
 }
 /**
  * Thread key for a user-started comment on a line range. `lo` and `hi` are
  * inclusive; callers must pass them pre-sorted (lo <= hi) so a key uniquely
- * identifies its range.
+ * identifies its range. The trailing `id` segment makes each comment its own
+ * thread.
  */
-export function blockCommentKey(hunkId: string, lo: number, hi: number): string {
-  return `block:${hunkId}:${lo}-${hi}`;
+export function blockCommentKey(
+  hunkId: string,
+  lo: number,
+  hi: number,
+  id: string,
+): string {
+  return `block:${hunkId}:${lo}-${hi}:${id}`;
+}
+
+/** Unique id segment for a per-comment thread key. */
+export function mintCommentId(): string {
+  return Math.random().toString(36).slice(2, 8);
 }
 
 export function userFileCommentKey(fileId: string, newNo: number): string {
@@ -630,8 +645,8 @@ export function blockFileCommentKey(fileId: string, lo: number, hi: number): str
  */
 export type ParsedReplyKey =
   | { kind: "note"; hunkId: string; lineIdx: number }
-  | { kind: "user"; hunkId: string; lineIdx: number }
-  | { kind: "block"; hunkId: string; lo: number; hi: number; lineIdx: number }
+  | { kind: "user"; hunkId: string; lineIdx: number; id: string }
+  | { kind: "block"; hunkId: string; lo: number; hi: number; lineIdx: number; id: string }
   | { kind: "userFile"; fileId: string; newNo: number; lineIdx: 0 }
   | { kind: "blockFile"; fileId: string; lo: number; hi: number; lineIdx: 0 }
   | { kind: "hunkSummary"; hunkId: string; lineIdx: 0 }
@@ -649,30 +664,48 @@ export function parseReplyKey(key: string): ParsedReplyKey | null {
   const prefix = key.slice(0, colon);
   const rest = key.slice(colon + 1);
   switch (prefix) {
-    case "note":
-    case "user": {
+    case "note": {
       const last = rest.lastIndexOf(":");
       if (last < 0) return null;
       const hunkId = rest.slice(0, last);
       if (hunkId.length === 0) return null;
       const lineIdx = parseInt(rest.slice(last + 1), 10);
       if (!Number.isFinite(lineIdx)) return null;
-      return prefix === "note"
-        ? { kind: "note", hunkId, lineIdx }
-        : { kind: "user", hunkId, lineIdx };
+      return { kind: "note", hunkId, lineIdx };
+    }
+    case "user": {
+      // rest is `hunkId:lineIdx:id` — strip the trailing two segments.
+      const idColon = rest.lastIndexOf(":");
+      if (idColon < 0) return null;
+      const id = rest.slice(idColon + 1);
+      if (id.length === 0) return null;
+      const lineHead = rest.slice(0, idColon);
+      const lineColon = lineHead.lastIndexOf(":");
+      if (lineColon < 0) return null;
+      const hunkId = lineHead.slice(0, lineColon);
+      if (hunkId.length === 0) return null;
+      const lineIdx = parseInt(lineHead.slice(lineColon + 1), 10);
+      if (!Number.isFinite(lineIdx)) return null;
+      return { kind: "user", hunkId, lineIdx, id };
     }
     case "block": {
-      const last = rest.lastIndexOf(":");
-      if (last < 0) return null;
-      const hunkId = rest.slice(0, last);
+      // rest is `hunkId:lo-hi:id` — strip the trailing two segments.
+      const idColon = rest.lastIndexOf(":");
+      if (idColon < 0) return null;
+      const id = rest.slice(idColon + 1);
+      if (id.length === 0) return null;
+      const rangeHead = rest.slice(0, idColon);
+      const rangeColon = rangeHead.lastIndexOf(":");
+      if (rangeColon < 0) return null;
+      const hunkId = rangeHead.slice(0, rangeColon);
       if (hunkId.length === 0) return null;
-      const range = rest.slice(last + 1);
+      const range = rangeHead.slice(rangeColon + 1);
       const dash = range.indexOf("-");
       if (dash < 0) return null;
       const lo = parseInt(range.slice(0, dash), 10);
       const hi = parseInt(range.slice(dash + 1), 10);
       if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
-      return { kind: "block", hunkId, lo, hi, lineIdx: lo };
+      return { kind: "block", hunkId, lo, hi, lineIdx: lo, id };
     }
     case "userFile": {
       const last = rest.lastIndexOf(":");

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, ReactNode } from "react";
 import {
   buildCommentStops,
@@ -30,6 +30,7 @@ import { StatusBar } from "./StatusBar";
 import { GuidePrompt } from "./GuidePrompt";
 import { HelpOverlay } from "./HelpOverlay";
 import { Inspector } from "./Inspector";
+import type { InlineThreadStackProps } from "./InlineThreadStack";
 import { LineContextMenu, type ContextMenuItem } from "./LineContextMenu";
 import { LoadModal } from "./LoadModal";
 import { RangePicker } from "./RangePicker";
@@ -53,15 +54,22 @@ import type {
   AgentSessionRef,
   ChangeSet,
   Cursor,
+  DeliveredInteraction,
   DetachedInteraction,
   DiffFile,
   EvidenceRef,
   Interaction,
+  LineSelection,
   PrSource,
   ReviewState,
   WorktreeSource,
 } from "../types";
-import { blockCommentKey, lineNoteReplyKey, userCommentKey } from "../types";
+import {
+  blockCommentKey,
+  lineNoteReplyKey,
+  mintCommentId,
+  userCommentKey,
+} from "../types";
 import {
   fetchAgentContextForWorktree,
   fetchMcpStatus,
@@ -96,8 +104,22 @@ import {
   buildStatusBarViewModel,
   buildGuidePromptViewModel,
   buildInspectorViewModel,
+  buildLineThreadsProjection,
+  filterActiveLineThreads,
 } from "../view";
 import { newReviewerInteractionId, selectIngestSignals } from "../interactions";
+import {
+  getStoredShowInspector,
+  persistShowInspector,
+} from "../inspectorVisibility";
+import {
+  getStoredInlineComments,
+  persistInlineComments,
+} from "../inlineComments";
+import {
+  getStoredHideNonActiveComments,
+  persistHideNonActiveComments,
+} from "../commentVisibility";
 
 interface Props {
   state: ReviewState;
@@ -151,7 +173,39 @@ export function ReviewWorkspace({
     !hasAnthropicCredential && credentials.anthropicSkipped;
   const [showHelp, setShowHelp] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [showInspector, setShowInspector] = useState(true);
+  const [showInspector, setShowInspector] = useState(getStoredShowInspector);
+  const [inlineComments, setInlineComments] = useState(getStoredInlineComments);
+  const [hideNonActiveComments, setHideNonActiveComments] = useState(
+    getStoredHideNonActiveComments,
+  );
+  const selectHideNonActiveComments = (value: boolean) => {
+    setHideNonActiveComments(value);
+    persistHideNonActiveComments(value);
+  };
+  const inspectorVisible = showInspector;
+  // Functional updaters: the keydown handler is registered once with a stale
+  // closure, so the toggles must not read the captured state value. `persist`
+  // runs inside the updater so it sees the committed `next` — do not move it
+  // out (that reintroduces the stale read). StrictMode double-invokes updaters
+  // in dev; the extra idempotent storage write is harmless.
+  const toggleShowInspector = () => {
+    setShowInspector((prev) => {
+      const next = !prev;
+      persistShowInspector(next);
+      return next;
+    });
+  };
+  const selectInlineComments = (value: boolean) => {
+    setInlineComments(value);
+    persistInlineComments(value);
+  };
+  const toggleInlineComments = () => {
+    setInlineComments((prev) => {
+      const next = !prev;
+      persistInlineComments(next);
+      return next;
+    });
+  };
   const [showSidebar, setShowSidebar] = useState(true);
   const [showLoad, setShowLoad] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -449,8 +503,9 @@ export function ReviewWorkspace({
     state.cursor.hunkId,
     state.cursor.lineIdx,
   );
-  const ackedSet = selectAckedNotes(state);
-  const ingestSignals = selectIngestSignals(state);
+  // Memoized so derived projections keyed on them stay stable across renders.
+  const ackedSet = useMemo(() => selectAckedNotes(state), [state]);
+  const ingestSignals = useMemo(() => selectIngestSignals(state), [state]);
   const lineHasAiNote = !!ingestSignals.aiNoteByLine[
     `${state.cursor.hunkId}:${state.cursor.lineIdx}`
   ];
@@ -484,6 +539,26 @@ export function ReviewWorkspace({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing one piece of UI state when its precondition flips false
     if (!interactionsEnabled) setContextMenu(null);
   }, [interactionsEnabled]);
+
+  // Single source of truth for the new-comment thread key: a block key
+  // when a multi-line selection is live on the cursor's hunk, a line key
+  // otherwise. Each call mints a fresh id so every "+ comment" / `c`
+  // press opens its own thread rather than reopening the last one.
+  function newCommentKey(): string {
+    const sel = state.selection;
+    return sel && sel.hunkId === state.cursor.hunkId && sel.anchor !== sel.head
+      ? blockCommentKey(
+          sel.hunkId,
+          Math.min(sel.anchor, sel.head),
+          Math.max(sel.anchor, sel.head),
+          mintCommentId(),
+        )
+      : userCommentKey(
+          state.cursor.hunkId,
+          state.cursor.lineIdx,
+          mintCommentId(),
+        );
+  }
 
   function runAction(action: ActionId) {
     const preserveSelection = draftingKey?.startsWith("block:") ?? false;
@@ -525,7 +600,10 @@ export function ReviewWorkspace({
         setShowHelp((v) => !v);
         break;
       case "TOGGLE_INSPECTOR":
-        setShowInspector((v) => !v);
+        toggleShowInspector();
+        break;
+      case "TOGGLE_INLINE_COMMENTS":
+        toggleInlineComments();
         break;
       case "TOGGLE_SIDEBAR":
         setShowSidebar((v) => !v);
@@ -559,22 +637,10 @@ export function ReviewWorkspace({
         setDraftingKey(
           lineNoteReplyKey(state.cursor.hunkId, state.cursor.lineIdx),
         );
-        setShowInspector(true);
         break;
-      case "START_COMMENT": {
-        const sel = state.selection;
-        const key =
-          sel && sel.hunkId === state.cursor.hunkId && sel.anchor !== sel.head
-            ? blockCommentKey(
-                sel.hunkId,
-                Math.min(sel.anchor, sel.head),
-                Math.max(sel.anchor, sel.head),
-              )
-            : userCommentKey(state.cursor.hunkId, state.cursor.lineIdx);
-        setDraftingKey(key);
-        setShowInspector(true);
+      case "START_COMMENT":
+        setDraftingKey(newCommentKey());
         break;
-      }
       case "ACCEPT_GUIDE": {
         if (!suggestion) break;
         dispatch({
@@ -906,6 +972,205 @@ export function ReviewWorkspace({
     }
   }
 
+  // Interaction view model + handlers. Shared by the Inspector panel and the
+  // inline-mode thread render in DiffView so the two modes stay in lockstep.
+  const inspectorViewModel = buildInspectorViewModel({
+    file,
+    hunk,
+    line,
+    cursor: state.cursor,
+    symbols: symbolIndex,
+    acked: ackedSet,
+    replies: state.interactions,
+    draftingKey,
+    signals: ingestSignals,
+    detachedInteractions: state.detachedInteractions,
+  });
+
+  // Mirror Inspector's own derivation: delivered comments indexed by id,
+  // undefined when no worktree backs the changeset.
+  const deliveredById: Record<string, DeliveredInteraction> | undefined =
+    activeWorktreeSource
+      ? Object.fromEntries(deliveredComments.map((d) => [d.id, d]))
+      : undefined;
+
+  const handleJumpToBlock = (cursor: Cursor, selection: LineSelection) =>
+    dispatch({ type: "SET_CURSOR", cursor, selection });
+
+  const handleToggleAck = (hunkId: string, lineIdx: number) =>
+    dispatch({ type: "TOGGLE_ACK", hunkId, lineIdx });
+
+  const handleStartDraft = (key: string) => setDraftingKey(key);
+  const handleStartNewComment = () => setDraftingKey(newCommentKey());
+  const handleCloseDraft = () => setDraftingKey(null);
+  const handleChangeDraft = (key: string, body: string) =>
+    setDrafts((prev) => ({ ...prev, [key]: body }));
+
+  const handleSubmitReply = (key: string, body: string) => {
+    const createdAt = new Date();
+    const interactionId = newReviewerInteractionId();
+    const isFirst = (state.interactions[key]?.length ?? 0) === 0;
+    const interaction: Interaction = {
+      id: interactionId,
+      threadKey: key,
+      target: isFirst ? firstTargetForKey(key) : replyTarget(),
+      intent: "comment",
+      author: "you",
+      authorRole: "user",
+      body,
+      createdAt: createdAt.toISOString(),
+      ...buildReplyAnchor(key, cs),
+      // Optimistically mark as queued so the pip appears immediately
+      // in the submit→delivered window. The server's enqueue POST
+      // sets the same column server-side; no mismatch risk.
+      ...(activeWorktreeSource ? { agentQueueStatus: "pending" } : {}),
+    };
+    // Worktree path: bypass the sync hook — this code manages its
+    // own upsert→enqueue sequence, and going through syncedDispatch
+    // would fire a concurrent duplicate upsert for the same row.
+    // Non-worktree path: go through the sync hook (its upsert is the
+    // only persistence path for paste/url/upload changesets).
+    const addAction = {
+      type: "ADD_INTERACTION" as const,
+      targetKey: key,
+      interaction,
+    };
+    if (activeWorktreeSource) {
+      rawDispatch(addAction);
+    } else {
+      dispatch(addAction);
+    }
+    setDrafts((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setDraftingKey(null);
+    // When a worktree is loaded, enqueue the interaction for the
+    // agent. The DB row must exist before /enqueue can reference
+    // it, so upsert here and enqueue on success rather than
+    // racing the background sync. Non-worktree loads (paste/url/
+    // upload) just persist the interaction; no pip appears.
+    if (activeWorktreeSource) {
+      const worktreePath = activeWorktreeSource.worktreePath;
+      upsertInteraction(interaction, cs.id)
+        .then(() => enqueueInteraction(interactionId, worktreePath))
+        .catch((err: unknown) => {
+          console.error("[shippable] enqueue failed:", err);
+          // Surface the failure as a retry pip; the interaction
+          // itself stays in place so nothing is lost.
+          dispatch({
+            type: "SET_INTERACTION_ENQUEUE_ERROR",
+            targetKey: key,
+            interactionId,
+            error: true,
+          });
+        });
+    }
+  };
+
+  const handleRetryReply = (key: string, replyId: string) => {
+    // Errored-pip retry. The original upsert may have failed too
+    // (that's why we're retrying), so re-upsert first to guarantee
+    // the row exists before re-enqueueing.
+    if (!activeWorktreeSource) return;
+    const ix = state.interactions[key]?.find((entry) => entry.id === replyId);
+    if (!ix) return;
+    const worktreePath = activeWorktreeSource.worktreePath;
+    // Optimistically clear the error so the pip flips back to ◌
+    // queued the moment the user clicks; restore it on failure.
+    dispatch({
+      type: "SET_INTERACTION_ENQUEUE_ERROR",
+      targetKey: key,
+      interactionId: replyId,
+      error: false,
+    });
+    upsertInteraction(ix, cs.id)
+      .then(() => enqueueInteraction(replyId, worktreePath))
+      .catch((err: unknown) => {
+        console.error("[shippable] retry enqueue failed:", err);
+        dispatch({
+          type: "SET_INTERACTION_ENQUEUE_ERROR",
+          targetKey: key,
+          interactionId: replyId,
+          error: true,
+        });
+      });
+  };
+
+  const handleDeleteReply = (key: string, replyId: string) => {
+    // Unenqueue first when the interaction is still pending — the
+    // agent hasn't pulled it, so it should leave the queue
+    // cleanly. (DELETE_INTERACTION's sync would drop the row too,
+    // but unenqueue is the explicit, race-free signal and a
+    // no-op 404 if the row's already gone.) Delivered entries
+    // stay in the agent's hands; we only drop the local view.
+    const target = state.interactions[key]?.find((ix) => ix.id === replyId);
+    if (target?.agentQueueStatus === "pending" && activeWorktreeSource) {
+      unenqueueInteraction(replyId).catch((err: unknown) => {
+        console.error("[shippable] unenqueue failed:", err);
+      });
+    }
+    dispatch({ type: "DELETE_INTERACTION", targetKey: key, interactionId: replyId });
+  };
+
+  const handleVerifyAiNote = (recipe: {
+    source: string;
+    inputs: Record<string, string>;
+  }) => {
+    setRunRequest((prev) => ({
+      tick: (prev?.tick ?? 0) + 1,
+      source: recipe.source,
+      inputs: recipe.inputs,
+    }));
+  };
+
+  const inlineThreadsPayload: Omit<
+    InlineThreadStackProps,
+    "sections" | "currentNoteRef"
+  > = {
+    vm: inspectorViewModel,
+    symbols: symbolIndex,
+    draftFor: (key: string) => drafts[key] ?? "",
+    deliveredById,
+    worktreePath: activeWorktreeSource?.worktreePath ?? null,
+    onJump: jumpTo,
+    onJumpToBlock: handleJumpToBlock,
+    onToggleAck: handleToggleAck,
+    onStartDraft: handleStartDraft,
+    onStartNewComment: handleStartNewComment,
+    onCloseDraft: handleCloseDraft,
+    onChangeDraft: handleChangeDraft,
+    onSubmitReply: handleSubmitReply,
+    onDeleteReply: handleDeleteReply,
+    onRetryReply: handleRetryReply,
+    onVerifyAiNote: handleVerifyAiNote,
+  };
+
+  // Per-line thread projection for inline mode. With "hide non-active
+  // comments" off, every line's threads render under their own line; on,
+  // it collapses to the cursor line's entry only — today's behaviour.
+  // Memoized so the array identity is stable across unrelated re-renders.
+  // Keyed on `state` (cursor/interactions, and the source `acked`/`signals`
+  // derive from it) plus the `draftingKey` UI state.
+  const lineThreadsProjection = useMemo(
+    () =>
+      buildLineThreadsProjection({
+        hunks: file.hunks,
+        cursor: state.cursor,
+        acked: ackedSet,
+        replies: state.interactions,
+        draftingKey,
+        signals: ingestSignals,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ackedSet/ingestSignals/file.hunks all derive from `state`
+    [state, draftingKey],
+  );
+  const lineThreads = hideNonActiveComments
+    ? filterActiveLineThreads(lineThreadsProjection)
+    : lineThreadsProjection;
+
   return (
     <div className="app">
       <header className="topbar">
@@ -995,12 +1260,12 @@ export function ReviewWorkspace({
               label: "inspector",
               glyph: "◫",
               kbd: "i",
-              title: "toggle the inspector (i)",
+              title: "show / hide the inspector panel (i)",
               active: showInspector,
               priority: 30,
               onClick: () => {
                 flashMouseTip("i", "the inspector");
-                setShowInspector((v) => !v);
+                toggleShowInspector();
               },
             },
             {
@@ -1172,7 +1437,7 @@ export function ReviewWorkspace({
       <div
         className={[
           "main",
-          showInspector && "main--with-inspector",
+          inspectorVisible && "main--with-inspector",
           !showSidebar
             ? "main--no-sidebar"
             : sidebarWide && "main--wide-sidebar",
@@ -1288,6 +1553,17 @@ export function ReviewWorkspace({
                 dispatch({ type: "SET_CURSOR", cursor: targetCursor });
               }
             }}
+            onHunkFocus={(hunkId) => {
+              dispatch({
+                type: "SET_CURSOR",
+                cursor: {
+                  changesetId: cs.id,
+                  fileId: file.id,
+                  hunkId,
+                  lineIdx: 0,
+                },
+              });
+            }}
             onLineSelectRange={(hunkId, anchor, head) => {
               dispatch({
                 type: "SET_CURSOR",
@@ -1341,22 +1617,13 @@ export function ReviewWorkspace({
               }
               setContextMenu({ x, y, hunkId, lineIdx });
             }}
+            inlineThreads={inlineComments ? inlineThreadsPayload : undefined}
+            lineThreads={inlineComments ? lineThreads : undefined}
           />
         </div>
-        {showInspector && (
+        {inspectorVisible && (
           <Inspector
-            viewModel={buildInspectorViewModel({
-              file,
-              hunk,
-              line,
-              cursor: state.cursor,
-              symbols: symbolIndex,
-              acked: ackedSet,
-              replies: state.interactions,
-              draftingKey,
-              signals: ingestSignals,
-              detachedInteractions: state.detachedInteractions,
-            })}
+            viewModel={inspectorViewModel}
             commentCount={buildCommentStops(cs, state.interactions).length}
             onPrevComment={() => dispatch({ type: "MOVE_TO_COMMENT", delta: -1 })}
             onNextComment={() => dispatch({ type: "MOVE_TO_COMMENT", delta: 1 })}
@@ -1364,133 +1631,16 @@ export function ReviewWorkspace({
             symbols={symbolIndex}
             draftBodies={drafts}
             onJump={jumpTo}
-            onJumpToBlock={(cursor, selection) =>
-              dispatch({ type: "SET_CURSOR", cursor, selection })
-            }
-            onToggleAck={(hunkId, lineIdx) =>
-              dispatch({ type: "TOGGLE_ACK", hunkId, lineIdx })
-            }
-            onStartDraft={(key) => setDraftingKey(key)}
-            onCloseDraft={() => setDraftingKey(null)}
-            onChangeDraft={(key, body) =>
-              setDrafts((prev) => ({ ...prev, [key]: body }))
-            }
-            onSubmitReply={(key, body) => {
-              const createdAt = new Date();
-              const interactionId = newReviewerInteractionId();
-              const isFirst = (state.interactions[key]?.length ?? 0) === 0;
-              const interaction: Interaction = {
-                id: interactionId,
-                threadKey: key,
-                target: isFirst ? firstTargetForKey(key) : replyTarget(),
-                intent: "comment",
-                author: "you",
-                authorRole: "user",
-                body,
-                createdAt: createdAt.toISOString(),
-                ...buildReplyAnchor(key, cs),
-                // Optimistically mark as queued so the pip appears immediately
-                // in the submit→delivered window. The server's enqueue POST
-                // sets the same column server-side; no mismatch risk.
-                ...(activeWorktreeSource ? { agentQueueStatus: "pending" } : {}),
-              };
-              // Worktree path: bypass the sync hook — this code manages its
-              // own upsert→enqueue sequence, and going through syncedDispatch
-              // would fire a concurrent duplicate upsert for the same row.
-              // Non-worktree path: go through the sync hook (its upsert is the
-              // only persistence path for paste/url/upload changesets).
-              const addAction = {
-                type: "ADD_INTERACTION" as const,
-                targetKey: key,
-                interaction,
-              };
-              if (activeWorktreeSource) {
-                rawDispatch(addAction);
-              } else {
-                dispatch(addAction);
-              }
-              setDrafts((prev) => {
-                if (!(key in prev)) return prev;
-                const next = { ...prev };
-                delete next[key];
-                return next;
-              });
-              setDraftingKey(null);
-              // When a worktree is loaded, enqueue the interaction for the
-              // agent. The DB row must exist before /enqueue can reference
-              // it, so upsert here and enqueue on success rather than
-              // racing the background sync. Non-worktree loads (paste/url/
-              // upload) just persist the interaction; no pip appears.
-              if (activeWorktreeSource) {
-                const worktreePath = activeWorktreeSource.worktreePath;
-                upsertInteraction(interaction, cs.id)
-                  .then(() => enqueueInteraction(interactionId, worktreePath))
-                  .catch((err: unknown) => {
-                    console.error("[shippable] enqueue failed:", err);
-                    // Surface the failure as a retry pip; the interaction
-                    // itself stays in place so nothing is lost.
-                    dispatch({
-                      type: "SET_INTERACTION_ENQUEUE_ERROR",
-                      targetKey: key,
-                      interactionId,
-                      error: true,
-                    });
-                  });
-              }
-            }}
-            onRetryReply={(key, replyId) => {
-              // Errored-pip retry. The original upsert may have failed too
-              // (that's why we're retrying), so re-upsert first to guarantee
-              // the row exists before re-enqueueing.
-              if (!activeWorktreeSource) return;
-              const ix = state.interactions[key]?.find((entry) => entry.id === replyId);
-              if (!ix) return;
-              const worktreePath = activeWorktreeSource.worktreePath;
-              // Optimistically clear the error so the pip flips back to ◌
-              // queued the moment the user clicks; restore it on failure.
-              dispatch({
-                type: "SET_INTERACTION_ENQUEUE_ERROR",
-                targetKey: key,
-                interactionId: replyId,
-                error: false,
-              });
-              upsertInteraction(ix, cs.id)
-                .then(() => enqueueInteraction(replyId, worktreePath))
-                .catch((err: unknown) => {
-                  console.error("[shippable] retry enqueue failed:", err);
-                  dispatch({
-                    type: "SET_INTERACTION_ENQUEUE_ERROR",
-                    targetKey: key,
-                    interactionId: replyId,
-                    error: true,
-                  });
-                });
-            }}
-            onDeleteReply={(key, replyId) => {
-              // Unenqueue first when the interaction is still pending — the
-              // agent hasn't pulled it, so it should leave the queue
-              // cleanly. (DELETE_INTERACTION's sync would drop the row too,
-              // but unenqueue is the explicit, race-free signal and a
-              // no-op 404 if the row's already gone.) Delivered entries
-              // stay in the agent's hands; we only drop the local view.
-              const target = state.interactions[key]?.find((ix) => ix.id === replyId);
-              if (
-                target?.agentQueueStatus === "pending" &&
-                activeWorktreeSource
-              ) {
-                unenqueueInteraction(replyId).catch((err: unknown) => {
-                  console.error("[shippable] unenqueue failed:", err);
-                });
-              }
-              dispatch({ type: "DELETE_INTERACTION", targetKey: key, interactionId: replyId });
-            }}
-            onVerifyAiNote={(recipe) => {
-              setRunRequest((prev) => ({
-                tick: (prev?.tick ?? 0) + 1,
-                source: recipe.source,
-                inputs: recipe.inputs,
-              }));
-            }}
+            onJumpToBlock={handleJumpToBlock}
+            onToggleAck={handleToggleAck}
+            onStartDraft={handleStartDraft}
+            onStartNewComment={handleStartNewComment}
+            onCloseDraft={handleCloseDraft}
+            onChangeDraft={handleChangeDraft}
+            onSubmitReply={handleSubmitReply}
+            onRetryReply={handleRetryReply}
+            onDeleteReply={handleDeleteReply}
+            onVerifyAiNote={handleVerifyAiNote}
             agentContext={
               activeWorktreeSource
                 ? {
@@ -1538,6 +1688,7 @@ export function ReviewWorkspace({
                 hint,
               });
             }}
+            interactionsShownInline={inlineComments}
           />
         )}
       </div>
@@ -1721,7 +1872,8 @@ export function ReviewWorkspace({
             lineNoteAcked,
             currentFileReadFraction: fileCoverage(file, state.readLines),
             currentFileReviewed: state.reviewedFiles.has(file.id),
-            showInspector,
+            inspectorVisible,
+            inlineComments,
           })}
           onClose={() => setShowHelp(false)}
         />
@@ -1743,7 +1895,13 @@ export function ReviewWorkspace({
         />
       )}
       {showSettings && (
-        <SettingsModal onClose={() => setShowSettings(false)} />
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          inlineComments={inlineComments}
+          onChangeInlineComments={selectInlineComments}
+          hideNonActiveComments={hideNonActiveComments}
+          onChangeHideNonActiveComments={selectHideNonActiveComments}
+        />
       )}
       <StatusBar
         transientHint={mouseTip}
@@ -2069,14 +2227,16 @@ function buildHelpContext({
   lineNoteAcked,
   currentFileReadFraction,
   currentFileReviewed,
-  showInspector,
+  inspectorVisible,
+  inlineComments,
 }: {
   hasSelection: boolean;
   lineHasAiNote: boolean;
   lineNoteAcked: boolean;
   currentFileReadFraction: number;
   currentFileReviewed: boolean;
-  showInspector: boolean;
+  inspectorVisible: boolean;
+  inlineComments: boolean;
 }) {
   if (hasSelection) {
     return {
@@ -2122,7 +2282,13 @@ function buildHelpContext({
       { chord: "p", label: "toggle the review plan" },
       {
         chord: "i",
-        label: showInspector ? "hide the inspector" : "reopen the inspector",
+        label: inspectorVisible ? "hide the inspector" : "show the inspector",
+      },
+      {
+        chord: "⇧i",
+        label: inlineComments
+          ? "hide inline comments"
+          : "show comments inline in the diff",
       },
       { chord: "⇧l", label: "load a changeset" },
       { chord: "⇧r", label: "open the free code runner" },

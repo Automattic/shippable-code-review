@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { buildSidebarViewModel, buildStatusBarViewModel } from "./view";
+import {
+  buildInspectorViewModel,
+  buildLineThreadsProjection,
+  buildSidebarViewModel,
+  buildStatusBarViewModel,
+  filterActiveLineThreads,
+} from "./view";
 import type { BuildStatusBarViewModelArgs } from "./view";
-import type { Interaction } from "./types";
+import type { Cursor, DiffFile, DiffLine, Hunk, Interaction } from "./types";
 import {
   blockCommentKey,
   hunkSummaryReplyKey,
@@ -13,7 +19,7 @@ import {
 function reply(id: string): Interaction {
   return {
     id,
-    threadKey: "user:cs1/web/src/state.ts#h1:0",
+    threadKey: "user:cs1/web/src/state.ts#h1:0:c1",
     target: "reply",
     intent: "comment",
     author: "me",
@@ -59,9 +65,9 @@ function commentCountByFileId(
 describe("buildSidebarViewModel commentCount", () => {
   it("counts every reply kind against its file", () => {
     const counts = commentCountByFileId({
-      [userCommentKey(NORMAL_HUNK, 0)]: [reply("a")],
+      [userCommentKey(NORMAL_HUNK, 0, "c1")]: [reply("a")],
       [lineNoteReplyKey(NORMAL_HUNK, 1)]: [reply("b"), reply("c")],
-      [blockCommentKey(NORMAL_HUNK, 2, 4)]: [reply("d")],
+      [blockCommentKey(NORMAL_HUNK, 2, 4, "c1")]: [reply("d")],
       [hunkSummaryReplyKey(NORMAL_HUNK)]: [reply("e")],
       [teammateReplyKey(NORMAL_HUNK)]: [reply("f")],
     });
@@ -73,9 +79,9 @@ describe("buildSidebarViewModel commentCount", () => {
     // Pre-fix this returned 0: the parser split on the first two colons and
     // treated `hunkId` as the literal string `"pr"`, missing every PR file.
     const counts = commentCountByFileId({
-      [userCommentKey(PR_HUNK, 0)]: [reply("a")],
+      [userCommentKey(PR_HUNK, 0, "c1")]: [reply("a")],
       [lineNoteReplyKey(PR_HUNK, 1)]: [reply("b")],
-      [blockCommentKey(PR_HUNK, 2, 3)]: [reply("c")],
+      [blockCommentKey(PR_HUNK, 2, 3, "c1")]: [reply("c")],
       [hunkSummaryReplyKey(PR_HUNK)]: [reply("d")],
       [teammateReplyKey(PR_HUNK)]: [reply("e")],
     });
@@ -85,7 +91,7 @@ describe("buildSidebarViewModel commentCount", () => {
 
   it("ignores replies whose hunk no longer exists", () => {
     const counts = commentCountByFileId({
-      [userCommentKey("missing-hunk", 0)]: [reply("a")],
+      [userCommentKey("missing-hunk", 0, "c1")]: [reply("a")],
       [hunkSummaryReplyKey("also-missing")]: [reply("b")],
     });
     expect(counts.get("f-normal")).toBe(0);
@@ -151,5 +157,269 @@ describe("buildStatusBarViewModel defaultHint", () => {
     );
     expect(vm.defaultHint).toContain("⇧S sign off changeset");
     expect(vm.defaultHint).not.toContain("⇧M");
+  });
+});
+
+describe("buildInspectorViewModel userCommentRows", () => {
+  const HUNK_ID = "cs1/web/src/state.ts#h1";
+  const diffLine: DiffLine = { kind: "add", text: "x", newNo: 10 };
+  const hunk: Hunk = {
+    id: HUNK_ID,
+    header: "@@",
+    oldStart: 1,
+    oldCount: 3,
+    newStart: 1,
+    newCount: 3,
+    lines: [diffLine, diffLine, diffLine],
+  };
+  const file: DiffFile = {
+    id: "f1",
+    path: "web/src/state.ts",
+    language: "ts",
+    status: "modified",
+    hunks: [hunk],
+  };
+  const cursor: Cursor = {
+    changesetId: "cs1",
+    fileId: "f1",
+    hunkId: HUNK_ID,
+    lineIdx: 0,
+  };
+
+  function inspectorRows(replies: Record<string, Interaction[]>) {
+    return buildInspectorViewModel({
+      file,
+      hunk,
+      line: diffLine,
+      cursor,
+      symbols: new Map(),
+      acked: new Set(),
+      replies,
+      draftingKey: null,
+    }).userCommentRows;
+  }
+
+  it("emits one row per user thread when two share a line", () => {
+    const k1 = userCommentKey(HUNK_ID, 1, "aaa");
+    const k2 = userCommentKey(HUNK_ID, 1, "bbb");
+    const rows = inspectorRows({
+      [k1]: [reply("a")],
+      [k2]: [reply("b")],
+    });
+    const userRows = rows.filter((r) => r.rangeHiLineIdx === undefined);
+    expect(userRows).toHaveLength(2);
+    expect(new Set(userRows.map((r) => r.threadKey))).toEqual(
+      new Set([k1, k2]),
+    );
+    expect(userRows.every((r) => r.lineIdx === 1)).toBe(true);
+  });
+
+  it("emits a single row for a block thread", () => {
+    const bk = blockCommentKey(HUNK_ID, 0, 2, "ccc");
+    const rows = inspectorRows({ [bk]: [reply("c")] });
+    const blockRows = rows.filter((r) => r.rangeHiLineIdx !== undefined);
+    expect(blockRows).toHaveLength(1);
+    expect(blockRows[0].threadKey).toBe(bk);
+    expect(blockRows[0].rangeHiLineIdx).toBe(2);
+  });
+});
+
+describe("buildLineThreadsProjection", () => {
+  const HUNK_A = "cs1/web/src/state.ts#hA";
+  const HUNK_B = "cs1/web/src/state.ts#hB";
+  const diffLine: DiffLine = { kind: "add", text: "x", newNo: 10 };
+  const hunks = [
+    { id: HUNK_A, lines: [diffLine, diffLine, diffLine] },
+    { id: HUNK_B, lines: [diffLine, diffLine] },
+  ];
+  const cursor: Cursor = {
+    changesetId: "cs1",
+    fileId: "f1",
+    hunkId: HUNK_A,
+    lineIdx: 0,
+  };
+
+  function project(
+    replies: Record<string, Interaction[]>,
+    signals?: Parameters<typeof buildLineThreadsProjection>[0]["signals"],
+  ) {
+    return buildLineThreadsProjection({
+      hunks,
+      cursor,
+      acked: new Set(),
+      replies,
+      draftingKey: null,
+      signals,
+    });
+  }
+
+  it("buckets user-comment threads under their own line, across all hunks", () => {
+    const onA1 = userCommentKey(HUNK_A, 1, "aaa");
+    const onB0 = userCommentKey(HUNK_B, 0, "bbb");
+    const entries = project({
+      [onA1]: [reply("a")],
+      [onB0]: [reply("b")],
+    });
+    const a1 = entries.find((e) => e.hunkId === HUNK_A && e.lineIdx === 1);
+    const b0 = entries.find((e) => e.hunkId === HUNK_B && e.lineIdx === 0);
+    expect(a1?.userCommentRows.map((r) => r.threadKey)).toEqual([onA1]);
+    expect(b0?.userCommentRows.map((r) => r.threadKey)).toEqual([onB0]);
+  });
+
+  it("emits two rows when two comment threads share a line", () => {
+    const k1 = userCommentKey(HUNK_A, 2, "aaa");
+    const k2 = userCommentKey(HUNK_A, 2, "bbb");
+    const entries = project({ [k1]: [reply("a")], [k2]: [reply("b")] });
+    const line2 = entries.find((e) => e.hunkId === HUNK_A && e.lineIdx === 2);
+    expect(new Set(line2?.userCommentRows.map((r) => r.threadKey))).toEqual(
+      new Set([k1, k2]),
+    );
+  });
+
+  it("marks the cursor line's entry isCursor and others not", () => {
+    const entries = project({
+      [userCommentKey(HUNK_A, 0, "c")]: [reply("a")],
+      [userCommentKey(HUNK_A, 1, "d")]: [reply("b")],
+    });
+    expect(
+      entries.find((e) => e.hunkId === HUNK_A && e.lineIdx === 0)?.isCursor,
+    ).toBe(true);
+    expect(
+      entries.find((e) => e.hunkId === HUNK_A && e.lineIdx === 1)?.isCursor,
+    ).toBe(false);
+  });
+
+  it("buckets AI notes from ingest signals onto their line", () => {
+    const entries = project(
+      {},
+      {
+        aiNoteByLine: {
+          [`${HUNK_B}:1`]: { severity: "warning", summary: "watch out" },
+        },
+        aiSummaryByHunk: {},
+        teammateByHunk: {},
+      },
+    );
+    const b1 = entries.find((e) => e.hunkId === HUNK_B && e.lineIdx === 1);
+    expect(b1?.aiNoteRows.map((r) => r.summary)).toEqual(["watch out"]);
+  });
+
+  it("omits lines that have no threads", () => {
+    const entries = project({
+      [userCommentKey(HUNK_A, 1, "c")]: [reply("a")],
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].lineIdx).toBe(1);
+  });
+
+  it("skips an empty new-comment draft on the cursor line", () => {
+    const draftKey = userCommentKey(HUNK_A, 0, "draft");
+    const entries = buildLineThreadsProjection({
+      hunks,
+      cursor,
+      acked: new Set(),
+      replies: { [draftKey]: [] },
+      draftingKey: draftKey,
+    });
+    expect(entries).toHaveLength(0);
+  });
+
+  it("keeps a draft once it has replies", () => {
+    const draftKey = userCommentKey(HUNK_A, 0, "draft");
+    const entries = buildLineThreadsProjection({
+      hunks,
+      cursor,
+      acked: new Set(),
+      replies: { [draftKey]: [reply("a")] },
+      draftingKey: draftKey,
+    });
+    const line0 = entries.find((e) => e.hunkId === HUNK_A && e.lineIdx === 0);
+    expect(line0?.userCommentRows.map((r) => r.threadKey)).toEqual([draftKey]);
+  });
+
+  it("keeps an empty draft anchored off the cursor line", () => {
+    const draftKey = userCommentKey(HUNK_A, 2, "draft");
+    const entries = buildLineThreadsProjection({
+      hunks,
+      cursor,
+      acked: new Set(),
+      replies: { [draftKey]: [] },
+      draftingKey: draftKey,
+    });
+    const line2 = entries.find((e) => e.hunkId === HUNK_A && e.lineIdx === 2);
+    expect(line2?.userCommentRows.map((r) => r.threadKey)).toEqual([draftKey]);
+  });
+
+  it("buckets a block thread under its last line (hi), not its first (lo)", () => {
+    const blockKey = blockCommentKey(HUNK_A, 0, 2, "blk");
+    const entries = project({ [blockKey]: [reply("a")] });
+    const atHi = entries.find((e) => e.hunkId === HUNK_A && e.lineIdx === 2);
+    const atLo = entries.find((e) => e.hunkId === HUNK_A && e.lineIdx === 0);
+    expect(atHi?.userCommentRows.map((r) => r.threadKey)).toEqual([blockKey]);
+    expect(atLo?.userCommentRows ?? []).toEqual([]);
+  });
+});
+
+describe("filterActiveLineThreads", () => {
+  const HUNK_A = "cs1/web/src/state.ts#hA";
+  const diffLine: DiffLine = { kind: "add", text: "x", newNo: 10 };
+  // 4 lines so a block can span 0..3 with the cursor strictly mid-range.
+  const hunks = [
+    { id: HUNK_A, lines: [diffLine, diffLine, diffLine, diffLine] },
+  ];
+
+  it("keeps an in-range block when the cursor is mid-range, drops a non-active line comment", () => {
+    // Block thread spans lines 0..3; cursor sits on line 1 — strictly inside
+    // the range, neither lo (0) nor hi (3). A separate line comment lives on
+    // line 2, which the cursor is not on.
+    const blockKey = blockCommentKey(HUNK_A, 0, 3, "blk");
+    const lineKey = userCommentKey(HUNK_A, 2, "lc");
+    const cursor: Cursor = {
+      changesetId: "cs1",
+      fileId: "f1",
+      hunkId: HUNK_A,
+      lineIdx: 1,
+    };
+    const projection = buildLineThreadsProjection({
+      hunks,
+      cursor,
+      acked: new Set(),
+      replies: { [blockKey]: [reply("a")], [lineKey]: [reply("b")] },
+      draftingKey: null,
+    });
+
+    // The block row's isCurrent is true (cursor within range); the line
+    // comment's isCurrent is false (cursor not on line 2).
+    const blockEntry = projection.find((e) => e.lineIdx === 3);
+    const lineEntry = projection.find((e) => e.lineIdx === 2);
+    expect(blockEntry?.userCommentRows[0]?.isCurrent).toBe(true);
+    expect(lineEntry?.userCommentRows[0]?.isCurrent).toBe(false);
+
+    const filtered = filterActiveLineThreads(projection);
+
+    // The block entry survives, still anchored at its hi line (3), still
+    // carrying the block row. The non-active line-comment entry is dropped.
+    expect(filtered.map((e) => e.lineIdx)).toEqual([3]);
+    const kept = filtered[0];
+    expect(kept.hunkId).toBe(HUNK_A);
+    expect(kept.userCommentRows.map((r) => r.threadKey)).toEqual([blockKey]);
+  });
+
+  it("drops entries whose only rows are non-active", () => {
+    const lineKey = userCommentKey(HUNK_A, 2, "lc");
+    const cursor: Cursor = {
+      changesetId: "cs1",
+      fileId: "f1",
+      hunkId: HUNK_A,
+      lineIdx: 0,
+    };
+    const projection = buildLineThreadsProjection({
+      hunks,
+      cursor,
+      acked: new Set(),
+      replies: { [lineKey]: [reply("b")] },
+      draftingKey: null,
+    });
+    expect(filterActiveLineThreads(projection)).toEqual([]);
   });
 });

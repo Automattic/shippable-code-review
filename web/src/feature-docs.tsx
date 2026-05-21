@@ -386,12 +386,14 @@ function WorkspaceFrame({
               onJumpToBlock={() => {}}
               onToggleAck={() => {}}
               onStartDraft={() => {}}
+              onStartNewComment={() => {}}
               onCloseDraft={() => {}}
               onChangeDraft={() => {}}
               onSubmitReply={() => {}}
               onDeleteReply={() => {}}
               onRetryReply={() => {}}
               onVerifyAiNote={() => {}}
+              interactionsShownInline={false}
             />
           )}
         </div>

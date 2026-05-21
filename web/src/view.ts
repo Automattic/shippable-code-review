@@ -15,13 +15,12 @@ import type {
   FileStatus,
   Interaction,
   LineSelection,
+  ParsedReplyKey,
 } from "./types";
 import {
   lineNoteReplyKey,
   hunkSummaryReplyKey,
   teammateReplyKey,
-  userCommentKey,
-  blockCommentKey,
   parseReplyKey,
 } from "./types";
 import { hunkCoverage, fileCoverage } from "./state";
@@ -321,11 +320,21 @@ export function buildDiffViewModel({
           ? Math.max(selForHunk.anchor, selForHunk.head)
           : -1;
 
+        // Lines carrying at least one user comment thread — prefix-scan
+        // `user:<hunkId>:<lineIdx>:<id>` keys, since the id segment makes
+        // each comment its own key.
+        const userCommentLines = new Set<number>();
+        for (const [k, list] of Object.entries(replies)) {
+          if ((list?.length ?? 0) === 0) continue;
+          const parsed = parseReplyKey(k);
+          if (parsed?.kind === "user" && parsed.hunkId === hunk.id)
+            userCommentLines.add(parsed.lineIdx);
+        }
+
         // Build per-line view models.
         const lines: DiffLineViewModel[] = hunk.lines.map((line, i) => {
           const isAcked = acked.has(`${hunk.id}:${i}`);
-          const hasUserComment =
-            (replies[userCommentKey(hunk.id, i)]?.length ?? 0) > 0;
+          const hasUserComment = userCommentLines.has(i);
           const aiNote = aiNoteByLine[`${hunk.id}:${i}`];
           const sev = aiNote?.severity;
 
@@ -853,9 +862,11 @@ export interface InspectorViewModel {
   userCommentRows: UserCommentRowItem[];
   /** Whether a new-thread button should be shown for the current line. */
   showNewCommentCta: boolean;
-  /** Key and display info for the current-line new-comment CTA. */
-  currentLineCommentKey: string;
+  /** 1-based line number of the cursor line (for the "+ comment on L…" CTA). */
   currentLineNo: number;
+  /** Cursor hunk + line — the "+ comment" CTA mints a fresh thread key here. */
+  cursorHunkId: string;
+  cursorLineIdx: number;
   /** True when a draft is open on the current line but no thread exists yet. */
   showDraftStub: boolean;
   draftStubRow: UserCommentRowItem | null;
@@ -926,6 +937,87 @@ export interface BuildInspectorViewModelArgs {
   detachedInteractions?: DetachedInteraction[];
 }
 
+/** Context shared by the row builders below — the bits both call sites read. */
+interface RowBuildContext {
+  cursor: Cursor;
+  acked: Set<string>;
+  replies: Record<string, Interaction[]>;
+  draftingKey: string | null;
+}
+
+/**
+ * Build one `AiNoteRowItem` from a noted line. Shared by
+ * `buildInspectorViewModel` and `buildLineThreadsProjection` so the two
+ * row shapes can't drift.
+ */
+function buildAiNoteRow(
+  hunk: { id: string; lines: DiffLine[] },
+  lineIdx: number,
+  note: AiNote,
+  { cursor, acked, replies, draftingKey }: RowBuildContext,
+): AiNoteRowItem {
+  const l = hunk.lines[lineIdx];
+  const rkey = lineNoteReplyKey(hunk.id, lineIdx);
+  return {
+    lineIdx,
+    lineNo: l?.newNo ?? l?.oldNo ?? lineIdx + 1,
+    severity: note.severity,
+    sevGlyph:
+      note.severity === "warning" ? "!" :
+      note.severity === "question" ? "?" : "i",
+    summary: note.summary,
+    detail: note.detail,
+    isAcked: acked.has(`${hunk.id}:${lineIdx}`),
+    isCurrent: hunk.id === cursor.hunkId && lineIdx === cursor.lineIdx,
+    replyKey: rkey,
+    replies: replies[rkey] ?? [],
+    isDrafting: draftingKey === rkey,
+    jumpTarget: { ...cursor, hunkId: hunk.id, lineIdx },
+    runRecipe: note.runRecipe,
+  };
+}
+
+/**
+ * Build one `UserCommentRowItem` from a parsed `user:`/`block:` key. Shared
+ * by `buildInspectorViewModel` and `buildLineThreadsProjection`. Draft policy
+ * (which keys to scan) lives at the call site, not here.
+ */
+function buildUserCommentRow(
+  parsed: Extract<ParsedReplyKey, { kind: "user" | "block" }>,
+  hunk: { id: string; lines: DiffLine[] },
+  threadKey: string,
+  { cursor, replies, draftingKey }: RowBuildContext,
+): UserCommentRowItem {
+  if (parsed.kind === "user") {
+    const l = hunk.lines[parsed.lineIdx];
+    return {
+      lineIdx: parsed.lineIdx,
+      lineNo: l?.newNo ?? l?.oldNo ?? parsed.lineIdx + 1,
+      threadKey,
+      replies: replies[threadKey] ?? [],
+      isDrafting: draftingKey === threadKey,
+      isCurrent: hunk.id === cursor.hunkId && parsed.lineIdx === cursor.lineIdx,
+      jumpTarget: { ...cursor, hunkId: hunk.id, lineIdx: parsed.lineIdx },
+    };
+  }
+  const loLine = hunk.lines[parsed.lo];
+  const hiLine = hunk.lines[parsed.hi];
+  return {
+    lineIdx: parsed.lo,
+    lineNo: loLine?.newNo ?? loLine?.oldNo ?? parsed.lo + 1,
+    rangeHiLineIdx: parsed.hi,
+    rangeHiLineNo: hiLine?.newNo ?? hiLine?.oldNo ?? parsed.hi + 1,
+    threadKey,
+    replies: replies[threadKey] ?? [],
+    isDrafting: draftingKey === threadKey,
+    isCurrent:
+      hunk.id === cursor.hunkId &&
+      cursor.lineIdx >= parsed.lo &&
+      cursor.lineIdx <= parsed.hi,
+    jumpTarget: { ...cursor, hunkId: hunk.id, lineIdx: parsed.lo },
+  };
+}
+
 export function buildInspectorViewModel({
   file,
   hunk,
@@ -950,29 +1042,10 @@ export function buildInspectorViewModel({
     .map((l, i) => ({ l, i, note: aiNoteByLine[`${hunk.id}:${i}`] }))
     .filter((entry): entry is { l: DiffLine; i: number; note: AiNote } => !!entry.note);
 
-  const aiNoteRows: AiNoteRowItem[] = noteLinesWithIdx.map(({ l, i, note }) => {
-    const rkey = lineNoteReplyKey(hunk.id, i);
-    const noteLineNo = l.newNo ?? l.oldNo ?? i + 1;
-    const isAcked = acked.has(`${hunk.id}:${i}`);
-    const glyph =
-      note.severity === "warning" ? "!" :
-      note.severity === "question" ? "?" : "i";
-    return {
-      lineIdx: i,
-      lineNo: noteLineNo,
-      severity: note.severity,
-      sevGlyph: glyph,
-      summary: note.summary,
-      detail: note.detail,
-      isAcked,
-      isCurrent: i === cursor.lineIdx,
-      replyKey: rkey,
-      replies: replies[rkey] ?? [],
-      isDrafting: draftingKey === rkey,
-      jumpTarget: { ...cursor, hunkId: hunk.id, lineIdx: i },
-      runRecipe: note.runRecipe,
-    };
-  });
+  const rowCtx: RowBuildContext = { cursor, acked, replies, draftingKey };
+  const aiNoteRows: AiNoteRowItem[] = noteLinesWithIdx.map(({ i, note }) =>
+    buildAiNoteRow(hunk, i, note, rowCtx),
+  );
 
   const ackedCount = aiNoteRows.filter((r) => r.isAcked).length;
   const aiNoteCountLabel =
@@ -1027,71 +1100,51 @@ export function buildInspectorViewModel({
     : null;
 
   // ── User comment threads ────────────────────────────────────────────────
-  const curKey = userCommentKey(hunk.id, cursor.lineIdx);
   const curHunkLine = hunk.lines[cursor.lineIdx];
   const currentLineNo =
     curHunkLine?.newNo ?? curHunkLine?.oldNo ?? cursor.lineIdx + 1;
 
-  // All threads that have messages or are currently being drafted
-  const allUserThreads = hunk.lines
-    .map((l, i) => ({ l, i, key: userCommentKey(hunk.id, i) }))
-    .filter(({ key }) => (replies[key]?.length ?? 0) > 0 || draftingKey === key);
+  // A "new-comment draft" — a `user:` draft on the cursor line with no
+  // messages yet. It drives the cursor-line stub, not a normal row, so the
+  // "+ comment" CTA collapses into a composer. Block/line drafts with
+  // messages, or drafts on other lines, are ordinary threads below.
+  const draftParsed = draftingKey ? parseReplyKey(draftingKey) : null;
+  const isNewCommentDraft =
+    !!draftParsed &&
+    draftParsed.kind === "user" &&
+    draftParsed.hunkId === hunk.id &&
+    draftParsed.lineIdx === cursor.lineIdx &&
+    (replies[draftingKey!]?.length ?? 0) === 0;
 
-  const userCommentRows: UserCommentRowItem[] = allUserThreads.map(({ l, i, key }) => {
-    const ucLineNo = l?.newNo ?? l?.oldNo ?? i + 1;
-    return {
-      lineIdx: i,
-      lineNo: ucLineNo,
-      threadKey: key,
-      replies: replies[key] ?? [],
-      isDrafting: draftingKey === key,
-      isCurrent: i === cursor.lineIdx,
-      jumpTarget: { ...cursor, hunkId: hunk.id, lineIdx: i },
-    };
-  });
+  // Every `user:`/`block:` thread anchored in this hunk — prefix-scan
+  // `replies` (and any in-progress `draftingKey`), since the id segment
+  // means a line no longer maps to a single key.
+  const threadKeys = new Set<string>();
+  for (const [k, list] of Object.entries(replies)) {
+    if ((list?.length ?? 0) > 0) threadKeys.add(k);
+  }
+  if (draftingKey && !isNewCommentDraft) threadKeys.add(draftingKey);
 
-  // Block comments — any `block:${hunk.id}:lo-hi` keys in replies, plus an
-  // in-progress draft on such a key.
-  const blockPrefix = blockCommentKey(hunk.id, 0, 0).replace(/0-0$/, "");
-  const blockKeys = new Set<string>();
-  for (const k of Object.keys(replies)) {
-    if (k.startsWith(blockPrefix) && (replies[k]?.length ?? 0) > 0)
-      blockKeys.add(k);
-  }
-  if (draftingKey && draftingKey.startsWith(blockPrefix)) {
-    blockKeys.add(draftingKey);
-  }
-  for (const key of blockKeys) {
-    const tail = key.slice(blockPrefix.length);
-    const [loStr, hiStr] = tail.split("-");
-    const lo = parseInt(loStr, 10);
-    const hi = parseInt(hiStr, 10);
-    if (Number.isNaN(lo) || Number.isNaN(hi)) continue;
-    const loLine = hunk.lines[lo];
-    const hiLine = hunk.lines[hi];
-    userCommentRows.push({
-      lineIdx: lo,
-      lineNo: loLine?.newNo ?? loLine?.oldNo ?? lo + 1,
-      rangeHiLineIdx: hi,
-      rangeHiLineNo: hiLine?.newNo ?? hiLine?.oldNo ?? hi + 1,
-      threadKey: key,
-      replies: replies[key] ?? [],
-      isDrafting: draftingKey === key,
-      isCurrent: cursor.lineIdx >= lo && cursor.lineIdx <= hi,
-      jumpTarget: { ...cursor, hunkId: hunk.id, lineIdx: lo },
-    });
+  // The new-comment draft key is excluded from `threadKeys` above — it drives
+  // the draft stub, not an ordinary row — so every key here builds a real row.
+  const userCommentRows: UserCommentRowItem[] = [];
+  for (const key of threadKeys) {
+    const parsed = parseReplyKey(key);
+    // userFile/blockFile keys are file-anchored, not hunk-line threads.
+    if (!parsed || (parsed.kind !== "user" && parsed.kind !== "block")) continue;
+    if (parsed.hunkId !== hunk.id) continue;
+    userCommentRows.push(buildUserCommentRow(parsed, hunk, key, rowCtx));
   }
   userCommentRows.sort((a, b) => a.lineIdx - b.lineIdx);
 
-  const curHasThread = userCommentRows.some((r) => r.threadKey === curKey);
-  const showNewCommentCta = !curHasThread && draftingKey !== curKey;
-  const showDraftStub = !curHasThread && draftingKey === curKey;
+  const showNewCommentCta = !isNewCommentDraft;
+  const showDraftStub = isNewCommentDraft;
 
-  const draftStubRow: UserCommentRowItem | null = showDraftStub
+  const draftStubRow: UserCommentRowItem | null = isNewCommentDraft
     ? {
         lineIdx: cursor.lineIdx,
         lineNo: currentLineNo,
-        threadKey: curKey,
+        threadKey: draftingKey!,
         replies: [],
         isDrafting: true,
         isCurrent: true,
@@ -1187,11 +1240,157 @@ export function buildInspectorViewModel({
     userCommentCountLabel,
     userCommentRows,
     showNewCommentCta,
-    currentLineCommentKey: curKey,
     currentLineNo,
+    cursorHunkId: hunk.id,
+    cursorLineIdx: cursor.lineIdx,
     showDraftStub,
     draftStubRow,
 
     detachedThreads,
   };
+}
+
+/**
+ * Threads anchored to one diff line: the AI note(s) and user-comment thread(s)
+ * whose anchor is `(hunkId, lineIdx)`. `isCursor` marks the cursor line — its
+ * inline block additionally carries the "+ comment" CTA / draft composer,
+ * which come from the cursor-scoped `InspectorViewModel`, not from here.
+ */
+export interface LineThreadsEntry {
+  hunkId: string;
+  lineIdx: number;
+  isCursor: boolean;
+  aiNoteRows: AiNoteRowItem[];
+  userCommentRows: UserCommentRowItem[];
+}
+
+/**
+ * Per-line thread projection covering every hunk of one file. Unlike
+ * `buildInspectorViewModel` (cursor-hunk only), this lets the inline render
+ * mount a thread block under any line, anywhere in the diff. Pure function
+ * of the file's hunks + interaction state.
+ */
+export type LineThreadsProjection = LineThreadsEntry[];
+
+export interface BuildLineThreadsProjectionArgs {
+  /** Every hunk of the file shown in DiffView. */
+  hunks: { id: string; lines: DiffLine[] }[];
+  cursor: Cursor;
+  acked: Set<string>;
+  replies: Record<string, Interaction[]>;
+  draftingKey: string | null;
+  signals?: IngestSignals;
+}
+
+/**
+ * Build the per-line thread projection for a whole file. Walks every hunk's
+ * AI-note signals and every `user:`/`block:` thread, bucketing them by
+ * anchor line. Block threads anchor to their `hi` (last) line. Empty lines
+ * are omitted — only lines with at least one thread appear.
+ */
+export function buildLineThreadsProjection({
+  hunks,
+  cursor,
+  acked,
+  replies,
+  draftingKey,
+  signals,
+}: BuildLineThreadsProjectionArgs): LineThreadsProjection {
+  const aiNoteByLine = signals?.aiNoteByLine ?? {};
+  const byLine = new Map<string, LineThreadsEntry>();
+
+  const entryFor = (hunkId: string, lineIdx: number): LineThreadsEntry => {
+    const mapKey = `${hunkId}:${lineIdx}`;
+    let entry = byLine.get(mapKey);
+    if (!entry) {
+      entry = {
+        hunkId,
+        lineIdx,
+        isCursor: hunkId === cursor.hunkId && lineIdx === cursor.lineIdx,
+        aiNoteRows: [],
+        userCommentRows: [],
+      };
+      byLine.set(mapKey, entry);
+    }
+    return entry;
+  };
+
+  const rowCtx: RowBuildContext = { cursor, acked, replies, draftingKey };
+
+  for (const hunk of hunks) {
+    // AI notes — one per noted line.
+    hunk.lines.forEach((_l, i) => {
+      const note = aiNoteByLine[`${hunk.id}:${i}`];
+      if (!note) return;
+      entryFor(hunk.id, i).aiNoteRows.push(buildAiNoteRow(hunk, i, note, rowCtx));
+    });
+  }
+
+  // User comment threads — prefix-scan every `user:`/`block:` key (plus an
+  // open draft) and bucket by anchor line. A line no longer maps to a single
+  // key, so a scan is the only way to find every thread.
+  const hunkById = new Map(hunks.map((h) => [h.id, h]));
+  const threadKeys = new Set<string>();
+  for (const [k, list] of Object.entries(replies)) {
+    if ((list?.length ?? 0) > 0) threadKeys.add(k);
+  }
+  // Skip an empty new-comment draft on the cursor line: it drives the inline
+  // composer (sourced from the cursor InspectorViewModel), not an ordinary
+  // row — including it here would render a stray empty card. Mirrors
+  // `buildInspectorViewModel`'s `isNewCommentDraft` exclusion.
+  const draftParsed = draftingKey ? parseReplyKey(draftingKey) : null;
+  const isNewCommentDraft =
+    !!draftParsed &&
+    draftParsed.kind === "user" &&
+    draftParsed.hunkId === cursor.hunkId &&
+    draftParsed.lineIdx === cursor.lineIdx &&
+    (replies[draftingKey!]?.length ?? 0) === 0;
+  if (draftingKey && !isNewCommentDraft) threadKeys.add(draftingKey);
+
+  for (const key of threadKeys) {
+    const parsed = parseReplyKey(key);
+    // userFile/blockFile keys are file-anchored, not hunk-line threads.
+    if (!parsed || (parsed.kind !== "user" && parsed.kind !== "block")) continue;
+    const hunk = hunkById.get(parsed.hunkId);
+    if (!hunk) continue;
+    // A block thread has no single line — anchor it to its last line (hi)
+    // so the projection and the cursor-line render agree. Line threads
+    // keep their single anchor line.
+    const anchorLine = parsed.kind === "block" ? parsed.hi : parsed.lineIdx;
+    entryFor(hunk.id, anchorLine).userCommentRows.push(
+      buildUserCommentRow(parsed, hunk, key, rowCtx),
+    );
+  }
+
+  for (const entry of byLine.values()) {
+    entry.aiNoteRows.sort((a, b) => a.lineIdx - b.lineIdx);
+    entry.userCommentRows.sort((a, b) =>
+      a.threadKey.localeCompare(b.threadKey),
+    );
+  }
+  return [...byLine.values()].sort(
+    (a, b) =>
+      a.hunkId.localeCompare(b.hunkId) || a.lineIdx - b.lineIdx,
+  );
+}
+
+/**
+ * Narrow a line-threads projection to cursor-active threads — used when
+ * "hide non-active comments" is on. `row.isCurrent` already encodes
+ * "active": the cursor is on the line (AI note / line comment) or within
+ * the range (block comment). Entries left with no active rows are dropped;
+ * a kept block row still lives in its `hi`-line entry, so an active block
+ * renders at the hunk's last line.
+ */
+export function filterActiveLineThreads(
+  projection: LineThreadsProjection,
+): LineThreadsProjection {
+  const out: LineThreadsProjection = [];
+  for (const entry of projection) {
+    const aiNoteRows = entry.aiNoteRows.filter((r) => r.isCurrent);
+    const userCommentRows = entry.userCommentRows.filter((r) => r.isCurrent);
+    if (aiNoteRows.length === 0 && userCommentRows.length === 0) continue;
+    out.push({ ...entry, aiNoteRows, userCommentRows });
+  }
+  return out;
 }

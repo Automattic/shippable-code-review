@@ -16,7 +16,8 @@ describe("CommandPalette", () => {
     );
 
     expect(screen.getByText("see keybindings")).toBeTruthy();
-    expect(screen.getByText("toggle AI inspector")).toBeTruthy();
+    expect(screen.getByText("toggle the inspector")).toBeTruthy();
+    expect(screen.getByText("toggle inline comments")).toBeTruthy();
     expect(screen.getByText("where to start (plan)")).toBeTruthy();
     expect(screen.getByText("load a changeset (URL / file / paste)")).toBeTruthy();
     expect(screen.getByText("open the free code runner")).toBeTruthy();

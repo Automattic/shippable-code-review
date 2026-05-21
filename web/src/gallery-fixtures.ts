@@ -297,7 +297,7 @@ export const fixtureTeammateEndorsed: GalleryFixture = {
 const blockHunkId = storageH2.id; // "cs-42/src/utils/storage.ts#h2"
 const BLOCK_LO = 6;
 const BLOCK_HI = 11;
-const blockKey = blockCommentKey(blockHunkId, BLOCK_LO, BLOCK_HI);
+const blockKey = blockCommentKey(blockHunkId, BLOCK_LO, BLOCK_HI, "c1");
 const blockSelectionBase = initialState([cs42]);
 
 export const fixtureBlockSelection: ReviewState = {

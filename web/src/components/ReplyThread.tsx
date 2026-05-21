@@ -65,15 +65,22 @@ export function ReplyThread({
 }: Props) {
   // The Inspector card above the thread already shows ingest-sourced
   // heads (AI note, AI hunk summary, teammate review); skip them here so
-  // they don't render twice. User-authored thread heads (line/block) are
-  // kept — those *are* the first reply in the thread view.
-  // Teammate verdicts are now `authorRole: "user"`; they're identified
-  // structurally as the head of a `teammate:` thread (target !== "reply").
+  // they don't render twice. Teammate verdicts are identified structurally
+  // as the head of a `teammate:` thread (target !== "reply").
   const rows = interactions.filter((ix) => {
     if (ix.authorRole === "ai") return false;
     if (ix.threadKey.startsWith("teammate:") && ix.target !== "reply") return false;
     return true;
   });
+
+  // Split rows into the thread head (user comment, target line/block) and its
+  // nested replies (target "reply"). When there is no head in rows — note/
+  // teammate threads whose head was filtered out above, or drafting states —
+  // fall back to the flat reply list so those paths are unchanged.
+  const headIx = rows.find(
+    (ix) => ix.target === "line" || ix.target === "block",
+  ) ?? null;
+  const replyRows = headIx ? rows.filter((ix) => ix !== headIx) : rows;
 
   // Inline two-step delete: clicking "× delete" arms the row instead of
   // popping a native browser confirm() that breaks focus and looks foreign.
@@ -93,97 +100,127 @@ export function ReplyThread({
       </div>
     );
   }
+
+  function renderUserRow(ix: Interaction, asItem = true) {
+    const isDelivered =
+      ix.agentQueueStatus === "delivered" || !!deliveredById?.[ix.id];
+    const deleteTitle = isDelivered
+      ? "the agent already saw this; deleting only removes it from your view."
+      : "delete reply";
+    const isExternal = ix.external?.source === "pr";
+    const children = (
+      <>
+        <div className="reply__head">
+          <span className="reply__author">@{ix.author}</span>
+          <span className="reply__sep">·</span>
+          <span className="reply__time">{timeAgo(ix.createdAt)}</span>
+          {isExternal ? (
+            <a
+              className="reply__external"
+              href={ix.external!.htmlUrl}
+              onClick={(e) => {
+                e.preventDefault();
+                void openExternal(ix.external!.htmlUrl);
+              }}
+              title="Open on GitHub"
+            >
+              ↗ GitHub
+            </a>
+          ) : (
+            <>
+              <ReplyPip
+                ix={ix}
+                deliveredById={deliveredById}
+                onRetry={onRetryReply ? () => onRetryReply(ix.id) : undefined}
+              />
+              {ix.author === "you" &&
+                (armedDeleteId === ix.id ? (
+                  <span
+                    className="reply__confirm"
+                    role="group"
+                    aria-label="confirm delete"
+                  >
+                    <span className="reply__confirm-q">delete?</span>
+                    <button
+                      type="button"
+                      className="reply__confirm-yes"
+                      onClick={() => {
+                        setArmedDeleteId(null);
+                        onDeleteReply(ix.id);
+                      }}
+                      autoFocus
+                    >
+                      yes
+                    </button>
+                    <button
+                      type="button"
+                      className="reply__confirm-no"
+                      onClick={() => setArmedDeleteId(null)}
+                    >
+                      cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    className="reply__delete"
+                    onClick={() => setArmedDeleteId(ix.id)}
+                    title={deleteTitle}
+                  >
+                    × delete
+                  </button>
+                ))}
+            </>
+          )}
+        </div>
+        <div className="reply__body">
+          <RichText text={ix.body} symbols={symbols} onJump={onJump} />
+        </div>
+      </>
+    );
+    // The head is a <div> (not a list item), so it has a valid parent in context;
+    // replies inside <ul> stay as <li> for correct list semantics.
+    return asItem ? (
+      <li key={ix.id} className="reply">
+        {children}
+      </li>
+    ) : (
+      <div key={ix.id} className="reply">
+        {children}
+      </div>
+    );
+  }
+
+  function renderRow(ix: Interaction) {
+    if (ix.authorRole === "agent") {
+      return <AgentRow key={ix.id} ix={ix} symbols={symbols} onJump={onJump} />;
+    }
+    return renderUserRow(ix);
+  }
+
   return (
     <div className="thread">
-      {rows.length > 0 && (
-        <div className="thread__label">replies ({rows.length})</div>
+      {headIx ? (
+        // Two-level layout: head comment rendered distinctly, replies nested.
+        <>
+          <div className="thread__head">{renderUserRow(headIx, false)}</div>
+          {replyRows.length > 0 && (
+            <>
+              <div className="thread__label">replies ({replyRows.length})</div>
+              <ul className="thread__list thread__list--replies">
+                {replyRows.map(renderRow)}
+              </ul>
+            </>
+          )}
+        </>
+      ) : (
+        // No-head path: note/teammate threads (head filtered out) — render flat.
+        <>
+          {replyRows.length > 0 && (
+            <div className="thread__label">replies ({replyRows.length})</div>
+          )}
+          <ul className="thread__list">{replyRows.map(renderRow)}</ul>
+        </>
       )}
-      <ul className="thread__list">
-        {rows.map((ix) => {
-          if (ix.authorRole === "agent") {
-            return (
-              <AgentRow key={ix.id} ix={ix} symbols={symbols} onJump={onJump} />
-            );
-          }
-          // user-authored entry
-          const isDelivered =
-            ix.agentQueueStatus === "delivered" || !!deliveredById?.[ix.id];
-          const deleteTitle = isDelivered
-            ? "the agent already saw this; deleting only removes it from your view."
-            : "delete reply";
-          const isExternal = ix.external?.source === "pr";
-          return (
-            <li key={ix.id} className="reply">
-              <div className="reply__head">
-                <span className="reply__author">@{ix.author}</span>
-                <span className="reply__sep">·</span>
-                <span className="reply__time">{timeAgo(ix.createdAt)}</span>
-                {isExternal ? (
-                  <a
-                    className="reply__external"
-                    href={ix.external!.htmlUrl}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      void openExternal(ix.external!.htmlUrl);
-                    }}
-                    title="Open on GitHub"
-                  >
-                    ↗ GitHub
-                  </a>
-                ) : (
-                  <>
-                    <ReplyPip
-                      ix={ix}
-                      deliveredById={deliveredById}
-                      onRetry={onRetryReply ? () => onRetryReply(ix.id) : undefined}
-                    />
-                    {ix.author === "you" && (
-                      armedDeleteId === ix.id ? (
-                        <span
-                          className="reply__confirm"
-                          role="group"
-                          aria-label="confirm delete"
-                        >
-                          <span className="reply__confirm-q">delete?</span>
-                          <button
-                            type="button"
-                            className="reply__confirm-yes"
-                            onClick={() => {
-                              setArmedDeleteId(null);
-                              onDeleteReply(ix.id);
-                            }}
-                            autoFocus
-                          >
-                            yes
-                          </button>
-                          <button
-                            type="button"
-                            className="reply__confirm-no"
-                            onClick={() => setArmedDeleteId(null)}
-                          >
-                            cancel
-                          </button>
-                        </span>
-                      ) : (
-                        <button
-                          className="reply__delete"
-                          onClick={() => setArmedDeleteId(ix.id)}
-                          title={deleteTitle}
-                        >
-                          × delete
-                        </button>
-                      )
-                    )}
-                  </>
-                )}
-              </div>
-              <div className="reply__body">
-                <RichText text={ix.body} symbols={symbols} onJump={onJump} />
-              </div>
-            </li>
-          );
-        })}
-      </ul>
       {isDrafting ? (
         <Composer
           body={draftBody}

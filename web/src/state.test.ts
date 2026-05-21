@@ -194,6 +194,7 @@ import {
   blockCommentKey,
   lineNoteReplyKey,
   noteKey,
+  parseReplyKey,
   userCommentKey,
 } from "./types";
 
@@ -464,10 +465,10 @@ function csWithComments(): {
       ],
     },
     mkUserInteractionMap({
-      [userCommentKey("cs1/f2#h1", 0)]: [dummyReply("r1")],
-      [blockCommentKey("cs1/f1#h2", 1, 2)]: [dummyReply("r2")],
+      [userCommentKey("cs1/f2#h1", 0, "c1")]: [dummyReply("r1")],
+      [blockCommentKey("cs1/f1#h2", 1, 2, "c1")]: [dummyReply("r2")],
       // Empty array — should be ignored (no actual comment).
-      [userCommentKey("cs1/f1#h1", 2)]: [],
+      [userCommentKey("cs1/f1#h1", 2, "c1")]: [],
     }),
   );
   return { cs, interactions };
@@ -741,7 +742,7 @@ describe("RELOAD_CHANGESET", () => {
     const file = makeReloadFile(fileId, filePath, hunkId, texts);
     const cs = makeChangeset(csId, [file]);
     let s = initialState([cs]);
-    const key = `user:${hunkId}:${lineIdx}`;
+    const key = userCommentKey(hunkId, lineIdx, "c1");
     const cap = captureAnchorContext(file.hunks[0].lines, lineIdx);
     s = reducer(
       s,
@@ -779,8 +780,8 @@ describe("RELOAD_CHANGESET", () => {
       prevChangesetId: "cs-old",
       changeset: reloaded,
     });
-    expect(Object.keys(viewReplies(s))).toEqual([`user:f1-new#h1:2`]);
-    expect(viewReplies(s)[`user:f1-new#h1:2`]).toHaveLength(1);
+    expect(Object.keys(viewReplies(s))).toEqual([`user:f1-new#h1:2:c1`]);
+    expect(viewReplies(s)[`user:f1-new#h1:2:c1`]).toHaveLength(1);
     expect(viewDetached(s)).toEqual([]);
     // Cursor moved to the new changeset (file 0 since the file path matched).
     expect(s.cursor.changesetId).toBe("cs-new");
@@ -805,7 +806,7 @@ describe("RELOAD_CHANGESET", () => {
       prevChangesetId: "cs-old",
       changeset: reloaded,
     });
-    expect(Object.keys(viewReplies(s))).toEqual([`user:f1-new#h1:4`]);
+    expect(Object.keys(viewReplies(s))).toEqual([`user:f1-new#h1:4:c1`]);
     expect(viewDetached(s)).toEqual([]);
   });
 
@@ -830,7 +831,7 @@ describe("RELOAD_CHANGESET", () => {
     expect(viewReplies(s)).toEqual({});
     expect(viewDetached(s)).toHaveLength(1);
     expect(viewDetached(s)[0].reply.id).toBe("r1");
-    expect(viewDetached(s)[0].threadKey).toBe(`user:f1#h1:2`);
+    expect(viewDetached(s)[0].threadKey).toBe(`user:f1#h1:2:c1`);
   });
 
   it("detaches when the file the reply was anchored to no longer exists", () => {
@@ -892,7 +893,7 @@ describe("RELOAD_CHANGESET", () => {
       "a", "b", "anchor", "c", "d",
     ]);
     const oldCs = makeChangeset("cs-old", [oldFile]);
-    const key = `user:f1#h1:2`;
+    const key = userCommentKey("f1#h1", 2, "c1");
     const prReply: UserInteractionLiteral = {
       id: "pr-comment:42",
       author: "external-reviewer",
@@ -917,8 +918,8 @@ describe("RELOAD_CHANGESET", () => {
       prevChangesetId: "cs-old",
       changeset: reloaded,
     });
-    expect(Object.keys(viewReplies(s))).toEqual([`user:f1-new#h1:2`]);
-    expect(viewReplies(s)[`user:f1-new#h1:2`]).toEqual([prReply]);
+    expect(Object.keys(viewReplies(s))).toEqual([`user:f1-new#h1:2:c1`]);
+    expect(viewReplies(s)[`user:f1-new#h1:2:c1`]).toEqual([prReply]);
     expect(viewDetached(s)).toEqual([]);
   });
 });
@@ -1464,7 +1465,13 @@ describe("MERGE_AGENT_REPLIES — top-level entries", () => {
       type: "MERGE_AGENT_REPLIES",
       polled: [topLevel({ id: "ag_1", file: "src/foo.ts", lines: "7" })],
     });
-    const key = userCommentKey("cs1/f1#h1", 2); // lineNo 7 → lineIdx 2
+    // The thread key carries a freshly-minted id segment — locate it by
+    // parsing rather than reconstructing the literal.
+    const keys = Object.keys(merged.interactions);
+    expect(keys).toHaveLength(1);
+    const key = keys[0];
+    const parsed = parseReplyKey(key);
+    expect(parsed).toMatchObject({ kind: "user", hunkId: "cs1/f1#h1", lineIdx: 2 });
     expect(merged.interactions[key]).toHaveLength(1);
     expect(merged.interactions[key][0]).toMatchObject({
       id: "ag_1",
@@ -1480,7 +1487,15 @@ describe("MERGE_AGENT_REPLIES — top-level entries", () => {
       type: "MERGE_AGENT_REPLIES",
       polled: [topLevel({ id: "ag_2", file: "src/foo.ts", lines: "6-8" })],
     });
-    const key = blockCommentKey("cs1/f1#h1", 1, 3);
+    const keys = Object.keys(merged.interactions);
+    expect(keys).toHaveLength(1);
+    const key = keys[0];
+    expect(parseReplyKey(key)).toMatchObject({
+      kind: "block",
+      hunkId: "cs1/f1#h1",
+      lo: 1,
+      hi: 3,
+    });
     expect(merged.interactions[key]).toHaveLength(1);
     expect(merged.interactions[key][0]).toMatchObject({
       id: "ag_2",
@@ -1515,6 +1530,16 @@ describe("MERGE_AGENT_REPLIES — top-level entries", () => {
     const s1 = reducer(s, { type: "MERGE_AGENT_REPLIES", polled: [dup] });
     const s2 = reducer(s1, { type: "MERGE_AGENT_REPLIES", polled: [dup] });
     expect(s2.detachedInteractions).toHaveLength(1);
+  });
+
+  it("keeps a resolved top-level entry idempotent across repeated polls", () => {
+    const s = initialState([csForTopLevel()]);
+    const dup = topLevel({ id: "ag_6", file: "src/foo.ts", lines: "7" });
+    const s1 = reducer(s, { type: "MERGE_AGENT_REPLIES", polled: [dup] });
+    const s2 = reducer(s1, { type: "MERGE_AGENT_REPLIES", polled: [dup] });
+    const keys = Object.keys(s2.interactions);
+    expect(keys).toHaveLength(1);
+    expect(s2.interactions[keys[0]]).toHaveLength(1);
   });
 });
 
@@ -1950,7 +1975,7 @@ describe("MERGE_PR_REPLIES", () => {
 
   it("installs new external replies under the given keys", () => {
     const state = initialState([defaultChangeset()]);
-    const key = userCommentKey("cs1/f1#h1", 0);
+    const key = userCommentKey("cs1/f1#h1", 0, "c1");
     const next = reducer(state, {
       type: "MERGE_PR_INTERACTIONS",
       changesetId: "cs1",
@@ -1963,7 +1988,7 @@ describe("MERGE_PR_REPLIES", () => {
 
   it("preserves user replies on the same key", () => {
     const cs = defaultChangeset();
-    const key = userCommentKey("cs1/f1#h1", 0);
+    const key = userCommentKey("cs1/f1#h1", 0, "c1");
     const userReply: UserInteractionLiteral = {
       id: "u1",
       author: "luiz",
@@ -1986,7 +2011,7 @@ describe("MERGE_PR_REPLIES", () => {
 
   it("removes prior PR-sourced replies before installing new ones (refresh idempotent)", () => {
     const cs = defaultChangeset();
-    const key = userCommentKey("cs1/f1#h1", 0);
+    const key = userCommentKey("cs1/f1#h1", 0, "c1");
     const stale = makePrReply("pr-comment:OLD", "stale upstream comment");
     const state = {
       ...initialState([cs]),

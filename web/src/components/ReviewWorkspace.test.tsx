@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
-import { Fragment } from "react";
+import { Fragment, useReducer, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Dispatch } from "react";
 import { ReviewWorkspace } from "./ReviewWorkspace";
 import type { Action } from "../state";
-import type { ChangeSet, PrSource } from "../types";
-import { initialState } from "../state";
+import type { ChangeSet, PrSource, ReviewState } from "../types";
+import { parseReplyKey } from "../types";
+import { initialState, reducer } from "../state";
 import { CredentialsProvider } from "../auth/useCredentials";
 
 const {
@@ -118,7 +119,13 @@ vi.mock("./HelpOverlay", () => ({
 }));
 
 vi.mock("./Inspector", () => ({
-  Inspector: () => null,
+  Inspector: ({ interactionsShownInline }: { interactionsShownInline: boolean }) => (
+    <aside aria-label="inspector">
+      {interactionsShownInline
+        ? <p>Comments are shown inline in the diff.</p>
+        : <section className="notes-body">thread body</section>}
+    </aside>
+  ),
 }));
 
 vi.mock("./LoadModal", () => ({
@@ -304,7 +311,7 @@ function renderPrWorkspace(over: Partial<{ dispatch: Dispatch<Action> }> = {}) {
   const state = initialState([cs]);
   const dispatch: Dispatch<Action> = over.dispatch ?? vi.fn();
 
-  render(
+  const { container } = render(
     <CredentialsProvider>
       <ReviewWorkspace
         state={state}
@@ -320,7 +327,7 @@ function renderPrWorkspace(over: Partial<{ dispatch: Dispatch<Action> }> = {}) {
     </CredentialsProvider>,
   );
 
-  return { state, dispatch };
+  return { state, dispatch, container };
 }
 
 describe("ReviewWorkspace — PR topbar", () => {
@@ -564,6 +571,184 @@ describe("ReviewWorkspace — AI off chip", () => {
     renderPrWorkspace();
     await screen.findByRole("button", { name: /settings/i });
     expect(screen.queryByRole("button", { name: /ai off/i })).toBeNull();
+  });
+});
+
+describe("ReviewWorkspace — inspector visibility", () => {
+  beforeEach(() => {
+    fetchDefinitionCapabilitiesMock.mockResolvedValue({ languages: [] });
+  });
+
+  it("renders the Inspector panel when showInspector is stored true", () => {
+    window.localStorage.setItem("shippable:show-inspector", "true");
+    renderPrWorkspace();
+    expect(screen.queryByLabelText("inspector")).not.toBeNull();
+  });
+
+  it("omits the Inspector panel when showInspector is stored false", () => {
+    window.localStorage.setItem("shippable:show-inspector", "false");
+    renderPrWorkspace();
+    expect(screen.queryByLabelText("inspector")).toBeNull();
+  });
+
+  it("defaults to showing the Inspector when nothing is stored", () => {
+    renderPrWorkspace();
+    expect(screen.queryByLabelText("inspector")).not.toBeNull();
+  });
+
+  it("hides the Inspector and persists when the inspector topbar action is clicked", () => {
+    renderPrWorkspace();
+    expect(screen.queryByLabelText("inspector")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /inspector/i }));
+    expect(screen.queryByLabelText("inspector")).toBeNull();
+    expect(window.localStorage.getItem("shippable:show-inspector")).toBe(
+      "false",
+    );
+  });
+
+  it("pressing i hides the Inspector via the keybind", () => {
+    renderPrWorkspace();
+    // The plan panel opens by default; close it first so the i guard doesn't block.
+    fireEvent.keyDown(window, { key: "p" });
+    expect(screen.queryByLabelText("inspector")).not.toBeNull();
+    fireEvent.keyDown(window, { key: "i" });
+    expect(screen.queryByLabelText("inspector")).toBeNull();
+  });
+});
+
+describe("ReviewWorkspace — inline comments", () => {
+  beforeEach(() => {
+    fetchDefinitionCapabilitiesMock.mockResolvedValue({ languages: [] });
+  });
+
+  it("renders inline threads in the diff when inlineComments is stored true", () => {
+    window.localStorage.setItem("shippable:inline-comments", "true");
+    const { container } = renderPrWorkspace();
+    expect(container.querySelector(".hunk__inline-threads")).not.toBeNull();
+  });
+
+  it("keeps inline threads out of the diff when inlineComments is off (default)", () => {
+    const { container } = renderPrWorkspace();
+    expect(container.querySelector(".hunk__inline-threads")).toBeNull();
+  });
+
+  it("pressing ⇧i shows inline threads via the keybind", () => {
+    const { container } = renderPrWorkspace();
+    fireEvent.keyDown(window, { key: "p" });
+    expect(container.querySelector(".hunk__inline-threads")).toBeNull();
+    fireEvent.keyDown(window, { key: "I", shiftKey: true });
+    expect(container.querySelector(".hunk__inline-threads")).not.toBeNull();
+    expect(window.localStorage.getItem("shippable:inline-comments")).toBe(
+      "true",
+    );
+  });
+
+  it("inspector hidden and inline on are independent", () => {
+    window.localStorage.setItem("shippable:show-inspector", "false");
+    window.localStorage.setItem("shippable:inline-comments", "true");
+    const { container } = renderPrWorkspace();
+    expect(screen.queryByLabelText("inspector")).toBeNull();
+    expect(container.querySelector(".hunk__inline-threads")).not.toBeNull();
+  });
+});
+
+describe("ReviewWorkspace — inspector receives interactionsShownInline", () => {
+  beforeEach(() => {
+    fetchDefinitionCapabilitiesMock.mockResolvedValue({ languages: [] });
+    // Inspector is open by default; ensure it renders
+    window.localStorage.setItem("shippable:show-inspector", "true");
+  });
+
+  it("passes interactionsShownInline=true to Inspector when inlineComments is on", () => {
+    window.localStorage.setItem("shippable:inline-comments", "true");
+    renderPrWorkspace();
+    expect(screen.getByText("Comments are shown inline in the diff.")).toBeTruthy();
+    expect(screen.queryByText("thread body")).toBeNull();
+  });
+
+  it("passes interactionsShownInline=false to Inspector when inlineComments is off", () => {
+    window.localStorage.removeItem("shippable:inline-comments");
+    renderPrWorkspace();
+    expect(screen.queryByText("Comments are shown inline in the diff.")).toBeNull();
+    expect(screen.getByText("thread body")).toBeTruthy();
+  });
+});
+
+// A reducer-backed host: ReviewWorkspace's draft/interaction props are
+// real React state so submitting a comment actually mutates `state`.
+function StatefulWorkspace({
+  onState,
+}: {
+  onState: (s: ReviewState) => void;
+}) {
+  const [state, dispatch] = useReducer(reducer, [fixturePrChangeset()], initialState);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  onState(state);
+  return (
+    <CredentialsProvider>
+      <ReviewWorkspace
+        state={state}
+        dispatch={dispatch}
+        rawDispatch={dispatch}
+        drafts={drafts}
+        setDrafts={setDrafts}
+        themeId="light"
+        setThemeId={() => undefined}
+        onLoadChangeset={() => undefined}
+        currentSource={{ kind: "pr", prUrl: "https://github.com/owner/repo/pull/1" }}
+      />
+    </CredentialsProvider>
+  );
+}
+
+function userThreadKeys(state: ReviewState): string[] {
+  return Object.keys(state.interactions).filter((k) => {
+    const parsed = parseReplyKey(k);
+    return parsed?.kind === "user" && state.interactions[k].length > 0;
+  });
+}
+
+describe("ReviewWorkspace — + comment mints a thread per click", () => {
+  beforeEach(() => {
+    fetchDefinitionCapabilitiesMock.mockResolvedValue({ languages: [] });
+    window.localStorage.setItem("shippable:inline-comments", "true");
+  });
+
+  function submitComment(body: string) {
+    fireEvent.click(screen.getByTitle("comment on this line (c)"));
+    const textarea = screen.getByPlaceholderText("Write a reply…");
+    fireEvent.change(textarea, { target: { value: body } });
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+  }
+
+  it("opens a composer keyed to a fresh user: thread and creates a new thread on submit", () => {
+    let latest: ReviewState = initialState([]);
+    render(<StatefulWorkspace onState={(s) => (latest = s)} />);
+
+    submitComment("first comment");
+
+    const keys = userThreadKeys(latest);
+    expect(keys).toHaveLength(1);
+    expect(parseReplyKey(keys[0])?.kind).toBe("user");
+    expect(latest.interactions[keys[0]]).toHaveLength(1);
+    expect(latest.interactions[keys[0]][0].body).toBe("first comment");
+  });
+
+  it("a second + comment yields a second thread, not a reply into the first", () => {
+    let latest: ReviewState = initialState([]);
+    render(<StatefulWorkspace onState={(s) => (latest = s)} />);
+
+    submitComment("first comment");
+    submitComment("second comment");
+
+    const keys = userThreadKeys(latest);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+    // Each thread holds exactly its own single comment — the second
+    // submit did not append a reply into the first thread.
+    for (const key of keys) {
+      expect(latest.interactions[key]).toHaveLength(1);
+    }
   });
 });
 

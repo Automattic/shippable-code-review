@@ -9,9 +9,19 @@ import { CredentialsPanel } from "./CredentialsPanel";
 
 interface Props {
   onClose: () => void;
+  inlineComments: boolean;
+  onChangeInlineComments: (value: boolean) => void;
+  hideNonActiveComments: boolean;
+  onChangeHideNonActiveComments: (value: boolean) => void;
 }
 
-export function SettingsModal({ onClose }: Props) {
+export function SettingsModal({
+  onClose,
+  inlineComments,
+  onChangeInlineComments,
+  hideNonActiveComments,
+  onChangeHideNonActiveComments,
+}: Props) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -39,6 +49,36 @@ export function SettingsModal({ onClose }: Props) {
             × close
           </button>
         </header>
+        <section className="modal__sec">
+          <p className="modal__sec-h">interactions</p>
+          <p className="modal__hint">Show review comments inline in the diff</p>
+          <button
+            className={
+              inlineComments
+                ? "modal__btn modal__btn--primary"
+                : "modal__btn"
+            }
+            aria-pressed={inlineComments}
+            onClick={() => onChangeInlineComments(!inlineComments)}
+          >
+            Inline comments
+          </button>
+          <p className="modal__hint" style={{ marginTop: 8 }}>
+            With inline comments on, every line's comments show; turn this on to
+            show only the active line's.
+          </p>
+          <button
+            className={
+              hideNonActiveComments
+                ? "modal__btn modal__btn--primary"
+                : "modal__btn"
+            }
+            aria-pressed={hideNonActiveComments}
+            onClick={() => onChangeHideNonActiveComments(!hideNonActiveComments)}
+          >
+            Hide non-active comments
+          </button>
+        </section>
         <section className="modal__sec">
           <CredentialsPanel mode="settings" />
         </section>

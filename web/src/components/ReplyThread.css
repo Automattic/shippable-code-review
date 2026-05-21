@@ -22,6 +22,10 @@
   flex-direction: column;
   gap: 6px;
 }
+/* Replies nested under the thread head are indented to show hierarchy. */
+.thread__list--replies {
+  margin-left: 12px;
+}
 .thread__start {
   background: transparent;
   border: none;

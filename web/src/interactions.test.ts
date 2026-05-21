@@ -453,7 +453,7 @@ describe("selectInteractions — user replies", () => {
 
   it("projects user-started line thread head with target: line", () => {
     const cs = makeChangeset("cs1", [makeFile("cs1/f1", [baseHunk()])]);
-    const key = userCommentKey(HUNK_ID, 0);
+    const key = userCommentKey(HUNK_ID, 0, "c1");
     const state = withReplies(initialState([cs]), {
       [key]: [mkReply("u1", "look here")],
     });
@@ -464,7 +464,7 @@ describe("selectInteractions — user replies", () => {
 
   it("projects subsequent replies on a user thread as reply", () => {
     const cs = makeChangeset("cs1", [makeFile("cs1/f1", [baseHunk()])]);
-    const key = userCommentKey(HUNK_ID, 0);
+    const key = userCommentKey(HUNK_ID, 0, "c1");
     const state = withReplies(initialState([cs]), {
       [key]: [
         mkReply("u1", "start", "2026-05-06T10:00:00Z"),
@@ -478,7 +478,7 @@ describe("selectInteractions — user replies", () => {
 
   it("projects block-thread head with target: block", () => {
     const cs = makeChangeset("cs1", [makeFile("cs1/f1", [baseHunk()])]);
-    const key = blockCommentKey(HUNK_ID, 0, 2);
+    const key = blockCommentKey(HUNK_ID, 0, 2, "c1");
     const state = withReplies(initialState([cs]), {
       [key]: [mkReply("u1", "ranged")],
     });
@@ -489,7 +489,7 @@ describe("selectInteractions — user replies", () => {
 
   it("carries Interaction provenance fields (anchorPath, external, agentQueueStatus) through", () => {
     const cs = makeChangeset("cs1", [makeFile("cs1/f1", [baseHunk()])]);
-    const key = userCommentKey(HUNK_ID, 0);
+    const key = userCommentKey(HUNK_ID, 0, "c1");
     const reply: UserReplyLiteral = {
       id: "u1",
       author: "you",
@@ -515,7 +515,7 @@ describe("selectInteractions — user replies", () => {
 describe("selectInteractions — agent replies", () => {
   it("projects addressed outcome as accept", () => {
     const cs = makeChangeset("cs1", [makeFile("cs1/f1", [makeHunk(HUNK_ID, 3)])]);
-    const key = userCommentKey(HUNK_ID, 0);
+    const key = userCommentKey(HUNK_ID, 0, "c1");
     const state = withReplies(initialState([cs]), {
       [key]: [
         {
@@ -537,7 +537,7 @@ describe("selectInteractions — agent replies", () => {
 
   it("maps declined → reject, noted → ack", () => {
     const cs = makeChangeset("cs1", [makeFile("cs1/f1", [makeHunk(HUNK_ID, 3)])]);
-    const key = userCommentKey(HUNK_ID, 0);
+    const key = userCommentKey(HUNK_ID, 0, "c1");
     const state = withReplies(initialState([cs]), {
       [key]: [
         {
@@ -633,7 +633,7 @@ describe("selectInteractions — thread summary", () => {
     // 'addressed' (accept) reply on the same thread. Agent posts later, so
     // accept wins.
     const cs = makeChangeset("cs1", [makeFile("cs1/f1", [makeHunk(HUNK_ID, 3)])]);
-    const key = userCommentKey(HUNK_ID, 0);
+    const key = userCommentKey(HUNK_ID, 0, "c1");
     const state = withReplies(initialState([cs]), {
       [key]: [
         {
@@ -656,7 +656,7 @@ describe("selectInteractions — thread summary", () => {
 describe("selectInteractions — detached replies", () => {
   it("projects detached replies under their stored threadKey", () => {
     const cs = makeChangeset("cs1", [makeFile("cs1/f1", [makeHunk(HUNK_ID, 3)])]);
-    const threadKey = userCommentKey("ghost-hunk", 0);
+    const threadKey = userCommentKey("ghost-hunk", 0, "c1");
     const state: ReviewState = {
       ...initialState([cs]),
       detachedInteractions: mkDetachedInteractions([

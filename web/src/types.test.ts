@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { parseReplyKey, userFileCommentKey, blockFileCommentKey } from "./types";
+import {
+  blockCommentKey,
+  blockFileCommentKey,
+  mintCommentId,
+  parseReplyKey,
+  userCommentKey,
+  userFileCommentKey,
+} from "./types";
+
+describe("thread-key helpers", () => {
+  it("userCommentKey carries the id segment", () => {
+    expect(userCommentKey("h", 4, "abc")).toBe("user:h:4:abc");
+  });
+
+  it("blockCommentKey carries the id segment", () => {
+    expect(blockCommentKey("h", 3, 7, "abc")).toBe("block:h:3-7:abc");
+  });
+
+  it("mintCommentId returns distinct values on successive calls", () => {
+    const ids = new Set([mintCommentId(), mintCommentId(), mintCommentId()]);
+    expect(ids.size).toBe(3);
+  });
+});
 
 describe("parseReplyKey", () => {
   it("parses note:hunkId:lineIdx", () => {
@@ -10,21 +32,23 @@ describe("parseReplyKey", () => {
     });
   });
 
-  it("parses user:hunkId:lineIdx", () => {
-    expect(parseReplyKey("user:h1:7")).toEqual({
+  it("parses user:hunkId:lineIdx:id", () => {
+    expect(parseReplyKey("user:h:4:abc")).toEqual({
       kind: "user",
-      hunkId: "h1",
-      lineIdx: 7,
+      hunkId: "h",
+      lineIdx: 4,
+      id: "abc",
     });
   });
 
-  it("parses block:hunkId:lo-hi and exposes lineIdx=lo", () => {
-    expect(parseReplyKey("block:h1:5-9")).toEqual({
+  it("parses block:hunkId:lo-hi:id and exposes lineIdx=lo", () => {
+    expect(parseReplyKey("block:pr:gh:o:r:9:3-7:abc")).toEqual({
       kind: "block",
-      hunkId: "h1",
-      lo: 5,
-      hi: 9,
-      lineIdx: 5,
+      hunkId: "pr:gh:o:r:9",
+      lo: 3,
+      hi: 7,
+      lineIdx: 3,
+      id: "abc",
     });
   });
 
@@ -47,6 +71,8 @@ describe("parseReplyKey", () => {
   it("returns null for malformed input", () => {
     expect(parseReplyKey("bogus")).toBeNull();
     expect(parseReplyKey("note:")).toBeNull();
+    expect(parseReplyKey("user:h:4")).toBeNull();
+    expect(parseReplyKey("block:h:3-7")).toBeNull();
   });
 
   it("preserves colons inside the hunk id (PR csIds carry them)", () => {
@@ -54,6 +80,25 @@ describe("parseReplyKey", () => {
       kind: "note",
       hunkId: "pr:github.com:foo:bar:42#h1",
       lineIdx: 3,
+    });
+  });
+
+  it("round-trips user/block keys built by the helpers", () => {
+    const u = userCommentKey("pr:gh:o:r:9#h1", 12, "xyz");
+    expect(parseReplyKey(u)).toEqual({
+      kind: "user",
+      hunkId: "pr:gh:o:r:9#h1",
+      lineIdx: 12,
+      id: "xyz",
+    });
+    const b = blockCommentKey("pr:gh:o:r:9#h1", 2, 5, "qrs");
+    expect(parseReplyKey(b)).toEqual({
+      kind: "block",
+      hunkId: "pr:gh:o:r:9#h1",
+      lo: 2,
+      hi: 5,
+      lineIdx: 2,
+      id: "qrs",
     });
   });
 });

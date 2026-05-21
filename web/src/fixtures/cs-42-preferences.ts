@@ -356,27 +356,41 @@ export const INTERACTIONS_42: Record<string, Interaction[]> = {
       createdAt: "2026-04-22T10:30:00Z",
     },
   ],
-  // Reviewer-started thread on the notifyOnMention default (no AI head).
-  [userCommentKey(PANEL_H1, 7)]: [
+  // Two reviewer-started threads on the same line (compactMode: false). Each is
+  // its own thread — distinct ids keep them as separate cards, and c1's reply
+  // nests under c1, not after c2.
+  [userCommentKey(PANEL_H1, 7, "c1")]: [
     {
       id: "u1",
-      threadKey: userCommentKey(PANEL_H1, 7),
+      threadKey: userCommentKey(PANEL_H1, 7, "c1"),
       target: "line",
       intent: "comment",
       author: "dan",
       authorRole: "user",
-      body: "Is `true` really the right default here? Some users find mention pings noisy out-of-the-box.",
+      body: "Is `false` really the right default here? Some teams expect compact mode on by default.",
       createdAt: "2026-04-22T11:05:00Z",
     },
     {
       id: "u2",
-      threadKey: userCommentKey(PANEL_H1, 7),
+      threadKey: userCommentKey(PANEL_H1, 7, "c1"),
       target: "reply",
       intent: "comment",
       author: "romina",
       authorRole: "user",
-      body: "Fair — happy to flip it to false. @product said either way is fine.",
+      body: "Fair — happy to flip it. @product said either way is fine.",
       createdAt: "2026-04-22T11:20:00Z",
+    },
+  ],
+  [userCommentKey(PANEL_H1, 7, "c2")]: [
+    {
+      id: "u3",
+      threadKey: userCommentKey(PANEL_H1, 7, "c2"),
+      target: "line",
+      intent: "comment",
+      author: "dan",
+      authorRole: "user",
+      body: "Worth a code comment on why compact mode is opt-in.",
+      createdAt: "2026-04-22T11:25:00Z",
     },
   ],
   [lineNoteReplyKey(PANEL_H1, 14)]: [

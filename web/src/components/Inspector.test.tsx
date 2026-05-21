@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { Inspector } from "./Inspector";
 import type { PrConversationItem, WorktreeSource, PrSource } from "../types";
+import type { InspectorViewModel } from "../view";
+
+// jsdom does not implement scrollIntoView; mock it globally so effects that
+// call it (e.g. auto-scroll to the current AI note) don't throw.
+beforeAll(() => {
+  window.HTMLElement.prototype.scrollIntoView = vi.fn();
+});
 
 afterEach(cleanup);
 
@@ -56,11 +63,71 @@ function minimalViewModel() {
     userCommentCountLabel: "none",
     userCommentRows: [],
     showNewCommentCta: false,
-    currentLineCommentKey: "user:hunk1:0",
     currentLineNo: 1,
+    cursorHunkId: "hunk1",
+    cursorLineIdx: 0,
     showDraftStub: false,
     draftStubRow: null,
     detachedThreads: [],
+  };
+}
+
+// A view model with real AI-note and user-comment content so tests can verify
+// that InlineThreadStack body is genuinely hidden (not just an empty body).
+function richViewModel(): InspectorViewModel {
+  return {
+    ...minimalViewModel(),
+    hasAiNotes: true,
+    aiNoteCountLabel: "0/1 acked",
+    aiNoteRows: [
+      {
+        lineIdx: 3,
+        lineNo: 12,
+        severity: "warning",
+        sevGlyph: "!",
+        summary: "Possible null deref",
+        detail: "x can be undefined here",
+        isAcked: false,
+        isCurrent: true,
+        replyKey: "note:hunk1:3",
+        replies: [],
+        isDrafting: false,
+        jumpTarget: {
+          changesetId: "cs",
+          fileId: "f",
+          hunkId: "hunk1",
+          lineIdx: 3,
+        },
+      },
+    ],
+    userCommentCountLabel: "1 thread",
+    userCommentRows: [
+      {
+        lineIdx: 5,
+        lineNo: 14,
+        threadKey: "user:hunk1:5",
+        replies: [
+          {
+            id: "r1",
+            threadKey: "user:hunk1:5",
+            target: "line",
+            intent: "comment",
+            author: "you",
+            authorRole: "user",
+            body: "Why this branch?",
+            createdAt: "2026-05-01T00:00:00Z",
+          },
+        ],
+        isDrafting: false,
+        isCurrent: false,
+        jumpTarget: {
+          changesetId: "cs",
+          fileId: "f",
+          hunkId: "hunk1",
+          lineIdx: 5,
+        },
+      },
+    ],
   };
 }
 
@@ -79,12 +146,14 @@ function renderInspector(
       onJump={NOOP}
       onToggleAck={NOOP}
       onStartDraft={NOOP}
+      onStartNewComment={NOOP}
       onCloseDraft={NOOP}
       onChangeDraft={NOOP}
       onSubmitReply={NOOP}
       onDeleteReply={NOOP}
       onRetryReply={NOOP}
       onVerifyAiNote={NOOP}
+      interactionsShownInline={false}
       {...over}
     />,
   );
@@ -357,6 +426,73 @@ describe("Inspector — PR pill", () => {
   });
 });
 
+describe("Inspector — interactionsShownInline", () => {
+  it("renders real thread content when interactionsShownInline is false", () => {
+    render(
+      <Inspector
+        viewModel={richViewModel()}
+        commentCount={0}
+        onPrevComment={NOOP}
+        onNextComment={NOOP}
+        lineHasAiNote={false}
+        symbols={EMPTY_SYMBOLS}
+        draftBodies={{}}
+        onJump={NOOP}
+        onToggleAck={NOOP}
+        onStartDraft={NOOP}
+        onStartNewComment={NOOP}
+        onCloseDraft={NOOP}
+        onChangeDraft={NOOP}
+        onSubmitReply={NOOP}
+        onDeleteReply={NOOP}
+        onRetryReply={NOOP}
+        onVerifyAiNote={NOOP}
+        interactionsShownInline={false}
+      />,
+    );
+    // Thread body sections from richViewModel must be visible
+    expect(screen.getByText("AI concerns in this hunk")).toBeTruthy();
+    expect(screen.getByText("Possible null deref")).toBeTruthy();
+    expect(screen.getByText("Your comments")).toBeTruthy();
+    // Placeholder must be absent
+    expect(screen.queryByText("Comments are shown inline in the diff.")).toBeNull();
+  });
+
+  it("hides real thread content and shows placeholder when interactionsShownInline is true", () => {
+    render(
+      <Inspector
+        viewModel={richViewModel()}
+        commentCount={0}
+        onPrevComment={NOOP}
+        onNextComment={NOOP}
+        lineHasAiNote={false}
+        symbols={EMPTY_SYMBOLS}
+        draftBodies={{}}
+        onJump={NOOP}
+        onToggleAck={NOOP}
+        onStartDraft={NOOP}
+        onStartNewComment={NOOP}
+        onCloseDraft={NOOP}
+        onChangeDraft={NOOP}
+        onSubmitReply={NOOP}
+        onDeleteReply={NOOP}
+        onRetryReply={NOOP}
+        onVerifyAiNote={NOOP}
+        interactionsShownInline={true}
+      />,
+    );
+    // Placeholder must appear
+    expect(screen.getByText("Comments are shown inline in the diff.")).toBeTruthy();
+    // Thread body content from richViewModel must be absent
+    expect(screen.queryByText("AI concerns in this hunk")).toBeNull();
+    expect(screen.queryByText("Possible null deref")).toBeNull();
+    expect(screen.queryByText("Your comments")).toBeNull();
+    // Chrome (header + location card) must still be present
+    expect(screen.getByText("inspector")).toBeTruthy();
+    expect(screen.getByText("src/foo.ts:1")).toBeTruthy();
+  });
+});
+
 describe("Inspector — pill cleared on worktreePath change", () => {
   afterEach(() => vi.resetAllMocks());
 
@@ -406,12 +542,14 @@ describe("Inspector — pill cleared on worktreePath change", () => {
         onJump={NOOP}
         onToggleAck={NOOP}
         onStartDraft={NOOP}
+        onStartNewComment={NOOP}
         onCloseDraft={NOOP}
         onChangeDraft={NOOP}
         onSubmitReply={NOOP}
         onDeleteReply={NOOP}
         onRetryReply={NOOP}
         onVerifyAiNote={NOOP}
+        interactionsShownInline={false}
         worktreeSource={sourceB}
         changesetId="wt:b"
       />,

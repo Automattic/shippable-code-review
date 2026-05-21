@@ -1,5 +1,5 @@
 import "./DiffView.css";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { highlightLines } from "../highlight";
 import type { DefinitionClickTarget } from "../definitionNav";
 import type { DiffLine } from "../types";
@@ -9,8 +9,12 @@ import type {
   ExpandBarViewModel,
   FullFileLineViewModel,
   HunkViewModel,
+  LineThreadsEntry,
+  LineThreadsProjection,
 } from "../view";
 import { MarkdownView } from "./MarkdownView";
+import { InlineThreadStack, type InlineThreadStackProps } from "./InlineThreadStack";
+import { InlineLineThreads, InlineDetachedThreads } from "./InlineLineThreads";
 
 /**
  * Mouse interactions on the diff body. Callbacks fire from a single delegated
@@ -26,8 +30,12 @@ import { MarkdownView } from "./MarkdownView";
  *                                                       LineText
  *
  * The grid template `40px 40px 14px 16px 1fr` in DiffView.css is the contract
- * that makes this disambiguation unambiguous — only the trailing 1fr column
+ * that makes this disambiguation unambiguous — only the `1fr` code column
  * carries `.line__text`, and only that column should let the browser select.
+ * When inline comments is on, a trailing fixed-width comment column is
+ * appended (`.hunk__body--comment-col`); the delegated handler keys off
+ * `data-line-idx` / column classes, not column counts, so the extra column
+ * is transparent to it.
  */
 export interface DiffViewMouseHandlers {
   /**
@@ -59,6 +67,14 @@ export interface DiffViewMouseHandlers {
     clientX: number,
     clientY: number,
   ) => void;
+  /**
+   * Clicking a non-current hunk's interaction badge (AI-reviewed /
+   * teammate-verdict) — the cursor should move into that hunk so its
+   * hunk-level inline threads expand there. The hunk header sits outside
+   * `hunk__body`, so this is wired explicitly rather than via the delegated
+   * pointer handler.
+   */
+  onHunkFocus?: (hunkId: string) => void;
 }
 
 interface Props extends DiffViewMouseHandlers {
@@ -75,6 +91,19 @@ interface Props extends DiffViewMouseHandlers {
    * path inside LineText is unaffected.
    */
   interactionsEnabled?: boolean;
+  /**
+   * When set, line-anchored interaction threads render inline beneath the
+   * cursor line instead of in the side panel. Absent → panel mode (no
+   * inline rendering). `sections` and `currentNoteRef` are owned here.
+   */
+  inlineThreads?: Omit<InlineThreadStackProps, "sections" | "currentNoteRef">;
+  /**
+   * Per-line thread projection covering every hunk. When supplied (with
+   * `inlineThreads`), an inline block mounts under every line that has
+   * threads, not just the cursor line. The "hide non-active comments"
+   * setting collapses this to the cursor line's entry only.
+   */
+  lineThreads?: LineThreadsProjection;
 }
 
 type DragState =
@@ -105,7 +134,10 @@ export function DiffView({
   onLineSelectRange,
   onLineCharSelect,
   onLineContextMenu,
+  onHunkFocus,
   interactionsEnabled = true,
+  inlineThreads,
+  lineThreads,
 }: Props) {
   const cursorRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -325,6 +357,32 @@ export function DiffView({
     viewModel.filePreviewing,
   ]);
 
+  // Inline-thread regions are variable-height and grow/shrink after mount with
+  // no cursor move — composer opens, async replies arrive, syntax highlighting
+  // resolves — pushing the cursor line off-screen. The cursor-move effect above
+  // never re-runs for this. A single ResizeObserver, lazily created the first
+  // time a region's callback ref fires, watches every mounted region; the ref
+  // observes/unobserves nodes as they mount/unmount, so resizes are caught even
+  // when no dep here changes. Lazy init (not a mount effect) is what lets the
+  // observer exist before the first region's ref runs in the same commit.
+  // jsdom/SSR has no ResizeObserver — the observer stays null, the ref no-ops.
+  const inlineRegionObserver = useRef<ResizeObserver | null>(null);
+  useEffect(() => () => inlineRegionObserver.current?.disconnect(), []);
+
+  const inlineRegionRef = (el: HTMLDivElement | null) => {
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = (inlineRegionObserver.current ??= new ResizeObserver(() => {
+      cursorRef.current?.scrollIntoView({ block: "nearest" });
+    }));
+    ro.observe(el);
+    return () => ro.unobserve(el);
+  };
+
+  // Inline comments on ⇒ the diff gains a trailing comment column.
+  // `inlineThreads` is passed only when inline comments is on, so its
+  // presence is the gate.
+  const commentColOn = !!inlineThreads;
+
   const mode: "diff" | "fullsource" | "preview" = viewModel.filePreviewing
     ? "preview"
     : viewModel.fileFullyExpanded
@@ -381,22 +439,35 @@ export function DiffView({
           clickableSymbols={clickableSymbols}
           allowAnyIdentifier={allowAnyIdentifier}
           onSymbolClick={onSymbolClick}
+          commentColOn={commentColOn}
         />
       ) : (
-        viewModel.hunks.map((h) => (
-          <HunkBlock
-            key={h.id}
-            hunk={h}
-            path={viewModel.path}
-            language={viewModel.language}
-            onSetExpandLevel={(dir, level) => onSetExpandLevel(h.id, dir, level)}
-            cursorRef={cursorRef}
-            clickableSymbols={clickableSymbols}
-            allowAnyIdentifier={allowAnyIdentifier}
-            onSymbolClick={onSymbolClick}
-            lineMouseHandlers={lineMouseHandlers}
-          />
-        ))
+        <>
+          {viewModel.hunks.map((h) => (
+            <HunkBlock
+              key={h.id}
+              hunk={h}
+              path={viewModel.path}
+              language={viewModel.language}
+              onSetExpandLevel={(dir, level) => onSetExpandLevel(h.id, dir, level)}
+              cursorRef={cursorRef}
+              inlineRegionRef={inlineRegionRef}
+              clickableSymbols={clickableSymbols}
+              allowAnyIdentifier={allowAnyIdentifier}
+              onSymbolClick={onSymbolClick}
+              lineMouseHandlers={lineMouseHandlers}
+              onHunkFocus={onHunkFocus}
+              inlineThreads={inlineThreads}
+              lineThreads={lineThreads?.filter((e) => e.hunkId === h.id)}
+              commentColOn={commentColOn}
+            />
+          ))}
+          {inlineThreads && inlineThreads.vm.detachedThreads.length > 0 && (
+            <div className="diff__detached">
+              <InlineDetachedThreads {...inlineThreads} />
+            </div>
+          )}
+        </>
       )}
     </main>
   );
@@ -456,32 +527,50 @@ function HunkBlock({
   language,
   onSetExpandLevel,
   cursorRef,
+  inlineRegionRef,
   clickableSymbols,
   allowAnyIdentifier,
   onSymbolClick,
   lineMouseHandlers,
+  onHunkFocus,
+  inlineThreads,
+  lineThreads,
+  commentColOn,
 }: {
   hunk: HunkViewModel;
   path: string;
   language: string;
   onSetExpandLevel: (dir: "above" | "below", level: number) => void;
   cursorRef: React.RefObject<HTMLDivElement | null>;
+  inlineRegionRef: (el: HTMLDivElement | null) => (() => void) | undefined;
   clickableSymbols?: ReadonlySet<string>;
   allowAnyIdentifier?: boolean;
   onSymbolClick?: (target: DefinitionClickTarget) => void;
   lineMouseHandlers?: LineMouseHandlerProps;
+  onHunkFocus?: (hunkId: string) => void;
+  inlineThreads?: Omit<InlineThreadStackProps, "sections" | "currentNoteRef">;
+  lineThreads?: LineThreadsProjection;
+  commentColOn: boolean;
 }) {
+  // On a non-current hunk the interaction badges double as a "move cursor
+  // here" affordance, so its hunk-level threads expand. The current hunk
+  // already shows those threads, so its badges stay inert.
+  const focusHunk =
+    onHunkFocus && !hunk.isCurrent ? () => onHunkFocus(hunk.id) : undefined;
   return (
     <section className={`hunk ${hunk.isCurrent ? "hunk--current" : ""}`}>
       <header className="hunk__h">
         <span className="hunk__meter">{Math.round(hunk.coverage * 100)}%</span>
         <span className="hunk__header-text">{hunk.header}</span>
         <span className="hunk__badges">
-          {hunk.aiReviewed && <Badge kind="ai">AI ✓</Badge>}
+          {hunk.aiReviewed && (
+            <Badge kind="ai" onClick={focusHunk}>AI ✓</Badge>
+          )}
           {hunk.teammateReview && (
             <Badge
               kind={hunk.teammateReview.verdict === "approve" ? "approve" : "comment"}
               title={hunk.teammateReview.note}
+              onClick={focusHunk}
             >
               @{hunk.teammateReview.user}{" "}
               {hunk.teammateReview.verdict === "approve" ? "✓" : "💬"}
@@ -513,6 +602,7 @@ function HunkBlock({
           clickableSymbols={clickableSymbols}
           allowAnyIdentifier={allowAnyIdentifier}
           onSymbolClick={onSymbolClick}
+          commentColOn={commentColOn}
         />
       )}
 
@@ -522,10 +612,15 @@ function HunkBlock({
         lines={hunk.lines}
         language={language}
         cursorRef={cursorRef}
+        inlineRegionRef={inlineRegionRef}
         clickableSymbols={clickableSymbols}
         allowAnyIdentifier={allowAnyIdentifier}
         onSymbolClick={onSymbolClick}
         lineMouseHandlers={lineMouseHandlers}
+        hunkIsCurrent={hunk.isCurrent}
+        inlineThreads={inlineThreads}
+        lineThreads={lineThreads}
+        commentColOn={commentColOn}
       />
 
       {hunk.contextBelow.length > 0 && (
@@ -537,6 +632,7 @@ function HunkBlock({
           clickableSymbols={clickableSymbols}
           allowAnyIdentifier={allowAnyIdentifier}
           onSymbolClick={onSymbolClick}
+          commentColOn={commentColOn}
         />
       )}
       {hunk.expandBelow && (
@@ -546,6 +642,15 @@ function HunkBlock({
           onExpand={() => onSetExpandLevel("below", hunk.expandBelow!.level + 1)}
           onCollapse={() => onSetExpandLevel("below", 0)}
         />
+      )}
+
+      {/* Sibling of `hunk__body`, not a descendant — so bubble-phase gestures
+          from this composer never reach `hunk__body`'s delegated drag handlers
+          and no `DragState` can form here. No pointer-gesture isolation needed. */}
+      {inlineThreads && hunk.isCurrent && (
+        <div className="hunk__inline-threads" ref={inlineRegionRef}>
+          <InlineThreadStack {...inlineThreads} sections="hunk-level" />
+        </div>
       )}
     </section>
   );
@@ -609,12 +714,14 @@ function ContextLine({
   line,
   highlightedNode,
   onSymbolClick,
+  commentColOn,
 }: {
   filePath: string;
   language: string;
   line: DiffLine;
   highlightedNode?: ReactNode;
   onSymbolClick?: (target: DefinitionClickTarget) => void;
+  commentColOn: boolean;
 }) {
   return (
     <div className="line line--context line--ctx-expand">
@@ -630,6 +737,7 @@ function ContextLine({
         highlightedNode={highlightedNode}
         onSymbolClick={onSymbolClick}
       />
+      {commentColOn && <span className="line__comment" />}
     </div>
   );
 }
@@ -641,6 +749,7 @@ function FullFileView({
   clickableSymbols,
   allowAnyIdentifier,
   onSymbolClick,
+  commentColOn,
 }: {
   path: string;
   language: string;
@@ -648,6 +757,7 @@ function FullFileView({
   clickableSymbols?: ReadonlySet<string>;
   allowAnyIdentifier?: boolean;
   onSymbolClick?: (target: DefinitionClickTarget) => void;
+  commentColOn: boolean;
 }) {
   const highlightedLines = useHighlightedLines(
     lines,
@@ -660,7 +770,9 @@ function FullFileView({
       <header className="hunk__h">
         <span className="hunk__header-text">entire file · {path}</span>
       </header>
-      <div className="hunk__body">
+      <div
+        className={`hunk__body ${commentColOn ? "hunk__body--comment-col" : ""}`}
+      >
         {lines.map((line, i) => (
           <div
             key={i}
@@ -680,6 +792,7 @@ function FullFileView({
               highlightedNode={highlightedLines?.[i]}
               onSymbolClick={onSymbolClick}
             />
+            {commentColOn && <span className="line__comment" />}
           </div>
         ))}
       </div>
@@ -695,6 +808,8 @@ function Line({
   highlightedNode,
   cursorRef,
   onSymbolClick,
+  commentColOn,
+  onStartNewComment,
 }: {
   filePath: string;
   language: string;
@@ -703,6 +818,9 @@ function Line({
   highlightedNode?: ReactNode;
   cursorRef?: React.RefObject<HTMLDivElement | null>;
   onSymbolClick?: (target: DefinitionClickTarget) => void;
+  commentColOn: boolean;
+  /** Starts a comment on this line — only wired on the cursor line's button. */
+  onStartNewComment?: () => void;
 }) {
   const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
   const sev = line.aiNote?.severity;
@@ -736,6 +854,26 @@ function Line({
         highlightedNode={highlightedNode}
         onSymbolClick={onSymbolClick}
       />
+      {commentColOn && (
+        <span className="line__comment">
+          {line.isCursor && (
+            <button
+              type="button"
+              className="line__comment-btn"
+              title="comment on this line (c)"
+              aria-label="Comment on this line"
+              // Keep the click out of the delegated hunk__body drag handler.
+              onClick={(e) => {
+                e.stopPropagation();
+                onStartNewComment?.();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              + comment <kbd>c</kbd>
+            </button>
+          )}
+        </span>
+      )}
     </div>
   );
 }
@@ -748,6 +886,7 @@ function ContextLinesBlock({
   clickableSymbols,
   allowAnyIdentifier,
   onSymbolClick,
+  commentColOn,
 }: {
   path: string;
   lines: DiffLine[];
@@ -756,6 +895,7 @@ function ContextLinesBlock({
   clickableSymbols?: ReadonlySet<string>;
   allowAnyIdentifier?: boolean;
   onSymbolClick?: (target: DefinitionClickTarget) => void;
+  commentColOn: boolean;
 }) {
   const highlightedLines = useHighlightedLines(
     lines,
@@ -764,7 +904,9 @@ function ContextLinesBlock({
     allowAnyIdentifier,
   );
   return (
-    <div className="hunk__body hunk__body--context">
+    <div
+      className={`hunk__body hunk__body--context ${commentColOn ? "hunk__body--comment-col" : ""}`}
+    >
       {lines.map((line, i) => (
         <ContextLine
           key={`${prefix}-${i}`}
@@ -773,6 +915,7 @@ function ContextLinesBlock({
           line={line}
           highlightedNode={highlightedLines?.[i]}
           onSymbolClick={onSymbolClick}
+          commentColOn={commentColOn}
         />
       ))}
     </div>
@@ -785,20 +928,30 @@ function HunkLinesBlock({
   lines,
   language,
   cursorRef,
+  inlineRegionRef,
   clickableSymbols,
   allowAnyIdentifier,
   onSymbolClick,
   lineMouseHandlers,
+  hunkIsCurrent,
+  inlineThreads,
+  lineThreads,
+  commentColOn,
 }: {
   path: string;
   hunkId: string;
   lines: DiffLineViewModel[];
   language: string;
   cursorRef: React.RefObject<HTMLDivElement | null>;
+  inlineRegionRef: (el: HTMLDivElement | null) => (() => void) | undefined;
   clickableSymbols?: ReadonlySet<string>;
   allowAnyIdentifier?: boolean;
   onSymbolClick?: (target: DefinitionClickTarget) => void;
   lineMouseHandlers?: LineMouseHandlerProps;
+  hunkIsCurrent: boolean;
+  inlineThreads?: Omit<InlineThreadStackProps, "sections" | "currentNoteRef">;
+  lineThreads?: LineThreadsProjection;
+  commentColOn: boolean;
 }) {
   const highlightedLines = useHighlightedLines(
     lines,
@@ -806,20 +959,93 @@ function HunkLinesBlock({
     clickableSymbols,
     allowAnyIdentifier,
   );
+  // Per-line thread blocks: index the projection by line so each non-cursor
+  // line's block mounts right under it. The cursor line is driven by the
+  // cursor-scoped `inlineThreads` instead, so it is skipped here.
+  const lineEntryByIdx = new Map<number, LineThreadsEntry>();
+  for (const e of lineThreads ?? []) {
+    if (!e.isCursor) lineEntryByIdx.set(e.lineIdx, e);
+  }
   return (
-    <div className="hunk__body" data-hunk-id={hunkId} {...(lineMouseHandlers ?? {})}>
-      {lines.map((line, i) => (
-        <Line
-          key={i}
-          filePath={path}
-          language={language}
-          line={line}
-          lineIdx={i}
-          highlightedNode={highlightedLines?.[i]}
-          cursorRef={line.isCursor ? cursorRef : undefined}
-          onSymbolClick={onSymbolClick}
-        />
-      ))}
+    <div
+      className={`hunk__body ${commentColOn ? "hunk__body--comment-col" : ""}`}
+      data-hunk-id={hunkId}
+      {...(lineMouseHandlers ?? {})}
+    >
+      {lines.map((line, i) => {
+        const lineEntry = lineEntryByIdx.get(i);
+        return (
+          <Fragment key={i}>
+            <Line
+              filePath={path}
+              language={language}
+              line={line}
+              lineIdx={i}
+              highlightedNode={highlightedLines?.[i]}
+              cursorRef={line.isCursor ? cursorRef : undefined}
+              onSymbolClick={onSymbolClick}
+              commentColOn={commentColOn}
+              onStartNewComment={
+                line.isCursor && hunkIsCurrent
+                  ? inlineThreads?.onStartNewComment
+                  : undefined
+              }
+            />
+            {line.isCursor && hunkIsCurrent && inlineThreads && (
+              <InlineThreadsRegion
+                inlineThreads={inlineThreads}
+                regionRef={inlineRegionRef}
+              />
+            )}
+            {!line.isCursor && inlineThreads && lineEntry && (
+              <InlineThreadsRegion
+                inlineThreads={inlineThreads}
+                lineEntry={lineEntry}
+                regionRef={inlineRegionRef}
+              />
+            )}
+          </Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Line-anchored interaction threads rendered inline beneath the cursor line,
+ * as a full-width block child of `hunk__body` (a plain block container).
+ * The pointer/contextmenu handlers stop propagation so the delegated
+ * `hunk__body` handler (line-range drag selection) never sees gestures that
+ * belong to the composer — those handlers are bubble-phase, so stopping here
+ * is enough to keep them from running.
+ *
+ * Caveat: this isolates gestures *starting* inside the region. A text-selection
+ * drag that starts on a real diff line and ends here never reaches the
+ * `hunk__body` `pointerup`, leaving a stale `text`-kind `dragRef` entry. It is
+ * inert (stale `text` state does nothing on move) and the next `pointerdown`
+ * overwrites it, so this is harmless.
+ */
+function InlineThreadsRegion({
+  inlineThreads,
+  lineEntry,
+  regionRef,
+}: {
+  inlineThreads: Omit<InlineThreadStackProps, "sections" | "currentNoteRef">;
+  /** When set, the block renders this line's projected threads (non-cursor). */
+  lineEntry?: LineThreadsEntry;
+  regionRef: (el: HTMLDivElement | null) => (() => void) | undefined;
+}) {
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+  return (
+    <div
+      className="line-inline-threads"
+      ref={regionRef}
+      onPointerDown={stop}
+      onPointerMove={stop}
+      onPointerUp={stop}
+      onContextMenu={stop}
+    >
+      <InlineLineThreads {...inlineThreads} lineEntry={lineEntry} />
     </div>
   );
 }
@@ -910,12 +1136,26 @@ function useHighlightedLines(
 function Badge({
   kind,
   title,
+  onClick,
   children,
 }: {
   kind: "ai" | "approve" | "comment" | "symbol" | "ref";
   title?: string;
+  onClick?: () => void;
   children: React.ReactNode;
 }) {
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        className={`badge badge--${kind} badge--clickable`}
+        title={title}
+        onClick={onClick}
+      >
+        {children}
+      </button>
+    );
+  }
   return (
     <span className={`badge badge--${kind}`} title={title}>
       {children}

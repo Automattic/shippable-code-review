@@ -16,6 +16,7 @@ import {
   hunkSummaryReplyKey,
   isValidInteractionPair,
   lineNoteReplyKey,
+  mintCommentId,
   parseReplyKey,
   teammateReplyKey,
   userCommentKey,
@@ -772,11 +773,11 @@ function rekey(
     case "note":
       return lineNoteReplyKey(newHunkId, newLineIdx);
     case "user":
-      return userCommentKey(newHunkId, newLineIdx);
+      return userCommentKey(newHunkId, newLineIdx, parsed.id);
     case "block": {
       const span = parsed.hi - parsed.lo;
       const newHi = Math.min(newHunkLineCount - 1, newLineIdx + span);
-      return blockCommentKey(newHunkId, newLineIdx, newHi);
+      return blockCommentKey(newHunkId, newLineIdx, newHi, parsed.id);
     }
     case "hunkSummary":
       return hunkSummaryReplyKey(newHunkId);
@@ -1036,19 +1037,28 @@ function mergeAgentInteractions(
     (c) => c.id === state.cursor.changesetId,
   );
 
-  // Index parentId → existing threadKey for reply-shaped entries, matching
-  // the agent's `parentId` against each interaction's own `id`.
+  // One walk of state.interactions serving two lookups:
+  //  - threadKeyByParentId: reply-shaped entries ride parentId → the
+  //    interaction whose own `id` matches, carrying its thread key.
+  //  - threadKeyById: every existing interaction's id → its thread key, so a
+  //    re-polled top-level agent comment can reuse its prior key instead of
+  //    minting a new one each poll.
   const threadKeyByParentId = new Map<string, string>();
+  const threadKeyById = new Map<string, string>();
   let anyReplyShaped = false;
+  let anyTopLevel = false;
   for (const p of polled) {
     if ("parentId" in p) {
       anyReplyShaped = true;
       threadKeyByParentId.set(p.parentId, "");
+    } else {
+      anyTopLevel = true;
     }
   }
-  if (anyReplyShaped) {
+  if (anyReplyShaped || anyTopLevel) {
     for (const [key, list] of Object.entries(state.interactions)) {
       for (const ix of list) {
+        threadKeyById.set(ix.id, key);
         if (threadKeyByParentId.has(ix.id)) {
           threadKeyByParentId.set(ix.id, key);
         }
@@ -1088,10 +1098,14 @@ function mergeAgentInteractions(
       ? resolveAgentTopLevelAnchor(activeCs, p.file, p.lines)
       : null;
     if (located) {
+      // Re-poll: reuse the thread key this comment already lives under so it
+      // updates in place. Only a genuinely new comment mints a fresh key.
+      const existingKey = threadKeyById.get(p.id);
       const threadKey =
-        located.lo === located.hi
-          ? userCommentKey(located.hunkId, located.lo)
-          : blockCommentKey(located.hunkId, located.lo, located.hi);
+        existingKey ??
+        (located.lo === located.hi
+          ? userCommentKey(located.hunkId, located.lo, mintCommentId())
+          : blockCommentKey(located.hunkId, located.lo, located.hi, mintCommentId()));
       const target: InteractionTarget = located.lo === located.hi ? "line" : "block";
       resolved.push({
         threadKey,

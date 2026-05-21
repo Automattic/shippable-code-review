@@ -1,0 +1,12 @@
+/*
+ * Re-export Inspector's interaction-thread styles so any host of
+ * InlineThreadStack / InlineLineThreads carries the dependency explicitly.
+ *
+ * The thread body (notes, user comments, hunk summary, teammate, detached)
+ * uses the shared `inspector__sec`, `inspector__sec-h`, `notes`, and
+ * `ainote*` classes, which are defined in Inspector.css and also drive
+ * Inspector's own chrome (location card, PR-conversation disclosure).
+ * Splitting those rules out would fork styling between the panel and inline
+ * hosts, so they stay in Inspector.css and this file pulls them in.
+ */
+@import "./Inspector.css";

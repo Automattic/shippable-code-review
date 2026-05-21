@@ -594,10 +594,10 @@ export const INTERACTIONS_99: Record<string, Interaction[]> = {
   ],
 
   // Reviewer-started thread on strings.ts#h1 line 0 (no AI head).
-  [userCommentKey(STRINGS_H1, 0)]: [
+  [userCommentKey(STRINGS_H1, 0, "c1")]: [
     {
       id: "r-99-user",
-      threadKey: userCommentKey(STRINGS_H1, 0),
+      threadKey: userCommentKey(STRINGS_H1, 0, "c1"),
       target: "line",
       intent: "comment",
       author: "qa-bot",
@@ -608,10 +608,10 @@ export const INTERACTIONS_99: Record<string, Interaction[]> = {
   ],
 
   // Multi-line reviewer-started block thread on format.js#h1 lines 3..7.
-  [blockCommentKey(FORMAT_H1, 3, 7)]: [
+  [blockCommentKey(FORMAT_H1, 3, 7, "c1")]: [
     {
       id: "r-99-block",
-      threadKey: blockCommentKey(FORMAT_H1, 3, 7),
+      threadKey: blockCommentKey(FORMAT_H1, 3, 7, "c1"),
       target: "block",
       intent: "comment",
       author: "qa-bot",

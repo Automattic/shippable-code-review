@@ -100,8 +100,8 @@ export const CS_91: ChangeSet = {
 const QUEUE_HUNK = "cs-91/server/src/agent-queue.ts#h1";
 const ROUTE_HUNK = "cs-91/server/src/index.ts#h1";
 
-const userLineKey = userCommentKey(QUEUE_HUNK, 6); // lineIdx 6 → newNo 10 ("assertGitDir" line)
-const agentBlockKey = blockCommentKey(ROUTE_HUNK, 3, 6); // newNo n/a — covers the deleted check
+const userLineKey = userCommentKey(QUEUE_HUNK, 6, "c1"); // lineIdx 6 → newNo 10 ("assertGitDir" line)
+const agentBlockKey = blockCommentKey(ROUTE_HUNK, 3, 6, "c2"); // newNo n/a — covers the deleted check
 
 const userLineInteraction: Interaction = {
   id: "u-luiz-1",

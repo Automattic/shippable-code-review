@@ -18,6 +18,14 @@ import { SettingsModal } from "./SettingsModal";
 import { useCredentials } from "../auth/useCredentials";
 import { isTauri } from "../keychain";
 import { openChangesetInWindow } from "../multiWindow";
+import {
+  getStoredInlineComments,
+  persistInlineComments,
+} from "../inlineComments";
+import {
+  getStoredHideNonActiveComments,
+  persistHideNonActiveComments,
+} from "../commentVisibility";
 
 interface Props {
   recents: RecentEntry[];
@@ -38,6 +46,18 @@ interface Props {
 export function Welcome({ recents, onLoad, onRecentsChange }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [inlineComments, setInlineComments] = useState(getStoredInlineComments);
+  function handleChangeInlineComments(value: boolean) {
+    setInlineComments(value);
+    persistInlineComments(value);
+  }
+  const [hideNonActiveComments, setHideNonActiveComments] = useState(
+    getStoredHideNonActiveComments,
+  );
+  function handleChangeHideNonActiveComments(value: boolean) {
+    setHideNonActiveComments(value);
+    persistHideNonActiveComments(value);
+  }
   const credentials = useCredentials();
   // Mirror the workspace topbar: when Anthropic is missing AND the user has
   // explicitly skipped, surface "AI off" so the dismissal is visible without
@@ -545,7 +565,13 @@ export function Welcome({ recents, onLoad, onRecentsChange }: Props) {
         </footer>
       </div>
       {showSettings && (
-        <SettingsModal onClose={() => setShowSettings(false)} />
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          inlineComments={inlineComments}
+          onChangeInlineComments={handleChangeInlineComments}
+          hideNonActiveComments={hideNonActiveComments}
+          onChangeHideNonActiveComments={handleChangeHideNonActiveComments}
+        />
       )}
     </div>
   );

@@ -1,6 +1,8 @@
 .diff {
   overflow-y: auto;
   padding: 0 0 40px 0;
+  /* Must equal the sum of the four `.line` gutter columns below. */
+  --diff-gutter-width: 110px;
 }
 .diff__path {
   position: sticky;
@@ -221,6 +223,17 @@
   color: var(--yellow);
   border-color: var(--yellow);
 }
+/* The interaction badges on a non-current hunk move the cursor on click.
+   Reset only the UA <button> traits that differ from the <span> badge —
+   `font: inherit` would also clobber `.badge`'s 11px size. */
+.badge--clickable {
+  cursor: pointer;
+  font-family: inherit;
+  text-align: inherit;
+}
+.badge--clickable:hover {
+  background: var(--bg-3);
+}
 .badge--symbol {
   color: var(--blue);
 }
@@ -237,17 +250,55 @@
 
    The grid-template-columns below is the contract that lets the mouse
    layer disambiguate gutter (line numbers / sign / AI glyph) from text:
-   only the trailing 1fr column carries `.line__text`, which keeps native
-   text selection. The first four fixed-width columns get cursor: default
-   so the user sees them as a clickable lane for line-range drag. */
+   only the 1fr column carries `.line__text`, which keeps native text
+   selection. The first four fixed-width columns get cursor: default so the
+   user sees them as a clickable lane for line-range drag. With inline
+   comments on, `.hunk__body--comment-col` appends a fixed-width comment
+   column after the 1fr code column. */
 .hunk__body .line {
   display: grid;
+  /* The four fixed gutter columns must sum to `--diff-gutter-width` (.diff). */
   grid-template-columns: 40px 40px 14px 16px 1fr;
   gap: 0;
   padding: 0 8px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   position: relative;
+}
+/* Inline comments on: a fixed-width trailing comment column. Present on every
+   line so the button cell reserves width without reflowing the body as the
+   cursor moves. */
+.hunk__body--comment-col .line {
+  grid-template-columns: 40px 40px 14px 16px 1fr 96px;
+}
+.line__comment {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  user-select: none;
+  cursor: default;
+}
+.line__comment-btn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.line__comment-btn:hover {
+  color: var(--accent);
+}
+.line__comment-btn kbd {
+  font: inherit;
+  font-size: 10px;
+  color: var(--fg-mute);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0 3px;
 }
 .line__old,
 .line__new,
@@ -336,6 +387,39 @@
   font-weight: var(--shiki-dark-font-weight);
   text-decoration: var(--shiki-dark-text-decoration);
 }
+/* Inline interaction threads. `.hunk__body` is a plain block container, so
+   this is a full-width block child; left padding indents it under the code
+   column (`--diff-gutter-width` spans the four gutters, 8px covers the rest). */
+.line-inline-threads {
+  padding: 4px 8px 8px var(--diff-gutter-width);
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+}
+/* InlineLineThreads renders null when the cursor line has no interactions and
+   no CTA — collapse the wrapper so it leaves no chrome behind. */
+.line-inline-threads:empty {
+  display: none;
+}
+/* Hunk-level threads (AI summary + teammate verdict) below the hunk body.
+   Spans the full hunk width rather than indenting under the code column
+   like `.line-inline-threads`. Border-top separates it from the body above. */
+.hunk__inline-threads {
+  padding: 4px 8px 8px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+}
+/* Detached threads block — rendered after the last hunk when the file has
+   comments whose anchored line no longer exists in the diff.
+   Mirrors hunk__inline-threads sizing; margin-top separates it from the
+   hunks above without a hard border that implies containment. */
+.diff__detached {
+  margin: 8px 14px 0;
+  padding: 4px 8px 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+
 .line--add {
   background: color-mix(in srgb, var(--green-bg) 84%, var(--bg));
 }

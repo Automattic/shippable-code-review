@@ -185,6 +185,21 @@ Thread keys carry topology (where in the diff) but **not** intent or authorRole 
 - `block:<hunkId>:<lo>-<hi>` — user-started block thread.
 - `reply-to-agent` target uses the parent's threadKey (agent responses share their parent's thread).
 
+### Thread rendering — panel vs inline
+
+Thread cards are rendered by `InlineThreadStack`, a presentation-only component
+holding the interaction-thread body (AI-note cards, user-comment threads, hunk
+summary, teammate verdict, detached threads, composer). It takes the
+cursor-scoped `InspectorViewModel` and is hosted in two places, chosen by the
+persisted `interactionViewMode` (`panel | inline`, `web/src/interactionViewMode.ts`):
+
+- **panel** — `Inspector` is the side-panel chrome wrapping `InlineThreadStack`.
+- **inline** — the cursor file's `DiffView` hosts `InlineThreadStack`: line-anchored
+  threads beneath the cursor line, hunk-level threads in the cursor hunk's header.
+
+Both modes consume the same view-model, so parity is structural. The mode toggles
+via `SettingsModal`, a topbar action, and the `i` keybind.
+
 ### Wire envelope (agent ↔ shippable)
 
 ```xml
@@ -220,7 +235,7 @@ A `ChangeSet` can enter the app five ways:
 
 ## UI surfaces
 
-`web/src/components/`: DiffView, Sidebar, Inspector, StatusBar, ReviewPlanView, GuidePrompt, ReplyThread, PromptPicker, PromptEditor, PromptRunsPanel, CodeRunner, CodeText, CopyButton, RichText, Reference, CredentialsPanel, SettingsModal, ServerHealthGate, GitHubTokenModal, LoadModal, HelpOverlay, ThemePicker, SyntaxBlock/Showcase, plus Gallery and Demo (internal — not part of the user-facing product).
+`web/src/components/`: DiffView, Sidebar, Inspector, InlineThreadStack, StatusBar, ReviewPlanView, GuidePrompt, ReplyThread, PromptPicker, PromptEditor, PromptRunsPanel, CodeRunner, CodeText, CopyButton, RichText, Reference, CredentialsPanel, SettingsModal, ServerHealthGate, GitHubTokenModal, LoadModal, HelpOverlay, ThemePicker, SyntaxBlock/Showcase, plus Gallery and Demo (internal — not part of the user-facing product).
 
 ## Other front-end modules
 

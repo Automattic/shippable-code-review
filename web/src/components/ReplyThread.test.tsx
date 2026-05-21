@@ -549,3 +549,103 @@ describe("ReplyThread — pip tooltips", () => {
     expect(title).toMatch(/^Fetched by your agent at \d{2}:\d{2}:\d{2}\.$/);
   });
 });
+
+// Helper: a reply-target interaction (target === "reply").
+function replyIx(over: Partial<Interaction> = {}): Interaction {
+  return {
+    id: "rep1",
+    threadKey: "user:cs/f#h:0:r1",
+    target: "reply",
+    intent: "comment",
+    author: "you",
+    authorRole: "user",
+    body: "a reply",
+    createdAt: "2026-05-06T12:40:00.000Z",
+    ...over,
+  };
+}
+
+function renderThread(interactions: Interaction[]) {
+  return render(
+    <ReplyThread
+      interactions={interactions}
+      isDrafting={false}
+      draftBody=""
+      onStartDraft={noop}
+      onCloseDraft={noop}
+      onChangeDraft={noop}
+      onSubmitReply={noop}
+      onDeleteReply={noop}
+      symbols={emptySymbols()}
+      onJump={noop}
+    />,
+  );
+}
+
+describe("ReplyThread — two-level thread layout (user comment head + nested replies)", () => {
+  // The head interaction (target: "line") is the user's comment. It must render
+  // as a distinct comment block, NOT as one of the reply rows under a label.
+  it("renders the thread head (target line) as .thread__head, not inside .thread__list", () => {
+    const head = userIx({ id: "r1", target: "line", body: "top-level comment" });
+    const { container } = renderThread([head]);
+
+    expect(container.querySelector(".thread__head")).not.toBeNull();
+    // The head must NOT be a .reply li inside .thread__list
+    const listItems = container.querySelectorAll(".thread__list .reply");
+    expect(listItems.length).toBe(0);
+  });
+
+  it("renders reply-target interactions nested inside .thread__list beneath the head", () => {
+    const head = userIx({ id: "r1", target: "line", body: "top-level comment" });
+    const reply1 = replyIx({ id: "rep1", body: "reply one" });
+    const reply2 = replyIx({ id: "rep2", body: "reply two" });
+
+    const { container } = renderThread([head, reply1, reply2]);
+
+    // Head renders distinctly
+    expect(container.querySelector(".thread__head")).not.toBeNull();
+    // Both replies are in the list
+    const listItems = container.querySelectorAll(".thread__list .reply");
+    expect(listItems.length).toBe(2);
+  });
+
+  it("'replies (N)' label counts only reply-target entries, not the head", () => {
+    const head = userIx({ id: "r1", target: "line", body: "top-level comment" });
+    const reply1 = replyIx({ id: "rep1", body: "reply one" });
+    const reply2 = replyIx({ id: "rep2", body: "reply two" });
+
+    const { container } = renderThread([head, reply1, reply2]);
+
+    const label = container.querySelector(".thread__label");
+    expect(label).not.toBeNull();
+    // Must say "replies (2)", not "replies (3)"
+    expect(label!.textContent).toMatch(/replies \(2\)/);
+  });
+
+  it("omits the 'replies' label when the head has no replies", () => {
+    const head = userIx({ id: "r1", target: "line", body: "just a comment, no replies" });
+
+    const { container } = renderThread([head]);
+
+    expect(container.querySelector(".thread__label")).toBeNull();
+  });
+
+  it("note/teammate threads (no head in rows) still render flat reply list unchanged", () => {
+    // A teammate: thread head is filtered out by rows; only reply entries remain.
+    const teammateReply = replyIx({
+      id: "rep1",
+      threadKey: "teammate:cs/f#h:0",
+      authorRole: "user",
+      target: "reply",
+      body: "a follow-up",
+    });
+
+    const { container } = renderThread([teammateReply]);
+
+    // No thread__head — we're on the no-head path
+    expect(container.querySelector(".thread__head")).toBeNull();
+    // The reply still renders in the list
+    const listItems = container.querySelectorAll(".thread__list .reply");
+    expect(listItems.length).toBe(1);
+  });
+});

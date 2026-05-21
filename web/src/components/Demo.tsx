@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { CS_42, INTERACTIONS_42 } from "../fixtures/cs-42-preferences";
 import { CS_72, INTERACTIONS_72 } from "../fixtures/cs-72-docs-preview";
 import { CS_91 } from "../fixtures/cs-91-agent-flow";
@@ -51,6 +51,7 @@ import type { RecentEntry } from "../recents";
 import {
   blockCommentKey,
   lineNoteReplyKey,
+  mintCommentId,
   noteKey,
   userCommentKey,
   type AgentContextSlice,
@@ -490,8 +491,8 @@ function buildFrames(): Frame[] {
   const AGENT_LINE1_LINE_IDX = 1;  // the new `import { assertGitDir }`
   const AGENT_LINE2_LINE_IDX = 7;  // the silent-no-op guard
 
-  const lineKey1 = userCommentKey(AGENT_H1.id, AGENT_LINE1_LINE_IDX);
-  const lineKey2 = userCommentKey(AGENT_H1.id, AGENT_LINE2_LINE_IDX);
+  const lineKey1 = userCommentKey(AGENT_H1.id, AGENT_LINE1_LINE_IDX, "c1");
+  const lineKey2 = userCommentKey(AGENT_H1.id, AGENT_LINE2_LINE_IDX, "c2");
 
   const replyLine1: Interaction = {
     id: "demo-r-a1",
@@ -726,7 +727,7 @@ function buildFrames(): Frame[] {
   // 6 — block selection across the try/catch in storage.ts#h2.
   const BLOCK_LO = 6;
   const BLOCK_HI = 11;
-  const blockKey = blockCommentKey(STORAGE_H2.id, BLOCK_LO, BLOCK_HI);
+  const blockKey = blockCommentKey(STORAGE_H2.id, BLOCK_LO, BLOCK_HI, "c1");
   const f6State: ReviewState = {
     ...fresh(),
     cursor: {
@@ -1434,6 +1435,26 @@ function WorkspaceStage({
     ? buildGuidePromptViewModel(suggestion, symbolIndex, cs.id)
     : null;
 
+  // Single source of truth for the new-comment thread key — a block key
+  // when a multi-line selection is live on the cursor's hunk, a line key
+  // otherwise. Each call mints a fresh id so every "+ comment" / `c`
+  // press opens its own thread.
+  const newCommentKey = useCallback((): string => {
+    const sel = state.selection;
+    return sel && sel.hunkId === state.cursor.hunkId && sel.anchor !== sel.head
+      ? blockCommentKey(
+          sel.hunkId,
+          Math.min(sel.anchor, sel.head),
+          Math.max(sel.anchor, sel.head),
+          mintCommentId(),
+        )
+      : userCommentKey(
+          state.cursor.hunkId,
+          state.cursor.lineIdx,
+          mintCommentId(),
+        );
+  }, [state.selection, state.cursor]);
+
   const planDone = plan.entryPoints.filter((e) =>
     state.reviewedFiles.has(e.fileId),
   ).length;
@@ -1559,20 +1580,10 @@ function WorkspaceStage({
           );
           setShowInspector(true);
           break;
-        case "START_COMMENT": {
-          const sel2 = state.selection;
-          const key =
-            sel2 && sel2.hunkId === state.cursor.hunkId
-              ? blockCommentKey(
-                  sel2.hunkId,
-                  Math.min(sel2.anchor, sel2.head),
-                  Math.max(sel2.anchor, sel2.head),
-                )
-              : userCommentKey(state.cursor.hunkId, state.cursor.lineIdx);
-          setDraftingKey(key);
+        case "START_COMMENT":
+          setDraftingKey(newCommentKey());
           setShowInspector(true);
           break;
-        }
         case "ACCEPT_GUIDE": {
           if (!suggestion) break;
           dispatch({
@@ -1640,6 +1651,7 @@ function WorkspaceStage({
     draftingKey,
     hunk,
     demoLineHasAiNote,
+    newCommentKey,
   ]);
 
   return (
@@ -1795,6 +1807,7 @@ function WorkspaceStage({
               dispatch({ type: "TOGGLE_ACK", hunkId, lineIdx })
             }
             onStartDraft={(key) => setDraftingKey(key)}
+            onStartNewComment={() => setDraftingKey(newCommentKey())}
             onCloseDraft={() => setDraftingKey(null)}
             onChangeDraft={(key, body) =>
               setDrafts((prev) => ({ ...prev, [key]: body }))
@@ -1846,6 +1859,7 @@ function WorkspaceStage({
               }));
             }}
             agentContext={agentContext}
+            interactionsShownInline={false}
           />
         )}
       </div>
