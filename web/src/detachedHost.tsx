@@ -343,6 +343,10 @@ function InspectorBody({ parent, onParentTitle }: InspectorBodyProps) {
       onPillClick={() =>
         void emitInspectorAction(parent, { type: "pill-click" })
       }
+      onStartNewComment={() =>
+        void emitInspectorAction(parent, { type: "start-new-comment" })
+      }
+      interactionsShownInline={false}
     />
   );
 }

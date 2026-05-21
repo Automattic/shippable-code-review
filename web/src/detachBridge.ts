@@ -61,6 +61,7 @@ export interface AgentContextData {
   delivered: DeliveredInteraction[];
   lastSuccessfulPollAt: string | null;
   deliveredError: boolean;
+  watching: boolean;
   agentStartedThreads: Array<{ threadKey: string; head: Interaction }>;
 }
 
@@ -88,6 +89,7 @@ export type InspectorAction =
   | { type: "jump-to-block"; cursor: Cursor; selection: LineSelection }
   | { type: "toggle-ack"; hunkId: string; lineIdx: number }
   | { type: "start-draft"; key: string }
+  | { type: "start-new-comment" }
   | { type: "close-draft" }
   | { type: "submit-reply"; key: string; body: string }
   | { type: "retry-reply"; key: string; replyId: string }

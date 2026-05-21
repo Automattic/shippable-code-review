@@ -181,7 +181,7 @@ describe("detach bridge — inspector snapshot stability", () => {
   });
 
   it("differs when draftingKey changes (viewModel.isDrafting flips)", () => {
-    const userKey = "user:cs/src/i.ts#h1:0";
+    const userKey = "user:cs/src/i.ts#h1:0:new";
     const a = makeInspectorSnapshot(null, 0);
     const b = makeInspectorSnapshot(userKey, 0);
     expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
