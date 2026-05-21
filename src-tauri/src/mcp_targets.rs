@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -196,6 +197,10 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
         .ok_or_else(|| format!("config path has no parent: {}", path.display()))?;
     fs::create_dir_all(dir)
         .map_err(|e| format!("could not create directory {}: {e}", dir.display()))?;
+    // Preserve the original file's mode across the rename. `fs::File::create`
+    // gives us 0644-after-umask; without this, a user's `chmod 600` config
+    // would silently widen to world-readable when we rewrite it.
+    let original_mode = fs::metadata(path).ok().map(|m| m.permissions().mode());
     let tmp = dir.join(format!(
         ".{}.shippable-tmp.{}",
         path.file_name()
@@ -209,6 +214,16 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
         f.write_all(contents.as_bytes())
             .map_err(|e| format!("could not write temp file {}: {e}", tmp.display()))?;
         f.sync_all().ok();
+    }
+    if let Some(mode) = original_mode {
+        if let Err(e) = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode)) {
+            let _ = fs::remove_file(&tmp);
+            return Err(format!(
+                "could not restore mode {:o} on {}: {e}",
+                mode,
+                tmp.display()
+            ));
+        }
     }
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
@@ -361,4 +376,47 @@ pub fn register_mcp_targets(ids: Vec<String>) -> Result<Vec<RegisterOutcome>, St
             },
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn unique_tmp_path(name: &str) -> PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "shippable-mcp_targets-{}-{}-{}",
+            std::process::id(),
+            n,
+            name
+        ))
+    }
+
+    #[test]
+    fn write_atomic_preserves_existing_file_mode() {
+        let path = unique_tmp_path("preserve.json");
+        fs::write(&path, "{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_atomic(&path, "{\"x\":1}").expect("write_atomic should succeed");
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "mode should survive rewrite");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"x\":1}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_atomic_creates_new_file_when_absent() {
+        let path = unique_tmp_path("new.json");
+        let _ = fs::remove_file(&path);
+
+        write_atomic(&path, "{}").expect("write_atomic should succeed");
+
+        assert!(path.exists());
+        let _ = fs::remove_file(&path);
+    }
 }
