@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiUrl } from "./apiUrl";
 import { planReview } from "./plan";
-import type { ChangeSet, ReviewPlan } from "./types";
+import type { ChangeSet, Question, ReviewPlan } from "./types";
 
 export type PlanStatus = "idle" | "loading" | "ready" | "fallback";
 
 export interface UsePlanResult {
   plan: ReviewPlan;
+  questions: Question[];
   status: PlanStatus;
   error?: string;
   /** Caller invokes this to send the diff to the AI provider. No-op once
@@ -30,6 +31,7 @@ export function usePlan(cs: ChangeSet): UsePlanResult {
   const rulePlan = useMemo(() => planReview(cs), [cs]);
   const [prevCs, setPrevCs] = useState(cs);
   const [aiPlan, setAiPlan] = useState<ReviewPlan | null>(null);
+  const [aiQuestions, setAiQuestions] = useState<Question[]>([]);
   const [status, setStatus] = useState<PlanStatus>("idle");
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -38,6 +40,7 @@ export function usePlan(cs: ChangeSet): UsePlanResult {
   if (cs !== prevCs) {
     setPrevCs(cs);
     setAiPlan(null);
+    setAiQuestions([]);
     setStatus("idle");
     setError(undefined);
   }
@@ -66,11 +69,12 @@ export function usePlan(cs: ChangeSet): UsePlanResult {
           const body = await res.text();
           throw new Error(`HTTP ${res.status}: ${body}`);
         }
-        return res.json() as Promise<{ plan: ReviewPlan }>;
+        return res.json() as Promise<{ plan: ReviewPlan; questions: Question[] }>;
       })
       .then((body) => {
         if (csRef.current !== targetCs) return; // user moved on, drop the result
         setAiPlan(body.plan);
+        setAiQuestions(body.questions ?? []);
         setStatus("ready");
       })
       .catch((err: unknown) => {
@@ -81,5 +85,5 @@ export function usePlan(cs: ChangeSet): UsePlanResult {
       });
   }, []);
 
-  return { plan: aiPlan ?? rulePlan, status, error, generate };
+  return { plan: aiPlan ?? rulePlan, questions: aiQuestions, status, error, generate };
 }

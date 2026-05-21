@@ -459,10 +459,15 @@ export function ReviewWorkspace({
   }, [wantedFetchKey]);
   const {
     plan,
+    questions: planQuestions,
     status: planStatus,
     error: planError,
     generate: generatePlan,
   } = usePlan(cs);
+  useEffect(() => {
+    if (planQuestions.length === 0) return;
+    dispatch({ type: "STORE_QUESTIONS", changesetId: cs.id, questions: planQuestions });
+  }, [planQuestions, cs.id, dispatch]);
   const jumpTo = (c: Cursor) => dispatch({ type: "SET_CURSOR", cursor: c });
 
   async function handlePrRefresh(htmlUrl: string) {

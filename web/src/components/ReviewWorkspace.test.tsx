@@ -81,6 +81,7 @@ vi.mock("../highlight", () => ({
 vi.mock("../usePlan", () => ({
   usePlan: () => ({
     plan: { entryPoints: [] },
+    questions: [],
     status: "idle",
     error: undefined,
     generate: () => undefined,
