@@ -6,7 +6,7 @@
   "build": {
     "frontendDist": "../web/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "(cd server && bun run build:sidecar) && (cd web && npm run dev)",
+    "beforeDevCommand": "(cd server && bun run build:sidecar) && (cd mcp-server && bun run build:sidecar) && (cd web && npm run dev)",
     "beforeBuildCommand": "(cd server && bun run build:sidecar) && (cd mcp-server && bun run build:sidecar) && (cd web && npm run build)"
   },
   "app": {
