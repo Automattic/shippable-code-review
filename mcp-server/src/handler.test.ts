@@ -377,6 +377,32 @@ describe("handlePostReviewComment — reply mode", () => {
     expect(result.content[0]!.text).toMatch(/JSON|parse/i);
   });
 
+  it("ignores rationale/suggestedFix/confidence on reply-mode posts", async () => {
+    const { fetchFn, calls } = makeFetch(jsonResponse({ id: "reply-2" }));
+
+    await handlePostReviewComment(
+      {
+        worktreePath: "/repo",
+        parentInteractionId: "c1",
+        replyText: "fixed it",
+        intent: "accept",
+        rationale: "should not appear",
+        suggestedFix: "should not appear",
+        confidence: "high",
+      },
+      { fetchFn },
+    );
+
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(String(calls[0]!.init?.body));
+    expect(body).toEqual({
+      worktreePath: "/repo",
+      parentId: "c1",
+      body: "fixed it",
+      intent: "accept",
+    });
+  });
+
   it("rejects reply intents that aren't ack/accept/reject", async () => {
     const { fetchFn, calls } = makeFetch(jsonResponse({ id: "x" }));
     const result = await handlePostReviewComment(
@@ -405,6 +431,7 @@ describe("handlePostReviewComment — top-level mode", () => {
         lines: "42",
         replyText: "noticed this",
         intent: "request",
+        rationale: "this matters because",
       },
       { fetchFn },
     );
@@ -421,6 +448,7 @@ describe("handlePostReviewComment — top-level mode", () => {
       lines: "42",
       body: "noticed this",
       intent: "request",
+      rationale: "this matters because",
     });
   });
 
@@ -467,6 +495,58 @@ describe("handlePostReviewComment — top-level mode", () => {
     );
     expect(result.isError).toBe(true);
     expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a top-level post that omits rationale", async () => {
+    const { fetchFn, calls } = makeFetch(jsonResponse({ id: "x" }));
+    const result = await handlePostReviewComment(
+      {
+        worktreePath: "/repo",
+        target: "line",
+        file: "src/foo.ts",
+        lines: "42",
+        replyText: "noticed this",
+        intent: "request",
+      },
+      { fetchFn },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/rationale/i);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("forwards rationale/suggestedFix/confidence as flat keys in the payload", async () => {
+    const { fetchFn, calls } = makeFetch(jsonResponse({ id: "tl-2" }));
+
+    const result = await handlePostReviewComment(
+      {
+        worktreePath: "/repo",
+        target: "line",
+        file: "src/foo.ts",
+        lines: "42",
+        replyText: "noticed this",
+        intent: "request",
+        rationale: "this leaks a handle",
+        suggestedFix: "close(fd)",
+        confidence: "high",
+      },
+      { fetchFn },
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(String(calls[0]!.init?.body));
+    expect(body).toEqual({
+      worktreePath: "/repo",
+      target: "line",
+      file: "src/foo.ts",
+      lines: "42",
+      body: "noticed this",
+      intent: "request",
+      rationale: "this leaks a handle",
+      suggestedFix: "close(fd)",
+      confidence: "high",
+    });
   });
 });
 

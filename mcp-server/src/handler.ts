@@ -244,6 +244,12 @@ interface PostCommentInput {
    */
   replyText: string;
   intent: AgentIntent;
+  /** Top-level mode, required: why the comment matters. */
+  rationale?: string;
+  /** Top-level mode, optional: free-form suggested code/text. */
+  suggestedFix?: string;
+  /** Top-level mode, optional: the agent's confidence in the comment. */
+  confidence?: "low" | "medium" | "high";
 }
 
 interface PostCommentResponse {
@@ -309,6 +315,14 @@ export async function handlePostReviewComment(
       "Top-level intent must be one of: comment, question, request, blocker.",
     );
   }
+  if (
+    !hasParent &&
+    (typeof input.rationale !== "string" || input.rationale.trim().length === 0)
+  ) {
+    return errorResult(
+      "A top-level review comment must include a non-empty `rationale` explaining why it matters.",
+    );
+  }
 
   // Translate MCP-boundary names to the HTTP wire shape — server-side
   // stays `parentId` + `body` (see PostCommentInput JSDoc for why the
@@ -324,6 +338,13 @@ export async function handlePostReviewComment(
     payload.target = input.target;
     payload.file = input.file;
     payload.lines = input.lines;
+    payload.rationale = input.rationale;
+    if (typeof input.suggestedFix === "string" && input.suggestedFix.length > 0) {
+      payload.suggestedFix = input.suggestedFix;
+    }
+    if (input.confidence !== undefined) {
+      payload.confidence = input.confidence;
+    }
   }
 
   let response: Response;

@@ -27,7 +27,7 @@ const WATCH_TOOL_DESCRIPTION =
 const POST_COMMENT_DESCRIPTION =
   "Post a review interaction back to Shippable. Two modes, distinguished by which fields you supply:\n\n" +
   "• Reply mode — set `parentInteractionId` (the id from a `<interaction>` element returned by `shippable_check_review_comments`) and `intent` to 'accept' | 'reject' | 'ack'. Use after addressing one of the reviewer's interactions.\n\n" +
-  "• Top-level mode — set `target` ('line' | 'block'), `file` (repo-relative path), `lines` (e.g. '118' or '72-79'), and `intent` to 'comment' | 'question' | 'request' | 'blocker'. Use when you noticed something on your own and want to start a fresh thread on a particular line or range.\n\n" +
+  "• Top-level mode — set `target` ('line' | 'block'), `file` (repo-relative path), `lines` (e.g. '118' or '72-79'), and `intent` to 'comment' | 'question' | 'request' | 'blocker'. Use when you noticed something on your own and want to start a fresh thread on a particular line or range. A top-level comment MUST include `rationale` (why it matters); it may also include `suggestedFix` (a concrete code/text fix) and `confidence` ('low' | 'medium' | 'high'). These three fields apply to top-level mode only and are ignored in reply mode.\n\n" +
   "Put your prose in `replyText`. Also call when the user asks you to 'report back to shippable' or similar.";
 
 async function main(): Promise<void> {
@@ -135,6 +135,24 @@ async function main(): Promise<void> {
           .optional()
           .describe(
             "Absolute path to the worktree the interaction belongs to. Defaults to the agent's current working directory.",
+          ),
+        rationale: z
+          .string()
+          .optional()
+          .describe(
+            "Top-level mode only, REQUIRED there: why this comment matters — the reasoning a human reviewer would otherwise have to ask you for. Ignored in reply mode.",
+          ),
+        suggestedFix: z
+          .string()
+          .optional()
+          .describe(
+            "Top-level mode only, optional: a concrete fix as free-form code or text the reader can apply by hand. Ignored in reply mode.",
+          ),
+        confidence: z
+          .enum(["low", "medium", "high"])
+          .optional()
+          .describe(
+            "Top-level mode only, optional: how sure you are. 'high' — confident this is a real issue; 'medium' — likely but worth a second look; 'low' — a hunch you want the reviewer to weigh. Ignored in reply mode.",
           ),
       },
     },
