@@ -89,6 +89,7 @@ import {
 } from "../useGithubPrLoad";
 import { GitHubTokenModal } from "./GitHubTokenModal";
 import { isTauri, keychainGet } from "../keychain";
+import { openDetachedWindow } from "../multiWindow";
 import { fetchFileAt } from "../fileAt";
 import {
   buildDiffViewModel,
@@ -1218,6 +1219,9 @@ export function ReviewWorkspace({
             onCloseRun={closePromptRun}
             wide={sidebarWide}
             onToggleWide={() => setSidebarWide((v) => !v)}
+            onDetach={
+              isTauri() ? () => void openDetachedWindow("sidebar") : undefined
+            }
           />
         )}
         <div className="reviewpane">
@@ -1535,6 +1539,9 @@ export function ReviewWorkspace({
                 hint,
               });
             }}
+            onDetach={
+              isTauri() ? () => void openDetachedWindow("inspector") : undefined
+            }
           />
         )}
       </div>

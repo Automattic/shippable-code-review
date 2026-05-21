@@ -193,6 +193,11 @@ interface Props {
   onNextComment: () => void;
   /** Cursor sits on a line with an AI note — gates the a / r hint chips. */
   lineHasAiNote: boolean;
+  /** When set, renders a ↗ button that pops the inspector into its own OS
+   *  window. Undefined hides the affordance — browser mode and the gallery
+   *  preview both rely on that to keep the chrome out of contexts where it
+   *  has nowhere to land. */
+  onDetach?: () => void;
 }
 
 export function Inspector({
@@ -220,6 +225,7 @@ export function Inspector({
   onPrevComment,
   onNextComment,
   lineHasAiNote,
+  onDetach,
 }: Props) {
   const vm = viewModel;
   const draftFor = (key: string) => draftBodies[key] ?? "";
@@ -363,6 +369,17 @@ export function Inspector({
             </>
           )}
         </span>
+        {onDetach && (
+          <button
+            type="button"
+            className="inspector__h-detach"
+            onClick={onDetach}
+            title="Pop the inspector into its own window"
+            aria-label="Detach inspector"
+          >
+            ↗
+          </button>
+        )}
       </header>
 
       {agentContext && (

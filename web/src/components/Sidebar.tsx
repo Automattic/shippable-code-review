@@ -11,6 +11,11 @@ interface Props {
   onCloseRun: (id: string) => void;
   wide: boolean;
   onToggleWide: () => void;
+  /** When set, renders a ↗ button that pops this panel into its own OS
+   *  window. Undefined hides the affordance — browser mode and the gallery
+   *  preview both rely on that to keep the chrome out of contexts where it
+   *  has nowhere to land. */
+  onDetach?: () => void;
 }
 
 export function Sidebar({
@@ -21,9 +26,23 @@ export function Sidebar({
   onCloseRun,
   wide,
   onToggleWide,
+  onDetach,
 }: Props) {
   return (
     <aside className="sidebar" aria-label="changed files">
+      {onDetach && (
+        <div className="sidebar__chrome">
+          <button
+            type="button"
+            className="sidebar__detach"
+            onClick={onDetach}
+            title="Pop the file list into its own window"
+            aria-label="Detach file list"
+          >
+            ↗
+          </button>
+        </div>
+      )}
       <PromptRunsPanel
         runs={runs}
         onClose={onCloseRun}

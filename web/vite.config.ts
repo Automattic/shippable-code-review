@@ -39,6 +39,7 @@ export default defineConfig({
         gallery: resolve(__dirname, 'gallery.html'),
         demo: resolve(__dirname, 'demo.html'),
         featureDocs: resolve(__dirname, 'feature-docs.html'),
+        detached: resolve(__dirname, 'detached.html'),
       },
     },
   },
