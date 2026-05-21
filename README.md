@@ -13,13 +13,12 @@ This is an early **prototype**. The code is throwaway as we work out the shape �
 - **A claim you can run is a test.** Highlight a hunk; the in-app sandboxed runner detects input slots and executes it — JavaScript, TypeScript, and PHP today. AI concerns can hand their snippet straight to the runner.
 - **Built around git worktrees.** Per-task branches and folders, live-refreshing diffs, agent context inline. Most diff GUIs treat worktrees as an afterthought; we started there.
 
-The longer story, with pictures, is on [the landing page](https://rowasc.github.io/shippable/).
-
+The longer story, with pictures, is on (tbd)
 ## Install
 
 Download the latest macOS build:
 
-→ [**Shippable.dmg**](https://github.com/rowasc/shippable/releases/latest/download/Shippable.dmg)
+→ **Shippable.dmg** - pending
 
 The DMG is unsigned, so the first launch trips Gatekeeper — right-click the .app in Finder → Open → confirm once. Subsequent launches don't prompt. macOS only today; Linux and Windows are on the roadmap.
 

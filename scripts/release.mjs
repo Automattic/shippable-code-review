@@ -161,7 +161,7 @@ function buildNotes() {
   const prev = previousTag();
   const changes = aiChangelog(prev) ?? rawCommitList(prev);
   const compare = prev
-    ? `\n\n**Full diff:** [\`${prev}...${tag}\`](https://github.com/rowasc/shippable/compare/${prev}...${tag})`
+    ? `\n\n**Full diff:** [\`${prev}...${tag}\`](https://github.com/Automattic/shippable-code-review/compare/${prev}...${tag})`
     : "";
 
   return `## Install
