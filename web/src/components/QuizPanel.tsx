@@ -25,7 +25,7 @@ export function QuizPanel({ changesetId, quiz, onSubmit, onDismiss, onSelfEval }
         <span>Comprehension</span>
         <span className="quiz-panel__count">{answered} / {questions.length}</span>
       </header>
-      {active && (
+      {active && !(activeAnswer && activeAnswer.selfEval) && (
         activeAnswer
           ? <Reveal q={active} answer={activeAnswer} onSelfEval={onSelfEval} />
           : <Active q={active} onSubmit={onSubmit} onDismiss={onDismiss} />

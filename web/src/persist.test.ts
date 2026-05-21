@@ -241,6 +241,7 @@ describe("v:6 quiz persistence", () => {
   it("round-trips the quiz slice", () => {
     const cs: ChangeSet = {
       id: "cs-1", title: "x", description: "", branch: "f", base: "main", author: "u",
+      createdAt: "2026-01-01T00:00:00Z",
       files: [{
         id: "cs-1/a.ts", path: "a.ts", language: "ts", status: "modified",
         hunks: [{ id: "h-a-1", header: "@@", oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, lines: [] }],
