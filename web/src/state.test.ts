@@ -23,6 +23,8 @@ import type {
   Interaction,
   PrConversationItem,
   PrSource,
+  Question,
+  QuestionTarget,
   ReviewState,
   WorktreeSource,
 } from "./types";
@@ -2101,5 +2103,27 @@ describe("MERGE_PR_REPLIES", () => {
     expect(ids).toContain("u-d");
     expect(ids).toContain("pr-comment:NEW");
     expect(ids).not.toContain("pr-comment:STALE");
+  });
+});
+
+describe("quiz", () => {
+  const sampleQuestion = (id: string, target: QuestionTarget): Question => ({
+    id,
+    type: "q1",
+    target,
+    prompt: `Q ${id}`,
+    claudeAnswer: `Claude says ${id}`,
+  });
+
+  it("STORE_QUESTIONS lands questions under the changeset id", () => {
+    const initial = initialState([], {});
+    const q1 = sampleQuestion("q-1", { kind: "file", path: "a.ts" });
+    const q2 = sampleQuestion("q-2", { kind: "changeset" });
+    const next = reducer(initial, {
+      type: "STORE_QUESTIONS",
+      changesetId: "cs-1",
+      questions: [q1, q2],
+    });
+    expect(next.quiz.questions["cs-1"]).toEqual([q1, q2]);
   });
 });

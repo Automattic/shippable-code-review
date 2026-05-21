@@ -10,6 +10,7 @@ import type {
   InteractionTarget,
   LineSelection,
   ParsedReplyKey,
+  Question,
   ReviewState,
   QuizState,
 } from "./types";
@@ -292,14 +293,20 @@ export type Action =
       changesetId: string;
       prInteractions: Record<string, Interaction[]>;
       prDetached: DetachedInteraction[];
-    };
+    }
+  | { type: "STORE_QUESTIONS"; changesetId: string; questions: Question[] };
 
 export function reducer(state: ReviewState, action: Action): ReviewState {
   // Welcome mode (no changesets) — only LOAD_CHANGESET is meaningful.
   // Everything else assumes a current changeset/file/hunk and would
   // crash on the sentinel cursor. The UI also blocks these dispatches,
   // so this is a defensive belt to the suspenders above.
-  if (state.changesets.length === 0 && action.type !== "LOAD_CHANGESET") {
+  // STORE_QUESTIONS is keyed by changesetId only — no cursor dependency.
+  if (
+    state.changesets.length === 0 &&
+    action.type !== "LOAD_CHANGESET" &&
+    action.type !== "STORE_QUESTIONS"
+  ) {
     return state;
   }
   switch (action.type) {
@@ -629,6 +636,18 @@ export function reducer(state: ReviewState, action: Action): ReviewState {
         ...state,
         interactions: next,
         detachedInteractions: nextDetached,
+      };
+    }
+    case "STORE_QUESTIONS": {
+      return {
+        ...state,
+        quiz: {
+          ...state.quiz,
+          questions: {
+            ...state.quiz.questions,
+            [action.changesetId]: action.questions,
+          },
+        },
       };
     }
   }
