@@ -16,6 +16,8 @@ cannot re-read context it has already received.
      delivered — today's `/api/agent/pull` behavior).
    - `status=delivered` → delivered rows, read-only (no side effect).
    - `status=all` → pending + delivered rows, read-only (no side effect).
+     *(Later widened to include agent-authored rows — see spec.md
+     "Update — 2026-05-21".)*
    - All results sorted `created_at, id`.
 3. Response is `{ payload: <reviewer-feedback XML>, ids: string[] }` for every
    status value — the same shape `/api/agent/pull` returns today. Reuse

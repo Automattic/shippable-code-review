@@ -1,6 +1,8 @@
 import {
   pullAndAck as storePullAndAck,
   listByQueueStatus as storeListByQueueStatus,
+  listAllForWorktree as storeListAllForWorktree,
+  getByIdsForWorktree as storeGetByIds,
   postAgentInteraction,
   listAgentReplies,
   isDeliveredInteractionId as storeIsDelivered,
@@ -99,6 +101,9 @@ export interface Interaction {
   enqueuedAt: string;
   /** Optional provenance link back to GitHub for PR-imported interactions. */
   htmlUrl?: string;
+  /** Parent interaction id — set on replies so the agent can locate the
+   *  comment a reply responds to. Absent on top-level interactions. */
+  parentId?: string;
 }
 
 export interface DeliveredInteraction extends Interaction {
@@ -165,6 +170,8 @@ function toWire(row: StoredInteraction): Interaction {
   if (lines !== undefined) wire.lines = lines;
   const htmlUrl = wireHtmlUrl(row.payload);
   if (htmlUrl !== undefined) wire.htmlUrl = htmlUrl;
+  const parentId = payloadString(row.payload, "parentId");
+  if (parentId.length > 0) wire.parentId = parentId;
   return wire;
 }
 
@@ -201,6 +208,41 @@ export function readInteractions(
   statuses: AgentQueueStatus[],
 ): Interaction[] {
   return storeListByQueueStatus(worktreePath, statuses).map(toWire);
+}
+
+/**
+ * Read-only: every interaction for a worktree — reviewer rows in any queue
+ * state plus agent-authored rows — as wire shapes. Backs the `all` pull.
+ */
+export function readAllInteractions(worktreePath: string): Interaction[] {
+  return storeListAllForWorktree(worktreePath).map(toWire);
+}
+
+/**
+ * Append every parent a reply in `items` points at but that isn't already
+ * present — read-only, so an agent pulling a reply also sees the comment it
+ * responds to. Walks the parent chain (reply-to-a-reply) until it bottoms out.
+ */
+export function withReferencedParents(
+  worktreePath: string,
+  items: Interaction[],
+): Interaction[] {
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const added: Interaction[] = [];
+  let frontier = items;
+  while (true) {
+    const missing = new Set<string>();
+    for (const it of frontier) {
+      if (it.parentId && !byId.has(it.parentId)) missing.add(it.parentId);
+    }
+    if (missing.size === 0) break;
+    const parents = storeGetByIds(worktreePath, [...missing]).map(toWire);
+    if (parents.length === 0) break;
+    for (const p of parents) byId.set(p.id, p);
+    added.push(...parents);
+    frontier = parents;
+  }
+  return added.length === 0 ? items : [...added, ...items];
 }
 
 /**
@@ -447,6 +489,9 @@ function renderInteraction(c: Interaction): string {
   }
   if (c.htmlUrl) {
     attrs.push(`htmlUrl="${escapeXmlAttr(c.htmlUrl)}"`);
+  }
+  if (c.parentId) {
+    attrs.push(`parentId="${escapeXmlAttr(c.parentId)}"`);
   }
   // Wrap body in CDATA so a reviewer can't break out of the <interaction>
   // element by pasting `</interaction>` into their comment.

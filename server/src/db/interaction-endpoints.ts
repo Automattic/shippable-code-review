@@ -35,6 +35,9 @@ const PAYLOAD_FIELDS = [
   "originType",
   "external",
   "runRecipe",
+  // Set on replies to an agent comment — the parent's interaction id, so the
+  // agent channel can link a reply back to the comment it answers.
+  "parentId",
 ] as const;
 
 // ─── Handlers ────────────────────────────────────────────────────────────────

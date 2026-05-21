@@ -557,6 +557,10 @@ export interface Interaction {
   /** Provenance — present on PR-imported interactions. */
   external?: { source: "pr"; htmlUrl: string };
 
+  /** Parent interaction id — set on a reply, pointing at its thread head, so
+   *  the agent channel can link a reply to the comment it answers. */
+  parentId?: string;
+
   /** Verifier hook — present on some AI-authored interactions. */
   runRecipe?: { source: string; inputs: Record<string, string> };
 

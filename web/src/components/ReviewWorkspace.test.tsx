@@ -759,6 +759,34 @@ describe("ReviewWorkspace — + comment mints a thread per click", () => {
     expect(latest.interactions[keys[0]][0].body).toBe("first comment");
   });
 
+  it("a reply into a thread carries the thread head's id as parentId", () => {
+    let latest: ReviewState = initialState([]);
+    render(<StatefulWorkspace onState={(s) => (latest = s)} />);
+
+    submitComment("head comment");
+    const key = userThreadKeys(latest)[0];
+    const headId = latest.interactions[key][0].id;
+
+    fireEvent.click(screen.getByRole("button", { name: "+ reply" }));
+    const textarea = screen.getByPlaceholderText("Write a reply…");
+    fireEvent.change(textarea, { target: { value: "a reply" } });
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+
+    const thread = latest.interactions[key];
+    expect(thread).toHaveLength(2);
+    expect(thread[1].body).toBe("a reply");
+    expect(thread[1].parentId).toBe(headId);
+  });
+
+  it("a thread head is created without a parentId", () => {
+    let latest: ReviewState = initialState([]);
+    render(<StatefulWorkspace onState={(s) => (latest = s)} />);
+
+    submitComment("head comment");
+    const key = userThreadKeys(latest)[0];
+    expect(latest.interactions[key][0].parentId).toBeUndefined();
+  });
+
   it("a second + comment yields a second thread, not a reply into the first", () => {
     let latest: ReviewState = initialState([]);
     render(<StatefulWorkspace onState={(s) => (latest = s)} />);

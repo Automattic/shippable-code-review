@@ -7,6 +7,8 @@ import path from "node:path";
 import {
   pullAndAck,
   listDelivered,
+  readAllInteractions,
+  withReferencedParents,
   postReply,
   postTopLevel,
   listReplies,
@@ -323,6 +325,94 @@ describe("postReply / postTopLevel / listReplies", () => {
   });
 });
 
+describe("readAllInteractions", () => {
+  it("returns reviewer interactions and agent-authored interactions together", () => {
+    const reviewerId = seedEnqueued(WT);
+    const agentId = postReply(WT, {
+      parentId: reviewerId,
+      body: "on it",
+      intent: "ack",
+    });
+    const ids = readAllInteractions(WT).map((i) => i.id);
+    expect(ids).toContain(reviewerId);
+    expect(ids).toContain(agentId);
+  });
+
+  it("does not drain pending reviewer interactions", () => {
+    seedEnqueued(WT);
+    readAllInteractions(WT);
+    expect(pullAndAck(WT)).toHaveLength(1);
+  });
+
+  it("scopes to the requesting worktree", () => {
+    postReply(WT, { parentId: "c1", body: "x", intent: "ack" });
+    expect(readAllInteractions("/tmp/other")).toEqual([]);
+  });
+
+  it("carries parentId through for agent replies", () => {
+    const id = postReply(WT, {
+      parentId: "rev-1",
+      body: "done",
+      intent: "accept",
+    });
+    const reply = readAllInteractions(WT).find((i) => i.id === id);
+    expect(reply?.parentId).toBe("rev-1");
+  });
+});
+
+describe("withReferencedParents", () => {
+  it("appends a reply's parent when it is missing from the set", () => {
+    const parentId = postTopLevel(WT, {
+      file: "a.ts",
+      lines: "1",
+      target: "line",
+      body: "head",
+      intent: "comment",
+    });
+    postReply(WT, { parentId, body: "child", intent: "ack" });
+    const replyOnly = readAllInteractions(WT).filter((i) => i.target === "reply");
+    expect(replyOnly).toHaveLength(1);
+    const out = withReferencedParents(WT, replyOnly).map((i) => i.id);
+    expect(out).toContain(parentId);
+    expect(out).toContain(replyOnly[0].id);
+  });
+
+  it("does not duplicate a parent already present in the set", () => {
+    const parentId = postTopLevel(WT, {
+      file: "a.ts",
+      lines: "1",
+      target: "line",
+      body: "head",
+      intent: "comment",
+    });
+    postReply(WT, { parentId, body: "child", intent: "ack" });
+    const all = readAllInteractions(WT);
+    expect(withReferencedParents(WT, all)).toHaveLength(all.length);
+  });
+
+  it("returns the input untouched when no reply references a missing parent", () => {
+    seedEnqueued(WT);
+    const items = readAllInteractions(WT);
+    expect(withReferencedParents(WT, items)).toEqual(items);
+  });
+
+  it("resolves a parent chain — reply to a reply", () => {
+    const top = postTopLevel(WT, {
+      file: "a.ts",
+      lines: "1",
+      target: "line",
+      body: "top",
+      intent: "comment",
+    });
+    const mid = postReply(WT, { parentId: top, body: "mid", intent: "ack" });
+    postReply(WT, { parentId: mid, body: "leaf", intent: "ack" });
+    const leafOnly = readAllInteractions(WT).filter((i) => i.body === "leaf");
+    const out = withReferencedParents(WT, leafOnly).map((i) => i.id);
+    expect(out).toContain(top);
+    expect(out).toContain(mid);
+  });
+});
+
 describe("resetForTests", () => {
   it("closes the backing DB — channel calls then throw until re-init", () => {
     seedEnqueued(WT);
@@ -475,6 +565,21 @@ describe("formatPayload", () => {
     expect(out).toMatch(
       /<interaction id="interaction-id-abc-123" target="line" intent="request" author="@romina" authorRole="user" file="a.ts"/,
     );
+  });
+
+  it("emits parentId on a reply so the agent can find the parent comment", () => {
+    const c = makeInteraction({
+      target: "reply",
+      intent: "ack",
+      parentId: "r-parent-1",
+    });
+    const out = formatPayload([c], "sha");
+    expect(out).toContain('parentId="r-parent-1"');
+  });
+
+  it("omits parentId when absent (non-reply interactions)", () => {
+    const out = formatPayload([makeInteraction()], "sha");
+    expect(out).not.toContain("parentId=");
   });
 
   it("emits htmlUrl when present (PR-imported interactions)", () => {

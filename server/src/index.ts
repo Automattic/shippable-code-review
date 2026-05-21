@@ -1104,9 +1104,15 @@ async function handleAgentInteractions(
       ? agentQueue.pullAndAck(wtPath)
       : parsed.status === "delivered"
         ? agentQueue.readInteractions(wtPath, ["delivered"])
-        : agentQueue.readInteractions(wtPath, ["pending", "delivered"]);
-  const payload = agentQueue.formatPayload(resolved, earliestCommitSha(resolved));
+        : agentQueue.readAllInteractions(wtPath);
+  // `ids` reports only what this call resolved/drained; parents are pulled in
+  // read-only for context and must not count as delivered.
   const ids = resolved.map((c) => c.id);
+  const forPayload = agentQueue.withReferencedParents(wtPath, resolved);
+  const payload = agentQueue.formatPayload(
+    forPayload,
+    earliestCommitSha(forPayload),
+  );
   writeCorsHeaders(res, origin);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ payload, ids }));

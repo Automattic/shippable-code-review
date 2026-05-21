@@ -1030,7 +1030,8 @@ export function ReviewWorkspace({
   const handleSubmitReply = (key: string, body: string) => {
     const createdAt = new Date();
     const interactionId = newReviewerInteractionId();
-    const isFirst = (state.interactions[key]?.length ?? 0) === 0;
+    const head = state.interactions[key]?.[0];
+    const isFirst = head === undefined;
     const interaction: Interaction = {
       id: interactionId,
       threadKey: key,
@@ -1041,6 +1042,9 @@ export function ReviewWorkspace({
       body,
       createdAt: createdAt.toISOString(),
       ...buildReplyAnchor(key, cs),
+      // A reply points at its thread head — lets the agent channel link the
+      // reply back to the comment (often an agent comment) it answers.
+      ...(head ? { parentId: head.id } : {}),
       ...(activeWorktreeSource ? { agentQueueStatus: "pending" } : {}),
     };
     const addAction = {

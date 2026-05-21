@@ -206,6 +206,74 @@ describe("POST /api/agent/interactions", () => {
     expect(drained.body.payload).toContain("second");
   });
 
+  it("status=all includes agent-authored replies carrying their parentId", async () => {
+    const reviewerId = await seedPending(worktreePath, { body: "please fix" });
+    // Drain to delivered so the reply's parentId passes the delivered check.
+    await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "unread",
+    });
+    const reply = await postJson(`${baseUrl}/api/agent/replies`, {
+      worktreePath,
+      parentId: reviewerId,
+      body: "fixed it",
+      intent: "accept",
+    });
+    expect(reply.status).toBe(200);
+
+    const all = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "all",
+    });
+    expect(all.status).toBe(200);
+    expect(all.body.payload).toContain("fixed it");
+    expect(all.body.payload).toContain(`parentId="${reviewerId}"`);
+  });
+
+  it("status=unread surfaces a reviewer reply to an agent comment with its parent", async () => {
+    // Agent posts a top-level finding.
+    const post = await postJson(`${baseUrl}/api/agent/replies`, {
+      worktreePath,
+      file: "src/foo.ts",
+      lines: "10",
+      target: "line",
+      body: "agent finding",
+      intent: "comment",
+    });
+    expect(post.status).toBe(200);
+    const agentCommentId = post.body.id as string;
+
+    // Reviewer replies to that agent comment — the reply carries parentId.
+    const upsert = await postJson(`${baseUrl}/api/interactions`, {
+      id: "rev-reply-ctx",
+      changesetId: "cs-int-test",
+      target: "reply",
+      intent: "comment",
+      author: "you",
+      authorRole: "user",
+      body: "thanks, will fix",
+      parentId: agentCommentId,
+    });
+    expect(upsert.status).toBe(200);
+    await postJson(`${baseUrl}/api/interactions/enqueue`, {
+      id: "rev-reply-ctx",
+      worktreePath,
+    });
+
+    const unread = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "unread",
+    });
+    expect(unread.status).toBe(200);
+    // Only the reply is drained — the parent rides along read-only.
+    expect(unread.body.ids).toEqual(["rev-reply-ctx"]);
+    // The reply links to the agent comment, and the agent comment's text
+    // is included so the agent has the context it replied to.
+    expect(unread.body.payload).toContain(`parentId="${agentCommentId}"`);
+    expect(unread.body.payload).toContain("thanks, will fix");
+    expect(unread.body.payload).toContain("agent finding");
+  });
+
   it("rejects a missing status", async () => {
     const r = await postJson(`${baseUrl}/api/agent/interactions`, {
       worktreePath,

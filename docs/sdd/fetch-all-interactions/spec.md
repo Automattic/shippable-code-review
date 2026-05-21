@@ -1,5 +1,9 @@
 # Spec: Fetch All Interactions
 
+> **Update — 2026-05-21.** A later fix changed `status=all` and the pull
+> envelope; the original behavior below is preserved for history. See
+> [§ Update — 2026-05-21](#update--2026-05-21) at the end of this file.
+
 ## Goal
 Replace the single-purpose `POST /api/agent/pull` with one status-driven
 endpoint, `POST /api/agent/interactions`, that lets the review agent fetch its
@@ -62,6 +66,10 @@ interactions carry a `worktree_path` and an `agent_queue_status` of `pending`
 or `delivered`; agent-authored rows have `agent_queue_status = NULL`. So
 `status=all` (`pending` + `delivered`) is exactly the set of enqueued review
 interactions for a worktree — agent-authored rows are naturally excluded.
+
+> **Superseded.** Excluding agent-authored rows stranded the agent's own
+> prior comments — and the parents of replies — from `status=all`. See
+> [§ Update — 2026-05-21](#update--2026-05-21).
 
 The HTTP handler replaces `handleAgentPull`. It validates at the boundary
 (`worktreePath`, `assertGitDir`, `status`), branches to the store, then formats
@@ -130,3 +138,32 @@ all three branches use it.
 - **`/api/agent/delivered` fate?** — Left as-is; different consumer (web UI).
 - **Store layering?** — Generalized `listByQueueStatus` replacing `listDelivered`,
   with `pullAndAck` kept separate for the draining `unread` path.
+
+## Update — 2026-05-21
+
+Two changes to the behavior specified above, from testing the pull end to end.
+
+**`status=all` includes agent-authored rows.** The original `all` queried
+`["pending","delivered"]`, so agent-authored rows (`agent_queue_status = NULL`)
+were excluded — which also meant a reviewer's reply could come back without the
+agent comment it answered. `all` now returns *every* interaction for the
+worktree regardless of queue status, via a new store query
+`listAllForWorktree(worktreePath)` (`SELECT … WHERE worktree_path = ?`) wrapped
+as `agentQueue.readAllInteractions`. `unread` and `delivered` are unchanged.
+
+**Replies carry their parent, and the pull pulls parents in.** Two halves:
+
+- `toWire` now projects `payload.parentId`, and `renderInteraction` emits a
+  `parentId="…"` attribute, so a reply `<interaction>` links to the comment it
+  answers. Reviewer replies to an agent comment now record that `parentId`
+  too — the web composer stamps it from the thread head, and
+  `/api/interactions` stores it (added to the `PAYLOAD_FIELDS` allowlist).
+- `agentQueue.withReferencedParents` runs on every pull (`unread`, `delivered`,
+  `all`): for any reply whose parent isn't already in the result, it appends
+  that parent read-only, walking the chain for reply-to-a-reply. The `ids`
+  array still reports only the resolved/drained interactions — parents are
+  context, not deliveries.
+
+This realizes the parent-context intent from `docs/sdd/agent-comments/`
+(requirement 14) in the current `<interaction>` wire format. Canonical
+behavior now lives in `docs/concepts/agent-context.md`.

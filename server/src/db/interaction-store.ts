@@ -207,6 +207,39 @@ export function listByQueueStatus(
   return rows.map(rowToStored);
 }
 
+/**
+ * Read-only: every interaction for a worktree regardless of queue status —
+ * reviewer rows (pending/delivered) and agent-authored rows (status null)
+ * alike. Sorted oldest-first. Unlike pullAndAck, this never acks.
+ */
+export function listAllForWorktree(worktreePath: string): StoredInteraction[] {
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM interactions WHERE worktree_path = ? ORDER BY created_at, id",
+    )
+    .all(worktreePath) as InteractionRow[];
+  return rows.map(rowToStored);
+}
+
+/**
+ * Look up interactions for a worktree by id. Used to pull in the parent
+ * comment a reply references, regardless of queue status. Missing ids are
+ * silently skipped.
+ */
+export function getByIdsForWorktree(
+  worktreePath: string,
+  ids: string[],
+): StoredInteraction[] {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => "?").join(", ");
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM interactions WHERE worktree_path = ? AND id IN (${placeholders})`,
+    )
+    .all(worktreePath, ...ids) as InteractionRow[];
+  return rows.map(rowToStored);
+}
+
 /** Input shape for agent-authored interactions. */
 export interface AgentInteractionInput {
   id: string;
