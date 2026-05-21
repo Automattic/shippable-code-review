@@ -202,7 +202,18 @@ export function ReplyThread({
       {headIx ? (
         // Two-level layout: head comment rendered distinctly, replies nested.
         <>
-          <div className="thread__head">{renderUserRow(headIx, false)}</div>
+          <div className="thread__head">
+            {headIx.authorRole === "agent" ? (
+              <AgentRow
+                ix={headIx}
+                symbols={symbols}
+                onJump={onJump}
+                asItem={false}
+              />
+            ) : (
+              renderUserRow(headIx, false)
+            )}
+          </div>
           {replyRows.length > 0 && (
             <>
               <div className="thread__label">replies ({replyRows.length})</div>
@@ -237,18 +248,24 @@ export function ReplyThread({
   );
 }
 
-/** Render an agent-authored Interaction with intent-glyph + label. */
+/**
+ * Render an agent-authored Interaction with intent-glyph + label. A top-level
+ * agent comment is the head of its own thread, so it renders as a `<div>`
+ * (`asItem={false}`); agent replies nested inside a `<ul>` render as `<li>`.
+ */
 function AgentRow({
   ix,
   symbols,
   onJump,
+  asItem = true,
 }: {
   ix: Interaction;
   symbols: SymbolIndex;
   onJump: (c: Cursor) => void;
+  asItem?: boolean;
 }) {
-  return (
-    <li className={`agent-reply agent-reply--${ix.intent}`}>
+  const children = (
+    <>
       <div className="agent-reply__head">
         <span
           className="agent-reply__icon"
@@ -290,7 +307,13 @@ function AgentRow({
           </pre>
         </details>
       )}
-    </li>
+    </>
+  );
+  const className = `agent-reply agent-reply--${ix.intent}`;
+  return asItem ? (
+    <li className={className}>{children}</li>
+  ) : (
+    <div className={className}>{children}</div>
   );
 }
 

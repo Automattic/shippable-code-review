@@ -651,11 +651,26 @@ describe("ReplyThread — two-level thread layout (user comment head + nested re
 });
 
 describe("ReplyThread — structured agent fields", () => {
-  it("renders a confidence chip when confidence is set", () => {
-    const { container } = renderThread([
-      userIx({ agentQueueStatus: "pending" }),
-      agentIx({ target: "line", intent: "request", confidence: "high" }),
+  // A top-level agent comment is the head of its own thread. Render it solo so
+  // these exercise the thread-head path — the structured fields live in
+  // AgentRow, and the head must route through AgentRow, not renderUserRow.
+  function renderAgentHead(over: Partial<Interaction> = {}) {
+    return renderThread([
+      agentIx({ target: "line", intent: "request", ...over }),
     ]);
+  }
+
+  it("renders a top-level agent comment as the thread head via AgentRow", () => {
+    const { container } = renderAgentHead({ confidence: "high" });
+    expect(
+      container.querySelector(".thread__head .agent-reply"),
+    ).not.toBeNull();
+    // It must NOT fall through to the user-row renderer.
+    expect(container.querySelector(".thread__head .reply")).toBeNull();
+  });
+
+  it("renders a confidence chip when confidence is set", () => {
+    const { container } = renderAgentHead({ confidence: "high" });
     const chip = container.querySelector(".agent-reply__confidence");
     expect(chip).not.toBeNull();
     expect(chip?.textContent).toMatch(/high/i);
@@ -665,15 +680,10 @@ describe("ReplyThread — structured agent fields", () => {
   });
 
   it("renders rationale and suggestedFix as collapsed <details> sections", () => {
-    const { container } = renderThread([
-      userIx({ agentQueueStatus: "pending" }),
-      agentIx({
-        target: "line",
-        intent: "request",
-        rationale: "this leaks a handle",
-        suggestedFix: "close(fd)",
-      }),
-    ]);
+    const { container } = renderAgentHead({
+      rationale: "this leaks a handle",
+      suggestedFix: "close(fd)",
+    });
     const rationale = container.querySelector(
       "details.agent-reply__detail--rationale",
     ) as HTMLDetailsElement | null;
@@ -690,10 +700,7 @@ describe("ReplyThread — structured agent fields", () => {
   });
 
   it("renders none of the structured fields when the interaction lacks them", () => {
-    const { container } = renderThread([
-      userIx({ agentQueueStatus: "pending" }),
-      agentIx({ target: "reply", intent: "accept" }),
-    ]);
+    const { container } = renderAgentHead();
     expect(container.querySelector(".agent-reply__confidence")).toBeNull();
     expect(container.querySelector(".agent-reply__detail--rationale")).toBeNull();
     expect(container.querySelector(".agent-reply__detail--fix")).toBeNull();
