@@ -254,6 +254,7 @@ export function ReviewWorkspace({
     });
   };
   const [showSidebar, setShowSidebar] = useState(true);
+  const [didAutoShowQuizSidebar, setDidAutoShowQuizSidebar] = useState(false);
   const [showLoad, setShowLoad] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showRangePicker, setShowRangePicker] = useState(false);
@@ -856,7 +857,29 @@ export function ReviewWorkspace({
   }, []);
 
   useEffect(() => {
+    if (!state.quiz.active) return;
+    if (didAutoShowQuizSidebar) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- surface the sidebar once when the first quiz of the session fires; the latch keeps this idempotent
+    setShowSidebar(true);
+    setDidAutoShowQuizSidebar(true);
+  }, [state.quiz.active, didAutoShowQuizSidebar]);
+
+  const prevCsIdRef = useRef(state.cursor.changesetId);
+  useEffect(() => {
+    if (prevCsIdRef.current === state.cursor.changesetId) return;
+    prevCsIdRef.current = state.cursor.changesetId;
+    if (state.quiz.active) {
+      dispatch({ type: "CLEAR_QUIZ_ACTIVE" });
+    }
+  }, [state.cursor.changesetId, state.quiz.active, dispatch]);
+
+  useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && state.quiz.active) {
+        dispatch({ type: "DISMISS_QUIZ", now: Date.now() });
+        e.preventDefault();
+        return;
+      }
       if (showHelp && e.key !== "?" && e.key !== "Escape") return;
       if (showPlan && !["p", "?", "Escape"].includes(e.key)) return;
       if (showPicker && e.key !== "Escape") return;
@@ -906,6 +929,7 @@ export function ReviewWorkspace({
     state.cursor,
     state.changesets,
     state.selection,
+    state.quiz.active,
     suggestion,
     line,
     draftingKey,
