@@ -7,7 +7,11 @@
 // manual track since they depend on Tauri / native menus.
 
 import { test, expect, expectWorkspaceLoaded, dismissPlanOverlay } from "./_lib/fixtures";
-import { mockAuthList, mockAuthWriteable } from "./_lib/mocks";
+import {
+  mockAuthList,
+  mockAuthWriteable,
+  mockStatsConsent,
+} from "./_lib/mocks";
 
 test.describe("Journey 6 — cross-cutting", () => {
   test.beforeEach(async ({ visit, page }) => {
@@ -468,5 +472,56 @@ test.describe("Journey 6 — inline interactions", () => {
     await expect(
       cursorBlock(page).getByPlaceholder("Write a reply…"),
     ).toBeVisible();
+  });
+});
+
+test.describe("Journey 6 — stats consent + reporting", () => {
+  test("undecided: the welcome banner shows, Allow grants and hides it", async ({
+    page,
+    visit,
+  }) => {
+    await mockStatsConsent(page, "undecided");
+    await visit("/");
+
+    const allow = page.getByRole("button", { name: /^Allow$/ });
+    await expect(allow).toBeVisible();
+    await expect(
+      page.getByText(/share anonymous usage counts/i),
+    ).toBeVisible();
+
+    const consentPost = page.waitForRequest(
+      (r) =>
+        r.url().includes("/api/stats/consent") && r.method() === "POST",
+    );
+    await allow.click();
+    await consentPost;
+    await expect(allow).toHaveCount(0);
+  });
+
+  test("granted: no banner on the welcome page", async ({ page, visit }) => {
+    await mockStatsConsent(page, "granted");
+    await visit("/");
+    // The "From a URL" section is a stable welcome-only marker.
+    await expect(page.getByText(/from a url/i)).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^Allow$/ }),
+    ).toHaveCount(0);
+  });
+
+  test("loading a review reports the review-started stat", async ({
+    page,
+    visit,
+  }) => {
+    await visit("/");
+    const eventPost = page.waitForRequest(
+      (r) => r.url().includes("/api/stats/event") && r.method() === "POST",
+    );
+    // A built-in sample is a user-driven load through handleLoadChangeset,
+    // which fires reportStat("review-started").
+    await page.locator(".welcome__sample").first().click();
+    const req = await eventPost;
+    expect(JSON.parse(req.postData() ?? "{}")).toMatchObject({
+      name: "review-started",
+    });
   });
 });

@@ -13,6 +13,7 @@ import {
   selectAckedNotes,
 } from "../state";
 import type { Action } from "../state";
+import { reportStat } from "../reportStat";
 import {
   fetchDefinition,
   fetchDefinitionCapabilities,
@@ -735,7 +736,11 @@ function ReviewWorkspaceInner({
         });
         break;
       case "TOGGLE_FILE_REVIEWED": {
+        // Count only the off→on transition, not un-marking.
         const fileId = state.cursor.fileId;
+        if (!state.reviewedFiles.has(fileId)) {
+          reportStat("file-marked-okay");
+        }
         dispatchToggleFileReviewedWithQuiz(
           dispatch,
           state.cursor.changesetId,
@@ -744,12 +749,26 @@ function ReviewWorkspaceInner({
         );
         break;
       }
-      case "TOGGLE_CHANGESET_REVIEWED":
+      case "TOGGLE_CHANGESET_REVIEWED": {
+        // Count only the transition into "reviewed" — re-marking after an
+        // un-review is the same review, and the no-op token-null case (paste
+        // / upload) is not a completion at all.
+        const cs = state.changesets.find(
+          (c) => c.id === state.cursor.changesetId,
+        );
+        if (
+          cs &&
+          getChangesetReviewToken(cs) !== null &&
+          !isChangesetSignedOff(cs, state.reviewedChangesets)
+        ) {
+          reportStat("review-completed");
+        }
         dispatch({
           type: "TOGGLE_CHANGESET_REVIEWED",
           changesetId: state.cursor.changesetId,
         });
         break;
+      }
       case "START_REPLY":
         setDraftingKey(
           lineNoteReplyKey(state.cursor.hunkId, state.cursor.lineIdx),

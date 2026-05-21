@@ -3,7 +3,7 @@ import "./Welcome.css";
 // worktree row and empty-diff RangePicker — these otherwise only load when
 // the workspace renders LoadModal, leaving Welcome unstyled.
 import "./LoadModal.css";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeSet, DetachedInteraction, Interaction } from "../types";
 import { parseDiff } from "../parseDiff";
 import { STUBS } from "../fixtures";
@@ -26,6 +26,7 @@ import {
   getStoredHideNonActiveComments,
   persistHideNonActiveComments,
 } from "../commentVisibility";
+import { fetchConsent, grantConsent, type Consent } from "../statsConsent";
 
 interface Props {
   recents: RecentEntry[];
@@ -66,6 +67,26 @@ export function Welcome({ recents, onLoad, onRecentsChange }: Props) {
   const showAiOffChip =
     credentials.anthropicSkipped &&
     !credentials.list.some((c) => c.kind === "anthropic");
+
+  // MC-stats consent. `null` covers both "still loading" and "fetch failed"
+  // — both render no banner, so the app fails closed (MC stays off).
+  const [consent, setConsent] = useState<Consent | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetchConsent()
+      .then((c) => live && setConsent(c))
+      .catch(() => live && setConsent(null));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  function allowStats() {
+    // Leave the banner up if the write fails — consent wasn't stored.
+    void grantConsent()
+      .then(() => setConsent("granted"))
+      .catch(() => {});
+  }
 
   // Single URL field (handles both raw diff URLs and GitHub PR HTML URLs).
   const [url, setUrl] = useState("");
@@ -230,6 +251,25 @@ export function Welcome({ recents, onLoad, onRecentsChange }: Props) {
       </header>
 
       <div className="welcome__body">
+        {consent === "undecided" && (
+          <div
+            className="welcome__consent"
+            role="region"
+            aria-label="usage stats consent"
+          >
+            <span className="welcome__consent-text">
+              Share anonymous usage counts to help improve the tool?
+            </span>
+            <button
+              type="button"
+              className="welcome__btn welcome__btn--primary"
+              onClick={allowStats}
+            >
+              Allow
+            </button>
+          </div>
+        )}
+
         {recents.length > 0 && (
           <section className="welcome__recents">
             <h2 className="welcome__sec-h">Recent</h2>

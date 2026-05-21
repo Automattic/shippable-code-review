@@ -85,6 +85,28 @@ export async function mockPromptsEmpty(page: Page): Promise<void> {
   await page.route("**/api/prompts", (route) => json(route, 200, { prompts: [] }));
 }
 
+/** Mock the stats-consent endpoints. GET returns the given state; POST always
+ *  succeeds (204). The default fixture installs `"granted"` so the welcome
+ *  banner stays hidden — tests that want the banner pass `"undecided"`. */
+export async function mockStatsConsent(
+  page: Page,
+  consent: "granted" | "undecided" = "granted",
+): Promise<void> {
+  await page.route("**/api/stats/consent", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 204, body: "" });
+    }
+    return json(route, 200, { consent });
+  });
+}
+
+/** Mock POST /api/stats/event — accepts every bump with 204. */
+export async function mockStatsEvent(page: Page): Promise<void> {
+  await page.route("**/api/stats/event", (route) =>
+    route.fulfill({ status: 204, body: "" }),
+  );
+}
+
 export interface PlanFixture {
   headline: string;
   intent?: Array<{ text: string; evidence: Array<{ kind: string }> }>;

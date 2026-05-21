@@ -354,6 +354,21 @@
   border: 1px solid var(--red);
   border-radius: 2px;
 }
+
+.welcome__consent {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  background: var(--bg-soft, transparent);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+.welcome__consent-text {
+  flex: 1;
+}
 .welcome__hint {
   color: var(--fg-mute);
   font-size: 11px;

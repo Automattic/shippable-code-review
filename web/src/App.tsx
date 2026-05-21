@@ -45,6 +45,7 @@ import { postJson } from "./apiClient";
 import { fetchDiffCodeGraph } from "./codeGraphClient";
 import { fetchInteractions } from "./interactionClient";
 import { useInteractionSync } from "./useInteractionSync";
+import { reportStat } from "./reportStat";
 
 interface BootSeed {
   changesets: ChangeSet[];
@@ -240,6 +241,7 @@ export default function App() {
       changeset: cs,
       interactions,
     });
+    reportStat("review-started", cs.id);
     if (prData) {
       dispatch({
         type: "MERGE_PR_INTERACTIONS",

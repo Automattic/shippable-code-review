@@ -9,7 +9,20 @@ beforeEach(() => {
   isTauriMock.mockReturnValue(false);
   keychainGetMock.mockResolvedValue(null);
   window.localStorage.clear();
+  // Default: consent fetch fails → no banner. Consent tests override this.
+  fetchConsentMock.mockRejectedValue(new Error("no consent endpoint"));
+  grantConsentMock.mockResolvedValue(undefined);
 });
+
+const { fetchConsentMock, grantConsentMock } = vi.hoisted(() => ({
+  fetchConsentMock: vi.fn(),
+  grantConsentMock: vi.fn(),
+}));
+
+vi.mock("../statsConsent", () => ({
+  fetchConsent: fetchConsentMock,
+  grantConsent: grantConsentMock,
+}));
 
 vi.mock("../auth/client", () => ({
   authList: vi.fn().mockResolvedValue([]),
@@ -225,6 +238,52 @@ describe("Welcome — unified URL field (PR + diff URL)", () => {
     await waitFor(() =>
       expect(screen.getByText("PR not found.")).toBeTruthy(),
     );
+  });
+});
+
+describe("Welcome — stats consent banner", () => {
+  const allowBtn = () => screen.queryByRole("button", { name: /^allow$/i });
+
+  it("shows a non-dismissible Allow banner when consent is undecided", async () => {
+    fetchConsentMock.mockResolvedValue("undecided");
+    renderWelcome();
+    await waitFor(() => expect(allowBtn()).not.toBeNull());
+    expect(
+      screen.getByText(/share anonymous usage counts/i),
+    ).toBeTruthy();
+    // No dismiss / close affordance — declining is simply not clicking Allow.
+    expect(screen.queryByRole("button", { name: /dismiss|close|×/i })).toBeNull();
+  });
+
+  it("shows no banner when consent is already granted", async () => {
+    fetchConsentMock.mockResolvedValue("granted");
+    renderWelcome();
+    await waitFor(() =>
+      expect(screen.getByText(/from a url/i)).toBeTruthy(),
+    );
+    expect(allowBtn()).toBeNull();
+  });
+
+  it("shows no banner when the consent fetch fails (fail closed)", async () => {
+    fetchConsentMock.mockRejectedValue(new Error("network"));
+    renderWelcome();
+    await waitFor(() =>
+      expect(screen.getByText(/from a url/i)).toBeTruthy(),
+    );
+    expect(allowBtn()).toBeNull();
+  });
+
+  it("grants consent and hides the banner when Allow is clicked", async () => {
+    fetchConsentMock.mockResolvedValue("undecided");
+    renderWelcome();
+    const btn = await waitFor(() => {
+      const b = allowBtn();
+      expect(b).not.toBeNull();
+      return b!;
+    });
+    fireEvent.click(btn);
+    await waitFor(() => expect(grantConsentMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(allowBtn()).toBeNull());
   });
 });
 

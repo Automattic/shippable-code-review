@@ -3,7 +3,13 @@
 // for the gate to fall through (or to surface a deliberate failure mode).
 
 import { test as base, expect, type Page } from "@playwright/test";
-import { mockAuthList, mockHealthy, mockPromptsEmpty } from "./mocks";
+import {
+  mockAuthList,
+  mockHealthy,
+  mockPromptsEmpty,
+  mockStatsConsent,
+  mockStatsEvent,
+} from "./mocks";
 
 export interface AppFixture {
   page: Page;
@@ -30,6 +36,10 @@ export const test = base.extend<
     await mockHealthy(page);
     await mockAuthList(page, []);
     await mockPromptsEmpty(page);
+    // Default consent = granted → no welcome banner. Tests that want the
+    // banner re-route /api/stats/consent to "undecided" before visit().
+    await mockStatsConsent(page, "granted");
+    await mockStatsEvent(page);
 
     await use(async (path = "/?cs=42", opts: VisitOpts = {}) => {
       const skipAnthropic = opts.skipAnthropic !== false;
