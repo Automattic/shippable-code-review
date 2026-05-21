@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { loadPr } from "./pr-load.ts";
 import type { PrCoords } from "./url.ts";
+import { parseReplyKey } from "../../../web/src/types.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -157,8 +158,9 @@ describe("loadPr — happy path", () => {
     // The key encodes a hunk that exists on src/foo.ts.
     const fooFile = changeSet.files.find((f) => f.path === "src/foo.ts")!;
     const hunkIds = fooFile.hunks.map((h) => h.id);
-    const keyHunkId = keys[0].split(":").slice(1, -1).join(":");
-    expect(hunkIds).toContain(keyHunkId);
+    const parsed = parseReplyKey(keys[0]);
+    expect(parsed?.kind).toBe("user");
+    expect(hunkIds).toContain((parsed as { hunkId: string }).hunkId);
   });
 
   it("populates prConversation from issue comments", async () => {
@@ -198,6 +200,40 @@ describe("loadPr — multi-line comment", () => {
     const keys = Object.keys(prInteractions);
     expect(keys).toHaveLength(1);
     expect(keys[0]).toMatch(/^block:/);
+  });
+});
+
+describe("loadPr — review threads", () => {
+  it("groups a reply under its root thread, separate from another root on the same line", async () => {
+    const root = LINE_COMMENTS[0];
+    const reply = {
+      ...root,
+      id: 101,
+      body: "A reply",
+      in_reply_to_id: 100,
+      html_url: "https://github.com/owner/repo/pull/42#discussion_r101",
+    };
+    const otherRoot = {
+      ...root,
+      id: 102,
+      body: "Unrelated thread, same line",
+      html_url: "https://github.com/owner/repo/pull/42#discussion_r102",
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    stubHappyPath(PR_FILES, [root, reply, otherRoot] as any, ISSUE_COMMENTS);
+    const { prInteractions } = await loadPr(COORDS, TOKEN);
+
+    const keys = Object.keys(prInteractions);
+    expect(keys).toHaveLength(2);
+
+    const rootKey = keys.find((k) => k.endsWith(":100"))!;
+    expect(prInteractions[rootKey].map((i) => i.id)).toEqual([
+      "pr-comment:100",
+      "pr-comment:101",
+    ]);
+
+    const otherKey = keys.find((k) => k.endsWith(":102"))!;
+    expect(prInteractions[otherKey].map((i) => i.id)).toEqual(["pr-comment:102"]);
   });
 });
 

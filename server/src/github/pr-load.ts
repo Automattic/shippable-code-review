@@ -50,6 +50,8 @@ interface GhLineComment {
   created_at: string;
   html_url: string;
   side: "LEFT" | "RIGHT";
+  /** Root comment id when this comment is a reply; absent for top-level. */
+  in_reply_to_id?: number;
 }
 
 interface GhIssueComment {
@@ -276,6 +278,11 @@ export async function loadPr(
       c.start_line !== undefined &&
       c.start_line !== c.line;
 
+    // A GitHub review thread is the root comment plus its replies; group by
+    // the root's id so replies land under it and distinct threads on the
+    // same line stay separate.
+    const threadId = String(c.in_reply_to_id ?? c.id);
+
     let key: string;
     let target: Interaction["target"];
     if (isMultiLine) {
@@ -283,15 +290,15 @@ export async function loadPr(
       if (startHit && startHit.hunkId === hit.hunkId) {
         const lo = Math.min(startHit.lineIdx, hit.lineIdx);
         const hi = Math.max(startHit.lineIdx, hit.lineIdx);
-        key = blockCommentKey(hit.hunkId, lo, hi);
+        key = blockCommentKey(hit.hunkId, lo, hi, threadId);
         target = "block";
       } else {
         // Span crosses hunks (rare) — fall back to single-line on the end line.
-        key = userCommentKey(hit.hunkId, hit.lineIdx);
+        key = userCommentKey(hit.hunkId, hit.lineIdx, threadId);
         target = "line";
       }
     } else {
-      key = userCommentKey(hit.hunkId, hit.lineIdx);
+      key = userCommentKey(hit.hunkId, hit.lineIdx, threadId);
       target = "line";
     }
 
