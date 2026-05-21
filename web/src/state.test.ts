@@ -2237,4 +2237,87 @@ describe("quiz", () => {
     });
     expect(next.quiz.asked).toEqual([]);
   });
+
+  it("SUBMIT_QUIZ_ANSWER stores answer, updates lastQuizAt, adds to asked, keeps active", () => {
+    const cs = buildSampleChangeset();
+    const q = sampleQuestion("q-1", { kind: "file", path: "a.ts" });
+    const initial: ReviewState = {
+      ...withChangeset(cs),
+      quiz: {
+        questions: { "cs-1": [q] },
+        answers: {},
+        active: { questionId: "q-1" },
+        lastQuizAt: null,
+        asked: [],
+      },
+    };
+    const next = reducer(initial, {
+      type: "SUBMIT_QUIZ_ANSWER",
+      questionId: "q-1",
+      answer: "my answer",
+      now: 5000,
+    });
+    expect(next.quiz.answers["q-1"]).toEqual({
+      answer: "my answer",
+      submittedAt: 5000,
+      selfEval: null,
+    });
+    expect(next.quiz.lastQuizAt).toBe(5000);
+    expect(next.quiz.asked).toEqual(["q-1"]);
+    expect(next.quiz.active).toEqual({ questionId: "q-1" });
+  });
+
+  it("DISMISS_QUIZ updates lastQuizAt, adds to asked, clears active", () => {
+    const cs = buildSampleChangeset();
+    const q = sampleQuestion("q-1", { kind: "file", path: "a.ts" });
+    const initial: ReviewState = {
+      ...withChangeset(cs),
+      quiz: {
+        questions: { "cs-1": [q] },
+        answers: {},
+        active: { questionId: "q-1" },
+        lastQuizAt: null,
+        asked: [],
+      },
+    };
+    const next = reducer(initial, { type: "DISMISS_QUIZ", now: 2000 });
+    expect(next.quiz.active).toBeNull();
+    expect(next.quiz.lastQuizAt).toBe(2000);
+    expect(next.quiz.asked).toEqual(["q-1"]);
+  });
+
+  it("SET_QUIZ_SELF_EVAL writes the bucket without touching active", () => {
+    const cs = buildSampleChangeset();
+    const q = sampleQuestion("q-1", { kind: "file", path: "a.ts" });
+    const initial: ReviewState = {
+      ...withChangeset(cs),
+      quiz: {
+        questions: { "cs-1": [q] },
+        answers: { "q-1": { answer: "x", submittedAt: 100, selfEval: null } },
+        active: { questionId: "q-1" },
+        lastQuizAt: 100,
+        asked: ["q-1"],
+      },
+    };
+    const next = reducer(initial, {
+      type: "SET_QUIZ_SELF_EVAL",
+      questionId: "q-1",
+      selfEval: "got_it",
+    });
+    expect(next.quiz.answers["q-1"].selfEval).toBe("got_it");
+    expect(next.quiz.active).toEqual({ questionId: "q-1" });
+  });
+
+  it("CLEAR_QUIZ_ACTIVE clears active without touching asked", () => {
+    const cs = buildSampleChangeset();
+    const q = sampleQuestion("q-1", { kind: "file", path: "a.ts" });
+    const initial: ReviewState = {
+      ...withChangeset(cs),
+      quiz: { questions: { "cs-1": [q] }, answers: {}, active: { questionId: "q-1" }, lastQuizAt: 100, asked: [] },
+    };
+    const next = reducer(initial, { type: "CLEAR_QUIZ_ACTIVE" });
+    expect(next.quiz.active).toBeNull();
+    expect(next.quiz.asked).toEqual([]);
+    expect(next.quiz.lastQuizAt).toBe(100);
+  });
 });

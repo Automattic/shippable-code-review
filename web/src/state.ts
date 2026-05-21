@@ -13,6 +13,7 @@ import type {
   Question,
   ReviewState,
   QuizState,
+  QuizSelfEval,
 } from "./types";
 import {
   blockCommentKey,
@@ -305,7 +306,11 @@ export type Action =
       fileId: string;
       now: number;
       roll: number;
-    };
+    }
+  | { type: "DISMISS_QUIZ"; now: number }
+  | { type: "SUBMIT_QUIZ_ANSWER"; questionId: string; answer: string; now: number }
+  | { type: "SET_QUIZ_SELF_EVAL"; questionId: string; selfEval: QuizSelfEval }
+  | { type: "CLEAR_QUIZ_ACTIVE" };
 
 export function reducer(state: ReviewState, action: Action): ReviewState {
   // Welcome mode (no changesets) — only LOAD_CHANGESET is meaningful.
@@ -686,6 +691,55 @@ export function reducer(state: ReviewState, action: Action): ReviewState {
         ...state,
         quiz: { ...state.quiz, active: { questionId: eligible[idx].id } },
       };
+    }
+    case "DISMISS_QUIZ": {
+      if (!state.quiz.active) return state;
+      const askedNext = state.quiz.asked.includes(state.quiz.active.questionId)
+        ? state.quiz.asked
+        : [...state.quiz.asked, state.quiz.active.questionId];
+      return {
+        ...state,
+        quiz: { ...state.quiz, active: null, lastQuizAt: action.now, asked: askedNext },
+      };
+    }
+    case "SUBMIT_QUIZ_ANSWER": {
+      const askedNext = state.quiz.asked.includes(action.questionId)
+        ? state.quiz.asked
+        : [...state.quiz.asked, action.questionId];
+      return {
+        ...state,
+        quiz: {
+          ...state.quiz,
+          answers: {
+            ...state.quiz.answers,
+            [action.questionId]: {
+              answer: action.answer,
+              submittedAt: action.now,
+              selfEval: null,
+            },
+          },
+          lastQuizAt: action.now,
+          asked: askedNext,
+        },
+      };
+    }
+    case "SET_QUIZ_SELF_EVAL": {
+      const prev = state.quiz.answers[action.questionId];
+      if (!prev) return state;
+      return {
+        ...state,
+        quiz: {
+          ...state.quiz,
+          answers: {
+            ...state.quiz.answers,
+            [action.questionId]: { ...prev, selfEval: action.selfEval },
+          },
+        },
+      };
+    }
+    case "CLEAR_QUIZ_ACTIVE": {
+      if (!state.quiz.active) return state;
+      return { ...state, quiz: { ...state.quiz, active: null } };
     }
   }
 }
