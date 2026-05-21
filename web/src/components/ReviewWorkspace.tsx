@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Dispatch, ReactNode } from "react";
 import {
   buildCommentStops,
@@ -96,6 +96,8 @@ import {
 } from "../multiWindow";
 import {
   useDetachBridge,
+  type InspectorAction,
+  type InspectorSnapshot,
   type SidebarAction,
   type SidebarSnapshot,
 } from "../detachBridge";
@@ -788,8 +790,8 @@ export function ReviewWorkspace({
     ? buildGuidePromptViewModel(suggestion, symbolIndex, cs.id)
     : null;
 
-  function startPromptRun(prompt: Prompt, rendered: string) {
-    const id = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const startPromptRun = (prompt: Prompt, rendered: string) => {
+    const id = newPromptRunId();
     const controller = new AbortController();
     runControllersRef.current.set(id, controller);
     setRuns((prev) => [
@@ -813,13 +815,13 @@ export function ReviewWorkspace({
         },
       },
     );
-  }
+  };
 
-  function closePromptRun(id: string) {
+  const closePromptRun = (id: string) => {
     runControllersRef.current.get(id)?.abort();
     runControllersRef.current.delete(id);
     setRuns((prev) => prev.filter((r) => r.id !== id));
-  }
+  };
 
   // ── Detach bridge ───────────────────────────────────────────────────────
   // The sidebar snapshot is built once per render and passed both to the
@@ -839,55 +841,259 @@ export function ReviewWorkspace({
     wide: sidebarWide,
   };
 
-  const handleSidebarAction = useCallback(
-    (action: SidebarAction) => {
-      switch (action.type) {
-        case "pick-file": {
-          const f = cs.files.find((ff) => ff.id === action.fileId);
-          if (!f) return;
-          dispatch({
-            type: "SET_CURSOR",
-            cursor: {
-              changesetId: cs.id,
-              fileId: action.fileId,
-              hunkId: f.hunks[0].id,
-              lineIdx: 0,
-            },
-          });
-          break;
-        }
-        case "jump-to-first-comment": {
-          const stop = buildCommentStops(cs, state.interactions).find(
-            (s) => s.fileId === action.fileId,
-          );
-          if (!stop) return;
-          dispatch({
-            type: "SET_CURSOR",
-            cursor: {
-              changesetId: cs.id,
-              fileId: stop.fileId,
-              hunkId: stop.hunkId,
-              lineIdx: stop.lineIdx,
-            },
-          });
-          break;
-        }
-        case "close-run":
-          closePromptRun(action.id);
-          break;
-        case "toggle-wide":
-          setSidebarWide((v) => !v);
-          break;
+  const handleSidebarAction = (action: SidebarAction) => {
+    switch (action.type) {
+      case "pick-file": {
+        const f = cs.files.find((ff) => ff.id === action.fileId);
+        if (!f) return;
+        dispatch({
+          type: "SET_CURSOR",
+          cursor: {
+            changesetId: cs.id,
+            fileId: action.fileId,
+            hunkId: f.hunks[0].id,
+            lineIdx: 0,
+          },
+        });
+        break;
       }
-    },
-    [cs, state.interactions, dispatch],
-  );
+      case "jump-to-first-comment": {
+        const stop = buildCommentStops(cs, state.interactions).find(
+          (s) => s.fileId === action.fileId,
+        );
+        if (!stop) return;
+        dispatch({
+          type: "SET_CURSOR",
+          cursor: {
+            changesetId: cs.id,
+            fileId: stop.fileId,
+            hunkId: stop.hunkId,
+            lineIdx: stop.lineIdx,
+          },
+        });
+        break;
+      }
+      case "close-run":
+        closePromptRun(action.id);
+        break;
+      case "toggle-wide":
+        setSidebarWide((v) => !v);
+        break;
+    }
+  };
 
-  const { isSidebarDetached } = useDetachBridge({
+  // ── Inspector snapshot + handlers ───────────────────────────────────────
+  // The docked Inspector's many callbacks fan out from one
+  // handleInspectorAction switch so the detached child's emits land on the
+  // same code path. Each extracted handler matches what the docked JSX
+  // used to call inline.
+  const inspectorViewModel = buildInspectorViewModel({
+    file,
+    hunk,
+    line,
+    cursor: state.cursor,
+    symbols: symbolIndex,
+    acked: ackedSet,
+    replies: state.interactions,
+    draftingKey,
+    signals: ingestSignals,
+    detachedInteractions: state.detachedInteractions,
+  });
+  const commentStops = buildCommentStops(cs, state.interactions);
+
+  // React Compiler auto-memoizes these where the deps stay stable; an
+  // explicit useCallback here was tripping its
+  // preserve-manual-memoization rule for the same reason `cs.files`
+  // tripped it on the sidebar memo.
+  const handleSubmitReply = (key: string, body: string) => {
+    const createdAt = new Date();
+    const interactionId = newReviewerInteractionId();
+    const isFirst = (state.interactions[key]?.length ?? 0) === 0;
+    const interaction: Interaction = {
+      id: interactionId,
+      threadKey: key,
+      target: isFirst ? firstTargetForKey(key) : replyTarget(),
+      intent: "comment",
+      author: "you",
+      authorRole: "user",
+      body,
+      createdAt: createdAt.toISOString(),
+      ...buildReplyAnchor(key, cs),
+      ...(activeWorktreeSource ? { agentQueueStatus: "pending" } : {}),
+    };
+    const addAction = {
+      type: "ADD_INTERACTION" as const,
+      targetKey: key,
+      interaction,
+    };
+    if (activeWorktreeSource) {
+      rawDispatch(addAction);
+    } else {
+      dispatch(addAction);
+    }
+    setDrafts((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setDraftingKey(null);
+    if (activeWorktreeSource) {
+      const worktreePath = activeWorktreeSource.worktreePath;
+      upsertInteraction(interaction, cs.id)
+        .then(() => enqueueInteraction(interactionId, worktreePath))
+        .catch((err: unknown) => {
+          console.error("[shippable] enqueue failed:", err);
+          dispatch({
+            type: "SET_INTERACTION_ENQUEUE_ERROR",
+            targetKey: key,
+            interactionId,
+            error: true,
+          });
+        });
+    }
+  };
+
+  const handleRetryReply = (key: string, replyId: string) => {
+    if (!activeWorktreeSource) return;
+    const ix = state.interactions[key]?.find((entry) => entry.id === replyId);
+    if (!ix) return;
+    const worktreePath = activeWorktreeSource.worktreePath;
+    dispatch({
+      type: "SET_INTERACTION_ENQUEUE_ERROR",
+      targetKey: key,
+      interactionId: replyId,
+      error: false,
+    });
+    upsertInteraction(ix, cs.id)
+      .then(() => enqueueInteraction(replyId, worktreePath))
+      .catch((err: unknown) => {
+        console.error("[shippable] retry enqueue failed:", err);
+        dispatch({
+          type: "SET_INTERACTION_ENQUEUE_ERROR",
+          targetKey: key,
+          interactionId: replyId,
+          error: true,
+        });
+      });
+  };
+
+  const handleDeleteReply = (key: string, replyId: string) => {
+    const target = state.interactions[key]?.find((ix) => ix.id === replyId);
+    if (target?.agentQueueStatus === "pending" && activeWorktreeSource) {
+      unenqueueInteraction(replyId).catch((err: unknown) => {
+        console.error("[shippable] unenqueue failed:", err);
+      });
+    }
+    dispatch({
+      type: "DELETE_INTERACTION",
+      targetKey: key,
+      interactionId: replyId,
+    });
+  };
+
+  const handleVerifyAiNote = (recipe: {
+    source: string;
+    inputs: Record<string, string>;
+  }) => {
+    setRunRequest((prev) => ({
+      tick: (prev?.tick ?? 0) + 1,
+      source: recipe.source,
+      inputs: recipe.inputs,
+    }));
+  };
+
+  const inspectorAgentContext = activeWorktreeSource
+    ? {
+        slice: agentSlice,
+        candidates: agentSessions,
+        selectedSessionFilePath:
+          pinnedSession ?? agentSlice?.session.filePath ?? null,
+        loading: agentLoading,
+        error: agentError,
+        mcpStatus,
+        delivered: deliveredComments,
+        lastSuccessfulPollAt: deliveredLastSuccessAt,
+        deliveredError: deliveredErrorState,
+        agentStartedThreads: agentStartedThreads(state.interactions),
+      }
+    : null;
+
+  const inspectorSnapshot: InspectorSnapshot = {
+    viewModel: inspectorViewModel,
+    commentCount: commentStops.length,
+    lineHasAiNote,
+    agentContext: inspectorAgentContext,
+  };
+
+  const handleInspectorAction = (action: InspectorAction) => {
+    switch (action.type) {
+      case "jump":
+        dispatch({ type: "SET_CURSOR", cursor: action.cursor });
+        break;
+      case "jump-to-block":
+        dispatch({
+          type: "SET_CURSOR",
+          cursor: action.cursor,
+          selection: action.selection,
+        });
+        break;
+      case "toggle-ack":
+        dispatch({
+          type: "TOGGLE_ACK",
+          hunkId: action.hunkId,
+          lineIdx: action.lineIdx,
+        });
+        break;
+      case "start-draft":
+        setDraftingKey(action.key);
+        break;
+      case "close-draft":
+        setDraftingKey(null);
+        break;
+      case "submit-reply":
+        handleSubmitReply(action.key, action.body);
+        break;
+      case "retry-reply":
+        handleRetryReply(action.key, action.replyId);
+        break;
+      case "delete-reply":
+        handleDeleteReply(action.key, action.replyId);
+        break;
+      case "prev-comment":
+        dispatch({ type: "MOVE_TO_COMMENT", delta: -1 });
+        break;
+      case "next-comment":
+        dispatch({ type: "MOVE_TO_COMMENT", delta: 1 });
+        break;
+      case "pick-session":
+        setPinnedSession(action.sessionFilePath);
+        break;
+      case "refresh":
+        setAgentRefreshTick((t) => t + 1);
+        break;
+      case "verify-ai-note":
+        handleVerifyAiNote(action.recipe);
+        break;
+    }
+  };
+
+  const { isSidebarDetached, isInspectorDetached } = useDetachBridge({
     selfLabel,
     sidebarSnapshot,
     onSidebarAction: handleSidebarAction,
+    inspectorSnapshot,
+    onInspectorAction: handleInspectorAction,
   });
+
+  // Mirror the sidebar's re-dock-visibility behaviour for the inspector.
+  const wasInspectorDetachedRef = useRef(false);
+  useEffect(() => {
+    if (wasInspectorDetachedRef.current && !isInspectorDetached) {
+      setShowInspector(true);
+    }
+    wasInspectorDetachedRef.current = isInspectorDetached;
+  }, [isInspectorDetached]);
 
   // When the panel re-docks (detached → not detached), restore visibility
   // even if the user had manually hidden it before detaching. The visible
@@ -1440,21 +1646,10 @@ export function ReviewWorkspace({
             }}
           />
         </div>
-        {showInspector && (
+        {showInspector && !isInspectorDetached && (
           <Inspector
-            viewModel={buildInspectorViewModel({
-              file,
-              hunk,
-              line,
-              cursor: state.cursor,
-              symbols: symbolIndex,
-              acked: ackedSet,
-              replies: state.interactions,
-              draftingKey,
-              signals: ingestSignals,
-              detachedInteractions: state.detachedInteractions,
-            })}
-            commentCount={buildCommentStops(cs, state.interactions).length}
+            viewModel={inspectorViewModel}
+            commentCount={commentStops.length}
             onPrevComment={() => dispatch({ type: "MOVE_TO_COMMENT", delta: -1 })}
             onNextComment={() => dispatch({ type: "MOVE_TO_COMMENT", delta: 1 })}
             lineHasAiNote={lineHasAiNote}
@@ -1472,136 +1667,14 @@ export function ReviewWorkspace({
             onChangeDraft={(key, body) =>
               setDrafts((prev) => ({ ...prev, [key]: body }))
             }
-            onSubmitReply={(key, body) => {
-              const createdAt = new Date();
-              const interactionId = newReviewerInteractionId();
-              const isFirst = (state.interactions[key]?.length ?? 0) === 0;
-              const interaction: Interaction = {
-                id: interactionId,
-                threadKey: key,
-                target: isFirst ? firstTargetForKey(key) : replyTarget(),
-                intent: "comment",
-                author: "you",
-                authorRole: "user",
-                body,
-                createdAt: createdAt.toISOString(),
-                ...buildReplyAnchor(key, cs),
-                // Optimistically mark as queued so the pip appears immediately
-                // in the submit→delivered window. The server's enqueue POST
-                // sets the same column server-side; no mismatch risk.
-                ...(activeWorktreeSource ? { agentQueueStatus: "pending" } : {}),
-              };
-              // Worktree path: bypass the sync hook — this code manages its
-              // own upsert→enqueue sequence, and going through syncedDispatch
-              // would fire a concurrent duplicate upsert for the same row.
-              // Non-worktree path: go through the sync hook (its upsert is the
-              // only persistence path for paste/url/upload changesets).
-              const addAction = {
-                type: "ADD_INTERACTION" as const,
-                targetKey: key,
-                interaction,
-              };
-              if (activeWorktreeSource) {
-                rawDispatch(addAction);
-              } else {
-                dispatch(addAction);
-              }
-              setDrafts((prev) => {
-                if (!(key in prev)) return prev;
-                const next = { ...prev };
-                delete next[key];
-                return next;
-              });
-              setDraftingKey(null);
-              // When a worktree is loaded, enqueue the interaction for the
-              // agent. The DB row must exist before /enqueue can reference
-              // it, so upsert here and enqueue on success rather than
-              // racing the background sync. Non-worktree loads (paste/url/
-              // upload) just persist the interaction; no pip appears.
-              if (activeWorktreeSource) {
-                const worktreePath = activeWorktreeSource.worktreePath;
-                upsertInteraction(interaction, cs.id)
-                  .then(() => enqueueInteraction(interactionId, worktreePath))
-                  .catch((err: unknown) => {
-                    console.error("[shippable] enqueue failed:", err);
-                    // Surface the failure as a retry pip; the interaction
-                    // itself stays in place so nothing is lost.
-                    dispatch({
-                      type: "SET_INTERACTION_ENQUEUE_ERROR",
-                      targetKey: key,
-                      interactionId,
-                      error: true,
-                    });
-                  });
-              }
-            }}
-            onRetryReply={(key, replyId) => {
-              // Errored-pip retry. The original upsert may have failed too
-              // (that's why we're retrying), so re-upsert first to guarantee
-              // the row exists before re-enqueueing.
-              if (!activeWorktreeSource) return;
-              const ix = state.interactions[key]?.find((entry) => entry.id === replyId);
-              if (!ix) return;
-              const worktreePath = activeWorktreeSource.worktreePath;
-              // Optimistically clear the error so the pip flips back to ◌
-              // queued the moment the user clicks; restore it on failure.
-              dispatch({
-                type: "SET_INTERACTION_ENQUEUE_ERROR",
-                targetKey: key,
-                interactionId: replyId,
-                error: false,
-              });
-              upsertInteraction(ix, cs.id)
-                .then(() => enqueueInteraction(replyId, worktreePath))
-                .catch((err: unknown) => {
-                  console.error("[shippable] retry enqueue failed:", err);
-                  dispatch({
-                    type: "SET_INTERACTION_ENQUEUE_ERROR",
-                    targetKey: key,
-                    interactionId: replyId,
-                    error: true,
-                  });
-                });
-            }}
-            onDeleteReply={(key, replyId) => {
-              // Unenqueue first when the interaction is still pending — the
-              // agent hasn't pulled it, so it should leave the queue
-              // cleanly. (DELETE_INTERACTION's sync would drop the row too,
-              // but unenqueue is the explicit, race-free signal and a
-              // no-op 404 if the row's already gone.) Delivered entries
-              // stay in the agent's hands; we only drop the local view.
-              const target = state.interactions[key]?.find((ix) => ix.id === replyId);
-              if (
-                target?.agentQueueStatus === "pending" &&
-                activeWorktreeSource
-              ) {
-                unenqueueInteraction(replyId).catch((err: unknown) => {
-                  console.error("[shippable] unenqueue failed:", err);
-                });
-              }
-              dispatch({ type: "DELETE_INTERACTION", targetKey: key, interactionId: replyId });
-            }}
-            onVerifyAiNote={(recipe) => {
-              setRunRequest((prev) => ({
-                tick: (prev?.tick ?? 0) + 1,
-                source: recipe.source,
-                inputs: recipe.inputs,
-              }));
-            }}
+            onSubmitReply={handleSubmitReply}
+            onRetryReply={handleRetryReply}
+            onDeleteReply={handleDeleteReply}
+            onVerifyAiNote={handleVerifyAiNote}
             agentContext={
-              activeWorktreeSource
+              inspectorAgentContext
                 ? {
-                    slice: agentSlice,
-                    candidates: agentSessions,
-                    selectedSessionFilePath:
-                      pinnedSession ?? agentSlice?.session.filePath ?? null,
-                    loading: agentLoading,
-                    error: agentError,
-                    mcpStatus,
-                    delivered: deliveredComments,
-                    lastSuccessfulPollAt: deliveredLastSuccessAt,
-                    deliveredError: deliveredErrorState,
-                    agentStartedThreads: agentStartedThreads(state.interactions),
+                    ...inspectorAgentContext,
                     onPickSession: (fp) => setPinnedSession(fp),
                     onRefresh: () => setAgentRefreshTick((t) => t + 1),
                   }
@@ -1634,8 +1707,11 @@ export function ReviewWorkspace({
                 hint,
               });
             }}
-            // Slice (c) re-wires the inspector ↗ button. Until then, leave
-            // it undefined so users can't open a placeholder-only child.
+            onDetach={
+              isTauri()
+                ? () => void openDetachedWindow("inspector")
+                : undefined
+            }
           />
         )}
       </div>
@@ -1887,6 +1963,13 @@ type DefinitionPeekState =
  * per thread (the head). Drives the AgentContextSection "Comments"
  * rollup.
  */
+// Outside the component so React Compiler's purity rule doesn't flag the
+// Date.now() / Math.random() calls — they belong in an effect/handler
+// world, not in render.
+function newPromptRunId(): string {
+  return `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function agentStartedThreads(
   interactions: Record<string, Interaction[]>,
 ): Array<{ threadKey: string; head: Interaction }> {

@@ -13,10 +13,14 @@
 // covered by the manual UI exercise per the plan.
 
 import { describe, expect, it } from "vitest";
-import type { Interaction } from "./types";
-import { buildSidebarViewModel } from "./view";
-import type { SidebarSnapshot } from "./detachBridge";
+import type { DiffFile, DiffLine, Cursor, Interaction } from "./types";
+import { buildInspectorViewModel, buildSidebarViewModel } from "./view";
+import type {
+  InspectorSnapshot,
+  SidebarSnapshot,
+} from "./detachBridge";
 import type { PromptRunView } from "./components/PromptRunsPanel";
+import type { SymbolIndex } from "./symbols";
 
 const files = [
   {
@@ -87,6 +91,90 @@ describe("detach bridge — sidebar snapshot stability", () => {
     const b = makeSnapshot(false, [
       { id: "r1", promptName: "x", text: "", status: "done" },
     ]);
+    expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
+  });
+});
+
+// ── Inspector snapshot stability ──────────────────────────────────────────
+
+const inspectorLine: DiffLine = {
+  kind: "context",
+  text: "const x = 1;",
+  oldNo: 1,
+  newNo: 1,
+};
+
+const inspectorFile: DiffFile = {
+  id: "f-i",
+  path: "src/i.ts",
+  language: "ts",
+  status: "modified",
+  hunks: [
+    {
+      id: "cs/src/i.ts#h1",
+      header: "@@",
+      oldStart: 1,
+      oldCount: 1,
+      newStart: 1,
+      newCount: 1,
+      lines: [inspectorLine],
+    },
+  ],
+};
+
+const inspectorCursor: Cursor = {
+  changesetId: "cs",
+  fileId: "f-i",
+  hunkId: "cs/src/i.ts#h1",
+  lineIdx: 0,
+};
+
+const emptySymbols: SymbolIndex = new Map();
+
+function makeInspectorSnapshot(
+  draftingKey: string | null,
+  commentCount: number,
+): InspectorSnapshot {
+  return {
+    viewModel: buildInspectorViewModel({
+      file: inspectorFile,
+      hunk: inspectorFile.hunks[0],
+      line: inspectorLine,
+      cursor: inspectorCursor,
+      symbols: emptySymbols,
+      acked: new Set(),
+      replies: {},
+      draftingKey,
+    }),
+    commentCount,
+    lineHasAiNote: false,
+    agentContext: null,
+  };
+}
+
+describe("detach bridge — inspector snapshot stability", () => {
+  it("buildInspectorViewModel is deterministic for identical inputs", () => {
+    const a = makeInspectorSnapshot(null, 0);
+    const b = makeInspectorSnapshot(null, 0);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+
+  it("survives a JSON round-trip", () => {
+    const snap = makeInspectorSnapshot(null, 3);
+    const wire = JSON.parse(JSON.stringify(snap));
+    expect(wire).toEqual(snap);
+  });
+
+  it("differs when commentCount changes", () => {
+    const a = makeInspectorSnapshot(null, 0);
+    const b = makeInspectorSnapshot(null, 1);
+    expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
+  });
+
+  it("differs when draftingKey changes (viewModel.isDrafting flips)", () => {
+    const userKey = "user:cs/src/i.ts#h1:0";
+    const a = makeInspectorSnapshot(null, 0);
+    const b = makeInspectorSnapshot(userKey, 0);
     expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
   });
 });

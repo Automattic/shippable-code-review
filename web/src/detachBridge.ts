@@ -18,8 +18,16 @@ import {
   listDetachedChildren,
   type DetachedKind,
 } from "./multiWindow";
-import type { SidebarViewModel } from "./view";
+import type { InspectorViewModel, SidebarViewModel } from "./view";
 import type { PromptRunView } from "./components/PromptRunsPanel";
+import type {
+  AgentContextSlice,
+  AgentSessionRef,
+  Cursor,
+  DeliveredInteraction,
+  Interaction,
+  LineSelection,
+} from "./types";
 
 // ── Wire types ────────────────────────────────────────────────────────────
 
@@ -35,13 +43,56 @@ export type SidebarAction =
   | { type: "close-run"; id: string }
   | { type: "toggle-wide" };
 
+/** The data half of the docked Inspector's AgentContextProps. Callbacks
+ *  (onPickSession, onRefresh) are reconstructed in the child to emit
+ *  pick-session / refresh actions. */
+export interface AgentContextData {
+  slice: AgentContextSlice | null;
+  candidates: AgentSessionRef[];
+  selectedSessionFilePath: string | null;
+  loading: boolean;
+  error: string | null;
+  mcpStatus: { installed: boolean; installCommand: string } | null;
+  delivered: DeliveredInteraction[];
+  lastSuccessfulPollAt: string | null;
+  deliveredError: boolean;
+  agentStartedThreads: Array<{ threadKey: string; head: Interaction }>;
+}
+
+export interface InspectorSnapshot {
+  viewModel: InspectorViewModel;
+  commentCount: number;
+  lineHasAiNote: boolean;
+  /** Null when the active changeset wasn't loaded from a worktree — the
+   *  agent-context section hides itself in that case. */
+  agentContext: AgentContextData | null;
+}
+
+export type InspectorAction =
+  | { type: "jump"; cursor: Cursor }
+  | { type: "jump-to-block"; cursor: Cursor; selection: LineSelection }
+  | { type: "toggle-ack"; hunkId: string; lineIdx: number }
+  | { type: "start-draft"; key: string }
+  | { type: "close-draft" }
+  | { type: "submit-reply"; key: string; body: string }
+  | { type: "retry-reply"; key: string; replyId: string }
+  | { type: "delete-reply"; key: string; replyId: string }
+  | { type: "prev-comment" }
+  | { type: "next-comment" }
+  | { type: "pick-session"; sessionFilePath: string }
+  | { type: "refresh" }
+  | {
+      type: "verify-ai-note";
+      recipe: { source: string; inputs: Record<string, string> };
+    };
+
 export type DetachStateMsg =
-  | { kind: "sidebar"; snapshot: SidebarSnapshot };
-// inspector branch arrives in slice (c).
+  | { kind: "sidebar"; snapshot: SidebarSnapshot }
+  | { kind: "inspector"; snapshot: InspectorSnapshot };
 
 export type DetachActionMsg =
-  | { kind: "sidebar"; action: SidebarAction };
-// inspector branch arrives in slice (c).
+  | { kind: "sidebar"; action: SidebarAction }
+  | { kind: "inspector"; action: InspectorAction };
 
 export interface DetachReadyMsg {
   kind: DetachedKind;
@@ -69,11 +120,12 @@ export interface UseDetachBridgeArgs {
   selfLabel: string | null;
   sidebarSnapshot: SidebarSnapshot;
   onSidebarAction: (action: SidebarAction) => void;
+  inspectorSnapshot: InspectorSnapshot;
+  onInspectorAction: (action: InspectorAction) => void;
 }
 
 export interface UseDetachBridgeResult {
   isSidebarDetached: boolean;
-  /** Always false in slice (b); slice (c) wires the inspector half. */
   isInspectorDetached: boolean;
 }
 
@@ -81,6 +133,8 @@ export function useDetachBridge({
   selfLabel,
   sidebarSnapshot,
   onSidebarAction,
+  inspectorSnapshot,
+  onInspectorAction,
 }: UseDetachBridgeArgs): UseDetachBridgeResult {
   const [detachedKinds, setDetachedKinds] = useState<Set<DetachedKind>>(
     () => new Set(),
@@ -91,12 +145,20 @@ export function useDetachBridge({
   // not the one captured when the listener was registered.
   const sidebarSnapshotRef = useRef(sidebarSnapshot);
   const onSidebarActionRef = useRef(onSidebarAction);
+  const inspectorSnapshotRef = useRef(inspectorSnapshot);
+  const onInspectorActionRef = useRef(onInspectorAction);
   useEffect(() => {
     sidebarSnapshotRef.current = sidebarSnapshot;
   }, [sidebarSnapshot]);
   useEffect(() => {
     onSidebarActionRef.current = onSidebarAction;
   }, [onSidebarAction]);
+  useEffect(() => {
+    inspectorSnapshotRef.current = inspectorSnapshot;
+  }, [inspectorSnapshot]);
+  useEffect(() => {
+    onInspectorActionRef.current = onInspectorAction;
+  }, [onInspectorAction]);
 
   // Refresh the detached-kind set from the Rust registry (source of truth).
   // Wrapped so the ready listener and the children-changed listener share
@@ -142,6 +204,11 @@ export function useDetachBridge({
               kind: "sidebar",
               snapshot: sidebarSnapshotRef.current,
             } satisfies DetachStateMsg);
+          } else if (ev.payload.kind === "inspector") {
+            void emit(detachStateEvent(selfLabel), {
+              kind: "inspector",
+              snapshot: inspectorSnapshotRef.current,
+            } satisfies DetachStateMsg);
           }
           // Re-query the registry in case the ready signal raced ahead of
           // children-changed (or the child opened before our initial fetch
@@ -160,6 +227,8 @@ export function useDetachBridge({
         (ev) => {
           if (ev.payload.kind === "sidebar") {
             onSidebarActionRef.current(ev.payload.action);
+          } else if (ev.payload.kind === "inspector") {
+            onInspectorActionRef.current(ev.payload.action);
           }
         },
       );
@@ -200,11 +269,32 @@ export function useDetachBridge({
     if (!isSidebarDetached) lastEmittedSidebarRef.current = null;
   }, [isSidebarDetached]);
 
+  // Same pattern for the inspector kind.
+  const lastEmittedInspectorRef = useRef<string | null>(null);
+  const isInspectorDetached = detachedKinds.has("inspector");
+  useEffect(() => {
+    if (!isTauri() || !selfLabel || !isInspectorDetached) return;
+    const serialized = JSON.stringify(inspectorSnapshot);
+    if (lastEmittedInspectorRef.current === serialized) return;
+    lastEmittedInspectorRef.current = serialized;
+    void (async () => {
+      const { emit } = await import("@tauri-apps/api/event");
+      await emit(detachStateEvent(selfLabel), {
+        kind: "inspector",
+        snapshot: inspectorSnapshot,
+      } satisfies DetachStateMsg);
+    })();
+  }, [selfLabel, isInspectorDetached, inspectorSnapshot]);
+
+  useEffect(() => {
+    if (!isInspectorDetached) lastEmittedInspectorRef.current = null;
+  }, [isInspectorDetached]);
+
   return useMemo(
     () => ({
       isSidebarDetached,
-      isInspectorDetached: detachedKinds.has("inspector"),
+      isInspectorDetached,
     }),
-    [detachedKinds, isSidebarDetached],
+    [isSidebarDetached, isInspectorDetached],
   );
 }

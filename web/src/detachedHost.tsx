@@ -1,16 +1,25 @@
 import { useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
+import { Inspector } from "./components/Inspector";
 import "./components/Sidebar.css";
 import "./components/PromptRunsPanel.css";
+import "./components/Inspector.css";
+import "./components/ReplyThread.css";
+import "./components/AgentContextSection.css";
+import "./components/DetachedThreadCard.css";
+import "./components/CodeText.css";
 import {
   detachActionEvent,
   detachReadyEvent,
   detachStateEvent,
   type DetachActionMsg,
   type DetachStateMsg,
+  type InspectorAction,
+  type InspectorSnapshot,
   type SidebarAction,
   type SidebarSnapshot,
 } from "./detachBridge";
+import type { SymbolIndex } from "./symbols";
 
 type Kind = "sidebar" | "inspector";
 
@@ -27,13 +36,32 @@ function readParams(): DetachParams | null {
   return { kind, parent };
 }
 
-async function emitAction(parent: string, action: SidebarAction): Promise<void> {
+async function emitSidebarAction(
+  parent: string,
+  action: SidebarAction,
+): Promise<void> {
   const { emit } = await import("@tauri-apps/api/event");
   await emit(detachActionEvent(parent), {
     kind: "sidebar",
     action,
   } satisfies DetachActionMsg);
 }
+
+async function emitInspectorAction(
+  parent: string,
+  action: InspectorAction,
+): Promise<void> {
+  const { emit } = await import("@tauri-apps/api/event");
+  await emit(detachActionEvent(parent), {
+    kind: "inspector",
+    action,
+  } satisfies DetachActionMsg);
+}
+
+/** Shared empty SymbolIndex used by the detached Inspector. Symbol clicks
+ *  in the child render as inert text; per-window symbol navigation is a
+ *  follow-up — `onJump` callbacks already route through the parent. */
+const EMPTY_SYMBOLS: SymbolIndex = new Map();
 
 async function reattachClose(): Promise<void> {
   const { getCurrentWebviewWindow } = await import(
@@ -76,10 +104,7 @@ export function DetachedHost() {
         {params.kind === "sidebar" ? (
           <SidebarBody parent={params.parent} />
         ) : (
-          <p className="detached-shell__placeholder">
-            Inspector wiring lands in the next slice. Closing this window or
-            the parent re-docks the panel automatically.
-          </p>
+          <InspectorBody parent={params.parent} />
         )}
       </div>
     </div>
@@ -138,17 +163,163 @@ function SidebarBody({ parent }: SidebarBodyProps) {
       runs={snapshot.runs}
       wide={snapshot.wide}
       onPickFile={(fileId) =>
-        void emitAction(parent, { type: "pick-file", fileId })
+        void emitSidebarAction(parent, { type: "pick-file", fileId })
       }
       onJumpToFirstComment={(fileId) =>
-        void emitAction(parent, { type: "jump-to-first-comment", fileId })
+        void emitSidebarAction(parent, {
+          type: "jump-to-first-comment",
+          fileId,
+        })
       }
       onCloseRun={(id) =>
-        void emitAction(parent, { type: "close-run", id })
+        void emitSidebarAction(parent, { type: "close-run", id })
       }
       onToggleWide={() =>
-        void emitAction(parent, { type: "toggle-wide" })
+        void emitSidebarAction(parent, { type: "toggle-wide" })
       }
+    />
+  );
+}
+
+interface InspectorBodyProps {
+  parent: string;
+}
+
+/**
+ * Renders the docked <Inspector> against snapshots pushed by the parent.
+ * Draft bodies (textarea contents) live in this child component — submit/
+ * close/start round-trip through actions, but keystrokes don't, so the
+ * composer stays responsive without thrashing the event bus.
+ */
+function InspectorBody({ parent }: InspectorBodyProps) {
+  const [snapshot, setSnapshot] = useState<InspectorSnapshot | null>(null);
+  // Child-owned draft bodies. The parent doesn't see textarea keystrokes
+  // — only submit-reply / close-draft round-trips. This is the trade-off
+  // recorded in the plan under "child owns drafts until submit."
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let stopState: (() => void) | null = null;
+    let cancelled = false;
+
+    void (async () => {
+      const { listen, emit } = await import("@tauri-apps/api/event");
+      if (cancelled) return;
+      stopState = await listen<DetachStateMsg>(
+        detachStateEvent(parent),
+        (ev) => {
+          if (ev.payload.kind === "inspector") setSnapshot(ev.payload.snapshot);
+        },
+      );
+      if (cancelled) {
+        stopState();
+        return;
+      }
+      await emit(detachReadyEvent(parent), { kind: "inspector" });
+    })();
+
+    return () => {
+      cancelled = true;
+      stopState?.();
+    };
+  }, [parent]);
+
+  if (!snapshot) {
+    return <p className="detached-shell__placeholder">Loading inspector…</p>;
+  }
+
+  const agentContext = snapshot.agentContext
+    ? {
+        ...snapshot.agentContext,
+        onPickSession: (fp: string) =>
+          void emitInspectorAction(parent, {
+            type: "pick-session",
+            sessionFilePath: fp,
+          }),
+        onRefresh: () =>
+          void emitInspectorAction(parent, { type: "refresh" }),
+      }
+    : undefined;
+
+  return (
+    <Inspector
+      viewModel={snapshot.viewModel}
+      commentCount={snapshot.commentCount}
+      lineHasAiNote={snapshot.lineHasAiNote}
+      symbols={EMPTY_SYMBOLS}
+      draftBodies={drafts}
+      onJump={(cursor) =>
+        void emitInspectorAction(parent, { type: "jump", cursor })
+      }
+      onJumpToBlock={(cursor, selection) =>
+        void emitInspectorAction(parent, {
+          type: "jump-to-block",
+          cursor,
+          selection,
+        })
+      }
+      onToggleAck={(hunkId, lineIdx) =>
+        void emitInspectorAction(parent, {
+          type: "toggle-ack",
+          hunkId,
+          lineIdx,
+        })
+      }
+      onStartDraft={(key) =>
+        void emitInspectorAction(parent, { type: "start-draft", key })
+      }
+      onCloseDraft={() =>
+        void emitInspectorAction(parent, { type: "close-draft" })
+      }
+      onChangeDraft={(key, body) =>
+        setDrafts((prev) => ({ ...prev, [key]: body }))
+      }
+      onSubmitReply={(key, body) => {
+        void emitInspectorAction(parent, {
+          type: "submit-reply",
+          key,
+          body,
+        });
+        // Clear the local draft optimistically — matches the parent's
+        // post-submit cleanup so reopening the composer doesn't show the
+        // previously-submitted text.
+        setDrafts((prev) => {
+          if (!(key in prev)) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+      }}
+      onRetryReply={(key, replyId) =>
+        void emitInspectorAction(parent, {
+          type: "retry-reply",
+          key,
+          replyId,
+        })
+      }
+      onDeleteReply={(key, replyId) =>
+        void emitInspectorAction(parent, {
+          type: "delete-reply",
+          key,
+          replyId,
+        })
+      }
+      onVerifyAiNote={(recipe) =>
+        void emitInspectorAction(parent, {
+          type: "verify-ai-note",
+          recipe,
+        })
+      }
+      onPrevComment={() =>
+        void emitInspectorAction(parent, { type: "prev-comment" })
+      }
+      onNextComment={() =>
+        void emitInspectorAction(parent, { type: "next-comment" })
+      }
+      agentContext={agentContext}
+      // PR pill + auth modal stay in the docked path — passing no
+      // worktreeSource keeps Inspector's branch-lookup effect from firing
+      // in the child window.
     />
   );
 }
