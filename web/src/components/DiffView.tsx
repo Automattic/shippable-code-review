@@ -1,5 +1,13 @@
 import "./DiffView.css";
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { highlightLines } from "../highlight";
 import type { DefinitionClickTarget } from "../definitionNav";
 import type { DiffLine } from "../types";
@@ -369,14 +377,18 @@ export function DiffView({
   const inlineRegionObserver = useRef<ResizeObserver | null>(null);
   useEffect(() => () => inlineRegionObserver.current?.disconnect(), []);
 
-  const inlineRegionRef = (el: HTMLDivElement | null) => {
+  // Stable across renders: a fresh function each render would make React 19
+  // re-run the callback ref (unobserve + observe) every render, and a fresh
+  // ResizeObserver.observe() fires an initial callback — scrolling the cursor
+  // back into view on every render, undoing the user's own scrolling.
+  const inlineRegionRef = useCallback((el: HTMLDivElement | null) => {
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = (inlineRegionObserver.current ??= new ResizeObserver(() => {
       cursorRef.current?.scrollIntoView({ block: "nearest" });
     }));
     ro.observe(el);
     return () => ro.unobserve(el);
-  };
+  }, []);
 
   // Inline comments on ⇒ the diff gains a trailing comment column.
   // `inlineThreads` is passed only when inline comments is on, so its

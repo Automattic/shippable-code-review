@@ -524,6 +524,49 @@ describe("DiffView inline threads", () => {
     expect(region!.textContent).not.toContain("AI concerns in this hunk");
   });
 
+  it("a no-op re-render does not re-observe inline regions or re-scroll the cursor", () => {
+    // Regression: inlineRegionRef was recreated on every render, so React 19
+    // re-ran the callback ref (unobserve + observe) every render. A fresh
+    // ResizeObserver.observe() fires an initial callback, which scrollIntoView'd
+    // the cursor — yanking the viewport back the moment the user scrolled away.
+    const observed: Element[] = [];
+    let roCallback: ResizeObserverCallback = () => undefined;
+    class MockResizeObserver {
+      constructor(cb: ResizeObserverCallback) {
+        roCallback = cb;
+      }
+      observe(el: Element) {
+        observed.push(el);
+        roCallback([], this as unknown as ResizeObserver); // real RO fires on observe
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+
+    const props = {
+      viewModel: inlineViewModel(),
+      onSetExpandLevel: () => undefined,
+      onToggleExpandFile: () => undefined,
+      onTogglePreviewFile: () => undefined,
+      inlineThreads: inlineThreads(),
+    };
+    const { rerender } = render(<DiffView {...props} />);
+
+    observed.length = 0;
+    scrollIntoView.mockClear();
+
+    // Identical props — the cursor has not moved; nothing should scroll.
+    rerender(<DiffView {...props} />);
+
+    expect(observed).toEqual([]); // stable ref ⇒ React does not re-attach
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+    scrollIntoView.mockRestore();
+  });
+
   it("on a non-noted cursor line, renders no inline region — the comment button offers the comment", () => {
     // A cursor line with no AI note / no comment of its own: InlineLineThreads
     // filters every row out, so no inline block mounts. The comment button is
