@@ -1,5 +1,6 @@
 import "./Sidebar.css";
 import type { SidebarFileItem, SidebarViewModel } from "../view";
+import type { QuizSelfEval } from "../types";
 import { PromptRunsPanel, type PromptRunView } from "./PromptRunsPanel";
 import { QuizPanel } from "./QuizPanel";
 
@@ -17,6 +18,9 @@ interface Props {
    *  preview both rely on that to keep the chrome out of contexts where it
    *  has nowhere to land. */
   onDetach?: () => void;
+  onQuizSubmit?: (questionId: string, answer: string) => void;
+  onQuizDismiss?: () => void;
+  onQuizSelfEval?: (questionId: string, selfEval: QuizSelfEval) => void;
 }
 
 export function Sidebar({
@@ -28,6 +32,9 @@ export function Sidebar({
   wide,
   onToggleWide,
   onDetach,
+  onQuizSubmit,
+  onQuizDismiss,
+  onQuizSelfEval,
 }: Props) {
   return (
     <aside className="sidebar" aria-label="changed files">
@@ -44,7 +51,13 @@ export function Sidebar({
           </button>
         </div>
       )}
-      <QuizPanel changesetId={viewModel.changesetId} quiz={viewModel.quiz} />
+      <QuizPanel
+        changesetId={viewModel.changesetId}
+        quiz={viewModel.quiz}
+        onSubmit={onQuizSubmit ?? (() => {})}
+        onDismiss={onQuizDismiss ?? (() => {})}
+        onSelfEval={onQuizSelfEval ?? (() => {})}
+      />
       <PromptRunsPanel
         runs={runs}
         onClose={onCloseRun}

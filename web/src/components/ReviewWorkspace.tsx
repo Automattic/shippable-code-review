@@ -1815,6 +1815,12 @@ export function ReviewWorkspace({
             onDetach={
               isTauri() ? () => void openDetachedWindow("sidebar") : undefined
             }
+            onQuizSubmit={(id, answer) =>
+              dispatch({ type: "SUBMIT_QUIZ_ANSWER", questionId: id, answer, now: Date.now() })}
+            onQuizDismiss={() =>
+              dispatch({ type: "DISMISS_QUIZ", now: Date.now() })}
+            onQuizSelfEval={(id, e) =>
+              dispatch({ type: "SET_QUIZ_SELF_EVAL", questionId: id, selfEval: e })}
           />
         )}
         <div className="reviewpane">
