@@ -140,6 +140,34 @@ import {
   persistHideNonActiveComments,
 } from "../commentVisibility";
 
+// Test seam: assignable in test builds to force the dice roll. Production
+// keeps Math.random untouched.
+type QuizRng = () => number;
+const quizRng: QuizRng =
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  import.meta.env.MODE === "test" && (window as any).__shippableQuizRng
+    ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ((window as any).__shippableQuizRng as QuizRng)
+    : Math.random;
+
+function dispatchToggleFileReviewedWithQuiz(
+  dispatch: Dispatch<Action>,
+  changesetId: string,
+  fileId: string,
+  wasReviewed: boolean,
+) {
+  dispatch({ type: "TOGGLE_FILE_REVIEWED", fileId });
+  // Only fire on the off → on transition.
+  if (wasReviewed) return;
+  dispatch({
+    type: "MAYBE_TRIGGER_QUIZ",
+    changesetId,
+    fileId,
+    now: Date.now(),
+    roll: quizRng(),
+  });
+}
+
 interface Props {
   state: ReviewState;
   dispatch: Dispatch<Action>;
@@ -659,12 +687,16 @@ export function ReviewWorkspace({
           lineIdx: state.cursor.lineIdx,
         });
         break;
-      case "TOGGLE_FILE_REVIEWED":
-        dispatch({
-          type: "TOGGLE_FILE_REVIEWED",
-          fileId: state.cursor.fileId,
-        });
+      case "TOGGLE_FILE_REVIEWED": {
+        const fileId = state.cursor.fileId;
+        dispatchToggleFileReviewedWithQuiz(
+          dispatch,
+          state.cursor.changesetId,
+          fileId,
+          state.reviewedFiles.has(fileId),
+        );
         break;
+      }
       case "TOGGLE_CHANGESET_REVIEWED":
         dispatch({
           type: "TOGGLE_CHANGESET_REVIEWED",
