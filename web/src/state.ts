@@ -11,6 +11,7 @@ import type {
   LineSelection,
   ParsedReplyKey,
   ReviewState,
+  QuizState,
 } from "./types";
 import {
   blockCommentKey,
@@ -81,6 +82,14 @@ export const EMPTY_CURSOR: Cursor = {
   lineIdx: 0,
 };
 
+const EMPTY_QUIZ: QuizState = {
+  questions: {},
+  answers: {},
+  active: null,
+  lastQuizAt: null,
+  asked: [],
+};
+
 export function initialState(
   seed: ChangeSet[],
   seedInteractions: Record<string, Interaction[]> = {},
@@ -100,6 +109,7 @@ export function initialState(
       previewedFiles: new Set(),
       selection: null,
       detachedInteractions: [],
+      quiz: EMPTY_QUIZ,
     };
   }
   const cs = seed[0];
@@ -119,6 +129,7 @@ export function initialState(
     previewedFiles: new Set(),
     selection: null,
     detachedInteractions: [],
+    quiz: EMPTY_QUIZ,
   };
 }
 
