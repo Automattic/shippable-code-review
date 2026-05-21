@@ -459,7 +459,10 @@ function buildCommentCounts(
   for (const [key, list] of Object.entries(interactions)) {
     const parsed = parseReplyKey(key);
     if (!parsed) continue;
-    const fileId = hunkToFile.get(parsed.hunkId);
+    const fileId =
+      parsed.kind === "userFile" || parsed.kind === "blockFile"
+        ? parsed.fileId
+        : hunkToFile.get(parsed.hunkId);
     if (!fileId) continue;
     // Count user-driven activity: local replies and agent posts. The
     // teammate-verdict head on a `teammate:` thread is now also

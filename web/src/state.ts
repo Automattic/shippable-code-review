@@ -673,6 +673,12 @@ function reloadChangeset(
       nextInteractions[key] = list;
       continue;
     }
+    if (parsed.kind === "userFile" || parsed.kind === "blockFile") {
+      // File-anchored threads carry no hunk id; re-anchoring happens via
+      // snippet match in a separate path (docs/plans/comment-on-unchanged-lines.md).
+      nextInteractions[key] = list;
+      continue;
+    }
     const oldRef = oldHunkInfo.get(parsed.hunkId);
     if (!oldRef) {
       // This interaction belongs to a different changeset; pass through.
@@ -753,9 +759,11 @@ function reloadChangeset(
 }
 
 /** Re-emit a reply key against `newHunkId` at `newLineIdx`. Block ranges
- *  preserve their original size, clamped to the new hunk's line count. */
+ *  preserve their original size, clamped to the new hunk's line count.
+ *  File-anchored variants (`userFile`, `blockFile`) are filtered out by
+ *  the caller — they don't migrate via hunk id. */
 function rekey(
-  parsed: ParsedReplyKey,
+  parsed: Exclude<ParsedReplyKey, { kind: "userFile" | "blockFile" }>,
   newHunkId: string,
   newLineIdx: number,
   newHunkLineCount: number,
