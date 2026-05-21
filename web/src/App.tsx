@@ -489,6 +489,14 @@ export default function App() {
       />
       <FindBar open={findOpen} onClose={closeFind} />
       {toast && <Toast message={toast} onClose={dismissToast} />}
+      {mcpPicker && (
+        <RegisterMcpModal
+          targets={mcpPicker.targets}
+          binaryPath={mcpBinaryPath}
+          onConfirm={confirmMcpRegister}
+          onCancel={cancelMcpPicker}
+        />
+      )}
       {mcpNotice && (
         <NoticeModal
           title={mcpNotice.title}
