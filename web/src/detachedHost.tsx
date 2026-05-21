@@ -19,6 +19,7 @@ import {
   type SidebarAction,
   type SidebarSnapshot,
 } from "./detachBridge";
+import { reattachCurrentDetachedWindow } from "./multiWindow";
 import type { SymbolIndex } from "./symbols";
 
 type Kind = "sidebar" | "inspector";
@@ -63,13 +64,6 @@ async function emitInspectorAction(
  *  follow-up — `onJump` callbacks already route through the parent. */
 const EMPTY_SYMBOLS: SymbolIndex = new Map();
 
-async function reattachClose(): Promise<void> {
-  const { getCurrentWebviewWindow } = await import(
-    "@tauri-apps/api/webviewWindow"
-  );
-  await getCurrentWebviewWindow().close();
-}
-
 export function DetachedHost() {
   const [params] = useState<DetachParams | null>(() => readParams());
   // The parent's title arrives via the snapshot, so we lift it out of the
@@ -100,7 +94,7 @@ export function DetachedHost() {
         <button
           type="button"
           className="detached-shell__reattach"
-          onClick={() => void reattachClose()}
+          onClick={() => void reattachCurrentDetachedWindow()}
           title="Re-attach to the parent window"
         >
           ↙ re-attach

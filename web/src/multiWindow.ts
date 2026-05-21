@@ -129,6 +129,21 @@ export async function closeDetachedChildOf(
   );
 }
 
+/**
+ * Re-dock the current detached window. Called from the child's re-attach
+ * button; the Rust command drops the registry entry, emits the parent's
+ * children-changed signal, and destroys the window — in that order, so
+ * the parent's docked panel is back before the OS close races the listener.
+ * Self-close via `getCurrentWebviewWindow().close()` was unreliable on
+ * macOS WKWebView: the destroy event sometimes fired before the parent's
+ * `listen` handler was ready, leaving the docked panel hidden.
+ */
+export async function reattachCurrentDetachedWindow(): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("reattach_detached_window");
+}
+
 export async function focusWindow(label: string): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");

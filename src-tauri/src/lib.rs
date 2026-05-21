@@ -212,6 +212,39 @@ fn open_detached_window(
     Ok(child_label)
 }
 
+/// Re-dock a detached sidebar/inspector child. Called from the child's
+/// re-attach button. Synchronously drops the registry entry, emits the
+/// parent's children-changed signal, then destroys the window — so the
+/// parent's bridge state is already up-to-date by the time the OS-level
+/// close fires (and the existing Destroyed arm short-circuits cleanly on
+/// an already-removed entry). Calling `close()` from the closing window's
+/// own JS context is racy on macOS WKWebView: the destroy event can fire
+/// before the parent's `listen()` handler runs, leaving the docked panel
+/// hidden. This path moves the cleanup to Rust where the ordering is
+/// guaranteed.
+#[tauri::command]
+fn reattach_detached_window(
+    app: tauri::AppHandle,
+    state: State<WindowRegistryState>,
+    window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    let label = window.label().to_string();
+    let parent = {
+        let mut reg = state.inner.lock().unwrap();
+        reg.by_label.remove(&label).and_then(|e| e.parent)
+    };
+    if let Some(parent) = parent {
+        let _ = app.emit(
+            &format!("shippable:detach-children-changed:{parent}"),
+            (),
+        );
+    }
+    if let Some(win) = app.get_webview_window(&label) {
+        let _ = win.destroy();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn set_window_changeset(
     window: tauri::WebviewWindow,
@@ -509,6 +542,7 @@ pub fn run() {
             get_sidecar_port,
             open_new_window,
             open_detached_window,
+            reattach_detached_window,
             set_window_changeset,
             list_window_changesets,
             list_detached_children,
