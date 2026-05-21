@@ -27,6 +27,7 @@ import {
 import { findAnchorInFile, hashAnchorWindow } from "./anchor";
 import { enrichWithFileContent } from "./expandContext";
 import { newReviewerInteractionId } from "./interactions";
+import { eligibleQuestionsForFile } from "./quiz";
 
 /**
  * Wire shape returned by `GET /api/agent/replies` — one envelope serves
@@ -82,6 +83,9 @@ export const EMPTY_CURSOR: Cursor = {
   hunkId: "",
   lineIdx: 0,
 };
+
+export const QUIZ_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+export const QUIZ_DICE_THRESHOLD = 0.1;          // 1-in-10
 
 const EMPTY_QUIZ: QuizState = {
   questions: {},
@@ -294,7 +298,14 @@ export type Action =
       prInteractions: Record<string, Interaction[]>;
       prDetached: DetachedInteraction[];
     }
-  | { type: "STORE_QUESTIONS"; changesetId: string; questions: Question[] };
+  | { type: "STORE_QUESTIONS"; changesetId: string; questions: Question[] }
+  | {
+      type: "MAYBE_TRIGGER_QUIZ";
+      changesetId: string;
+      fileId: string;
+      now: number;
+      roll: number;
+    };
 
 export function reducer(state: ReviewState, action: Action): ReviewState {
   // Welcome mode (no changesets) — only LOAD_CHANGESET is meaningful.
@@ -648,6 +659,32 @@ export function reducer(state: ReviewState, action: Action): ReviewState {
             [action.changesetId]: action.questions,
           },
         },
+      };
+    }
+    case "MAYBE_TRIGGER_QUIZ": {
+      if (state.quiz.active) return state; // one at a time
+      const questions = state.quiz.questions[action.changesetId];
+      if (!questions || questions.length === 0) return state;
+      if (
+        state.quiz.lastQuizAt !== null &&
+        action.now - state.quiz.lastQuizAt < QUIZ_COOLDOWN_MS
+      ) {
+        return state;
+      }
+      const cs = state.changesets.find((c) => c.id === action.changesetId);
+      if (!cs) return state;
+      const eligible = eligibleQuestionsForFile(
+        questions, cs, action.fileId, state.quiz.asked,
+      );
+      if (eligible.length === 0) return state;
+      if (action.roll >= QUIZ_DICE_THRESHOLD) return state;
+      const idx = Math.min(
+        eligible.length - 1,
+        Math.floor((action.roll / QUIZ_DICE_THRESHOLD) * eligible.length),
+      );
+      return {
+        ...state,
+        quiz: { ...state.quiz, active: { questionId: eligible[idx].id } },
       };
     }
   }

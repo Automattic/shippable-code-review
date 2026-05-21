@@ -7,6 +7,8 @@ import {
   hunkCoverage,
   initialState,
   mergeInteractionMaps,
+  QUIZ_COOLDOWN_MS,
+  QUIZ_DICE_THRESHOLD,
   reducer,
   replyTarget,
   reviewedFilesCount,
@@ -2115,6 +2117,19 @@ describe("quiz", () => {
     claudeAnswer: `Claude says ${id}`,
   });
 
+  function buildSampleChangeset(): ChangeSet {
+    return {
+      id: "cs-1", title: "x", description: "", branch: "f", base: "main", author: "u",
+      files: [{
+        id: "cs-1/a.ts", path: "a.ts", language: "ts", status: "modified",
+        hunks: [{ id: "h-a-1", header: "@@", oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, lines: [] }],
+      }],
+    } as ChangeSet;
+  }
+  function withChangeset(cs: ChangeSet): ReviewState {
+    return initialState([cs], {});
+  }
+
   it("STORE_QUESTIONS lands questions under the changeset id", () => {
     const initial = initialState([], {});
     const q1 = sampleQuestion("q-1", { kind: "file", path: "a.ts" });
@@ -2125,5 +2140,101 @@ describe("quiz", () => {
       questions: [q1, q2],
     });
     expect(next.quiz.questions["cs-1"]).toEqual([q1, q2]);
+  });
+
+  it("MAYBE_TRIGGER_QUIZ no-ops when no questions for changeset", () => {
+    const initial = withChangeset(buildSampleChangeset());
+    const next = reducer(initial, {
+      type: "MAYBE_TRIGGER_QUIZ",
+      changesetId: "cs-1",
+      fileId: "cs-1/a.ts",
+      now: 100,
+      roll: 0.0,
+    });
+    expect(next.quiz.active).toBeNull();
+  });
+
+  it("MAYBE_TRIGGER_QUIZ no-ops within cooldown", () => {
+    const cs = buildSampleChangeset();
+    const initial: ReviewState = {
+      ...withChangeset(cs),
+      quiz: {
+        questions: { "cs-1": [sampleQuestion("q-1", { kind: "file", path: "a.ts" })] },
+        answers: {},
+        active: null,
+        lastQuizAt: 100,
+        asked: [],
+      },
+    };
+    const next = reducer(initial, {
+      type: "MAYBE_TRIGGER_QUIZ",
+      changesetId: "cs-1",
+      fileId: "cs-1/a.ts",
+      now: 100 + QUIZ_COOLDOWN_MS - 1,
+      roll: 0.0,
+    });
+    expect(next.quiz.active).toBeNull();
+  });
+
+  it("MAYBE_TRIGGER_QUIZ no-ops on dice miss", () => {
+    const cs = buildSampleChangeset();
+    const initial: ReviewState = {
+      ...withChangeset(cs),
+      quiz: {
+        questions: { "cs-1": [sampleQuestion("q-1", { kind: "file", path: "a.ts" })] },
+        answers: {},
+        active: null,
+        lastQuizAt: null,
+        asked: [],
+      },
+    };
+    const next = reducer(initial, {
+      type: "MAYBE_TRIGGER_QUIZ",
+      changesetId: "cs-1",
+      fileId: "cs-1/a.ts",
+      now: 1000,
+      roll: QUIZ_DICE_THRESHOLD,
+    });
+    expect(next.quiz.active).toBeNull();
+  });
+
+  it("MAYBE_TRIGGER_QUIZ sets active on a dice hit past cooldown", () => {
+    const cs = buildSampleChangeset();
+    const q = sampleQuestion("q-1", { kind: "file", path: "a.ts" });
+    const initial: ReviewState = {
+      ...withChangeset(cs),
+      quiz: {
+        questions: { "cs-1": [q] },
+        answers: {},
+        active: null,
+        lastQuizAt: null,
+        asked: [],
+      },
+    };
+    const next = reducer(initial, {
+      type: "MAYBE_TRIGGER_QUIZ",
+      changesetId: "cs-1",
+      fileId: "cs-1/a.ts",
+      now: 1000,
+      roll: 0.05,
+    });
+    expect(next.quiz.active).toEqual({ questionId: "q-1" });
+  });
+
+  it("MAYBE_TRIGGER_QUIZ does not add to `asked` until submit/dismiss", () => {
+    const cs = buildSampleChangeset();
+    const q = sampleQuestion("q-1", { kind: "file", path: "a.ts" });
+    const initial: ReviewState = {
+      ...withChangeset(cs),
+      quiz: { questions: { "cs-1": [q] }, answers: {}, active: null, lastQuizAt: null, asked: [] },
+    };
+    const next = reducer(initial, {
+      type: "MAYBE_TRIGGER_QUIZ",
+      changesetId: "cs-1",
+      fileId: "cs-1/a.ts",
+      now: 1000,
+      roll: 0.05,
+    });
+    expect(next.quiz.asked).toEqual([]);
   });
 });
