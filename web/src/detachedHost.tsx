@@ -72,6 +72,9 @@ async function reattachClose(): Promise<void> {
 
 export function DetachedHost() {
   const [params] = useState<DetachParams | null>(() => readParams());
+  // The parent's title arrives via the snapshot, so we lift it out of the
+  // subcomponent and into this shell so both kinds can render it once.
+  const [parentTitle, setParentTitle] = useState<string | null>(null);
 
   if (!params) {
     return (
@@ -89,7 +92,10 @@ export function DetachedHost() {
       <header className="detached-shell__chrome">
         <span className="detached-shell__title">
           {params.kind === "sidebar" ? "Files" : "Inspector"}
-          <span className="detached-shell__parent">— {params.parent}</span>
+          <span className="detached-shell__parent">
+            {" — "}
+            {parentTitle ?? params.parent}
+          </span>
         </span>
         <button
           type="button"
@@ -102,9 +108,12 @@ export function DetachedHost() {
       </header>
       <div className="detached-shell__body">
         {params.kind === "sidebar" ? (
-          <SidebarBody parent={params.parent} />
+          <SidebarBody parent={params.parent} onParentTitle={setParentTitle} />
         ) : (
-          <InspectorBody parent={params.parent} />
+          <InspectorBody
+            parent={params.parent}
+            onParentTitle={setParentTitle}
+          />
         )}
       </div>
     </div>
@@ -113,6 +122,7 @@ export function DetachedHost() {
 
 interface SidebarBodyProps {
   parent: string;
+  onParentTitle: (title: string) => void;
 }
 
 /**
@@ -121,7 +131,7 @@ interface SidebarBodyProps {
  * first snapshot. Callbacks emit detach-action messages back; ReviewState
  * lives in the parent and reflects back through the next snapshot push.
  */
-function SidebarBody({ parent }: SidebarBodyProps) {
+function SidebarBody({ parent, onParentTitle }: SidebarBodyProps) {
   const [snapshot, setSnapshot] = useState<SidebarSnapshot | null>(null);
 
   useEffect(() => {
@@ -151,6 +161,10 @@ function SidebarBody({ parent }: SidebarBodyProps) {
       stopState?.();
     };
   }, [parent]);
+
+  useEffect(() => {
+    if (snapshot?.parentTitle) onParentTitle(snapshot.parentTitle);
+  }, [snapshot?.parentTitle, onParentTitle]);
 
   if (!snapshot) {
     return (
@@ -183,6 +197,7 @@ function SidebarBody({ parent }: SidebarBodyProps) {
 
 interface InspectorBodyProps {
   parent: string;
+  onParentTitle: (title: string) => void;
 }
 
 /**
@@ -191,7 +206,7 @@ interface InspectorBodyProps {
  * close/start round-trip through actions, but keystrokes don't, so the
  * composer stays responsive without thrashing the event bus.
  */
-function InspectorBody({ parent }: InspectorBodyProps) {
+function InspectorBody({ parent, onParentTitle }: InspectorBodyProps) {
   const [snapshot, setSnapshot] = useState<InspectorSnapshot | null>(null);
   // Child-owned draft bodies. The parent doesn't see textarea keystrokes
   // — only submit-reply / close-draft round-trips. This is the trade-off
@@ -223,6 +238,10 @@ function InspectorBody({ parent }: InspectorBodyProps) {
       stopState?.();
     };
   }, [parent]);
+
+  useEffect(() => {
+    if (snapshot?.parentTitle) onParentTitle(snapshot.parentTitle);
+  }, [snapshot?.parentTitle, onParentTitle]);
 
   if (!snapshot) {
     return <p className="detached-shell__placeholder">Loading inspector…</p>;

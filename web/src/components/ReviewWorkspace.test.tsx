@@ -168,12 +168,21 @@ vi.mock("../multiWindow", () => ({
   currentWindowLabel: vi.fn().mockResolvedValue(null),
   openDetachedWindow: vi.fn().mockResolvedValue(undefined),
   listDetachedChildren: vi.fn().mockResolvedValue([]),
+  closeDetachedChildOf: vi.fn().mockResolvedValue(undefined),
   closeDetachedChildrenOf: vi.fn().mockResolvedValue(undefined),
   focusIfDuplicate: vi.fn().mockResolvedValue(false),
   openChangesetInWindow: vi.fn().mockResolvedValue("not-tauri"),
   setWindowChangeset: vi.fn().mockResolvedValue(undefined),
   setWindowTitle: vi.fn().mockResolvedValue(undefined),
   onToastEvent: vi.fn().mockReturnValue(() => {}),
+}));
+
+// Detach bridge + menu listener both call `listen` from the Tauri event
+// API once isTauri() flips on. jsdom can't satisfy that import — stub so
+// the listener registers cleanly and never fires.
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+  emit: vi.fn().mockResolvedValue(undefined),
 }));
 
 afterEach(cleanup);

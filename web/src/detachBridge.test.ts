@@ -50,6 +50,7 @@ function makeSnapshot(wide: boolean, runs: PromptRunView[]): SidebarSnapshot {
     }),
     runs,
     wide,
+    parentTitle: "feat/example",
   };
 }
 
@@ -149,6 +150,7 @@ function makeInspectorSnapshot(
     commentCount,
     lineHasAiNote: false,
     agentContext: null,
+    parentTitle: "feat/example",
   };
 }
 

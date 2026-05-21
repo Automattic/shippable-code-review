@@ -25,6 +25,18 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let zoom_reset = MenuItemBuilder::with_id("shippable:zoom-reset", "Actual Size")
         .accelerator("CmdOrCtrl+0")
         .build(app)?;
+    let detach_sidebar = MenuItemBuilder::with_id(
+        "shippable:detach-sidebar",
+        "Detach Sidebar",
+    )
+    .accelerator("CmdOrCtrl+Shift+[")
+    .build(app)?;
+    let detach_inspector = MenuItemBuilder::with_id(
+        "shippable:detach-inspector",
+        "Detach Inspector",
+    )
+    .accelerator("CmdOrCtrl+Shift+]")
+    .build(app)?;
 
     let app_menu = SubmenuBuilder::new(app, "Shippable")
         .about(Some(AboutMetadataBuilder::new().build()))
@@ -60,6 +72,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&zoom_in)
         .item(&zoom_out)
         .item(&zoom_reset)
+        .separator()
+        .item(&detach_sidebar)
+        .item(&detach_inspector)
         .build()?;
 
     let window_menu = SubmenuBuilder::new(app, "Window")
@@ -83,6 +98,8 @@ pub fn action_for(id: &MenuId) -> Option<&'static str> {
         "shippable:zoom-out" => Some("zoom-out"),
         "shippable:zoom-reset" => Some("zoom-reset"),
         "shippable:new-window" => Some("new-window"),
+        "shippable:detach-sidebar" => Some("detach-sidebar"),
+        "shippable:detach-inspector" => Some("detach-inspector"),
         _ => None,
     }
 }

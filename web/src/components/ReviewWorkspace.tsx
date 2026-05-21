@@ -90,6 +90,7 @@ import {
 import { GitHubTokenModal } from "./GitHubTokenModal";
 import { isTauri, keychainGet } from "../keychain";
 import {
+  closeDetachedChildOf,
   closeDetachedChildrenOf,
   currentWindowLabel,
   openDetachedWindow,
@@ -668,6 +669,27 @@ export function ReviewWorkspace({
           ),
         });
         break;
+      case "TOGGLE_DETACH_SIDEBAR":
+        void toggleDetachedKind("sidebar");
+        break;
+      case "TOGGLE_DETACH_INSPECTOR":
+        void toggleDetachedKind("inspector");
+        break;
+    }
+  }
+
+  // Forward-references the bridge state declared further below; both
+  // `runAction` and the menu listener call this. The function and
+  // variables it closes over are all hoisted into the same component
+  // scope, so the closure resolves at call time (post-mount, post-bridge).
+  async function toggleDetachedKind(kind: "sidebar" | "inspector"): Promise<void> {
+    if (!selfLabel) return;
+    const currentlyDetached =
+      kind === "sidebar" ? isSidebarDetached : isInspectorDetached;
+    if (currentlyDetached) {
+      await closeDetachedChildOf(selfLabel, kind);
+    } else {
+      await openDetachedWindow(kind);
     }
   }
 
@@ -835,10 +857,12 @@ export function ReviewWorkspace({
     reviewedFiles: state.reviewedFiles,
     interactions: state.interactions,
   });
+  const parentTitle = cs.prSource?.title ?? cs.title ?? cs.branch;
   const sidebarSnapshot: SidebarSnapshot = {
     viewModel: sidebarViewModel,
     runs,
     wide: sidebarWide,
+    parentTitle,
   };
 
   const handleSidebarAction = (action: SidebarAction) => {
@@ -1024,6 +1048,7 @@ export function ReviewWorkspace({
     commentCount: commentStops.length,
     lineHasAiNote,
     agentContext: inspectorAgentContext,
+    parentTitle,
   };
 
   const handleInspectorAction = (action: InspectorAction) => {
@@ -1112,6 +1137,36 @@ export function ReviewWorkspace({
     if (!selfLabel) return;
     void closeDetachedChildrenOf(selfLabel);
   }, [cs.id, selfLabel]);
+
+  // Menu actions for View → Detach Sidebar / Detach Inspector route to the
+  // same toggle as the keyboard shortcut. Each entry runs only in review
+  // windows; detached children would otherwise try to spawn grandchildren.
+  useEffect(() => {
+    if (!isTauri()) return;
+    if (selfLabel && selfLabel.startsWith("detached-")) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const off = await listen<string>("shippable:menu", (e) => {
+        if (e.payload === "detach-sidebar") {
+          void toggleDetachedKind("sidebar");
+        } else if (e.payload === "detach-inspector") {
+          void toggleDetachedKind("inspector");
+        }
+      });
+      if (cancelled) off();
+      else unlisten = off;
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+    // toggleDetachedKind is re-created each render but closes over the
+    // latest selfLabel / isSidebarDetached / isInspectorDetached. Listing
+    // it isn't useful; the closure reads the right values at call time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selfLabel]);
 
   async function handleSymbolClick(target: DefinitionClickTarget) {
     const inDiffTarget = symbolIndex.get(target.symbol);

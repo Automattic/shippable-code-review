@@ -109,6 +109,26 @@ export async function closeDetachedChildrenOf(parent: string): Promise<void> {
   );
 }
 
+/**
+ * Close one kind of detached child for `parent`. Used by the
+ * detach-toggle path (shortcut / menu / future button-as-toggle) so a
+ * second invocation re-attaches instead of stacking another window.
+ */
+export async function closeDetachedChildOf(
+  parent: string,
+  kind: DetachedKind,
+): Promise<void> {
+  if (!isTauri()) return;
+  const { getAllWebviewWindows } = await import(
+    "@tauri-apps/api/webviewWindow"
+  );
+  const label = `detached-${parent}-${kind}`;
+  const all = await getAllWebviewWindows();
+  await Promise.all(
+    all.filter((w) => w.label === label).map((w) => w.close().catch(() => {})),
+  );
+}
+
 export async function focusWindow(label: string): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");
