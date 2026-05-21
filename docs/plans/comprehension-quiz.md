@@ -56,7 +56,7 @@ type Question = {
 
 ### Persisted reviewer state
 
-Lives on `ReviewState`. Schema bumps `v: 4 → v: 5`. No migration; per the existing exact-version load policy, a `v: 4` snapshot boots empty.
+Lives on `ReviewState`. Schema bumps `v: 5 → v: 6`. No migration; per the existing exact-version load policy, a `v: 5` snapshot boots empty.
 
 ```ts
 type QuizState = {
@@ -220,7 +220,7 @@ The quiz panel slots into the left `Sidebar` (`web/src/components/Sidebar.tsx`) 
 - **localStorage full or unavailable** → existing persist failure path. No quiz-specific handling.
 - **Trigger fires before `STORE_QUESTIONS` lands** → reducer exits before the dice roll. Silent no-op.
 - **Reviewer switches changesets mid-quiz** → `active` clears with the rest of the per-changeset transient state. Draft answer is lost. Not in scope to autosave.
-- **`v: 5` snapshot present** → load. `v: 4` or missing → boot empty (existing exact-version policy).
+- **`v: 6` snapshot present** → load. Anything else (`v: 5`, missing, corrupt) → boot empty (existing exact-version policy).
 
 ## Privacy and cost
 
@@ -244,7 +244,7 @@ Per `docs/plans/test-strategy.md`: real reducer, real persist, no mocks of the s
 
 **Evidence validator (unit, vitest):** synthetic ChangeSet + StructureMap, `PlanResponse.questions` mixing resolvable and unresolvable targets; assert which survive.
 
-**Integration (vitest):** real `ReviewState` reducer, real persist round-trip. Hydrate with stored questions, dispatch through the dispatcher wrapper with controlled `rng`, walk submit → reveal → self-eval, assert the persist serializer produces a `v: 5` snapshot that hydrates back.
+**Integration (vitest):** real `ReviewState` reducer, real persist round-trip. Hydrate with stored questions, dispatch through the dispatcher wrapper with controlled `rng`, walk submit → reveal → self-eval, assert the persist serializer produces a `v: 6` snapshot that hydrates back.
 
 **E2E (Playwright):** one golden-path journey in `web/e2e/`:
 
@@ -274,7 +274,7 @@ Per `docs/plans/test-strategy.md`: real reducer, real persist, no mocks of the s
 - `server/src/plan.ts` — `PlanResponseSchema` extension, prompt addendum, `assemblePlan` validator extension.
 - `web/src/types.ts` — `Question`, `QuestionTarget` shared between front and back; `QuizState` for the reducer.
 - `web/src/state.ts` — new actions, reducer cases, `dispatchToggleFileReviewed` wrapper that reads clock/PRNG.
-- `web/src/persist.ts` — schema bump `v: 4 → v: 5`, serializer for `quiz` slice.
+- `web/src/persist.ts` — schema bump `v: 5 → v: 6`, serializer for `quiz` slice.
 - `web/src/usePlan.ts` — surface `questions` on the hook result, dispatch `STORE_QUESTIONS` on resolve.
 - `web/src/components/Sidebar.tsx` — new `<QuizPanel>` section at the top of the stack.
 - `web/src/components/QuizPanel.tsx` (new) — resting / active / reveal states.
