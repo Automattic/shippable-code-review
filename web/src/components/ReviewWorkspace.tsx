@@ -140,14 +140,16 @@ import {
   persistHideNonActiveComments,
 } from "../commentVisibility";
 
-// Test seam: assignable in test builds to force the dice roll. Production
-// keeps Math.random untouched.
+// Test seam: assignable from tests to force the dice roll. Production never
+// sets `window.__shippableQuizRng`, so this stays Math.random in the wild;
+// the hook is intentionally readable in any mode so Playwright (which runs
+// against the dev server) can wire it up via addInitScript.
 type QuizRng = () => number;
 const quizRng: QuizRng =
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  import.meta.env.MODE === "test" && (window as any).__shippableQuizRng
-    ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ((window as any).__shippableQuizRng as QuizRng)
+  typeof window !== "undefined" &&
+  (window as unknown as { __shippableQuizRng?: QuizRng }).__shippableQuizRng
+    ? (window as unknown as { __shippableQuizRng?: QuizRng })
+        .__shippableQuizRng!
     : Math.random;
 
 function dispatchToggleFileReviewedWithQuiz(
