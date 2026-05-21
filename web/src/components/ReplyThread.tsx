@@ -258,6 +258,14 @@ function AgentRow({
           {intentGlyph(ix.intent)}
         </span>
         <span className="agent-reply__label">{ix.author || "agent"}</span>
+        {ix.confidence && (
+          <span
+            className={`agent-reply__confidence agent-reply__confidence--${ix.confidence}`}
+            title={`Agent confidence: ${ix.confidence}`}
+          >
+            {ix.confidence}
+          </span>
+        )}
         <span className="agent-reply__sep">·</span>
         <span className="agent-reply__time" title={ix.createdAt}>
           {timeAgo(ix.createdAt)}
@@ -266,6 +274,22 @@ function AgentRow({
       <div className="agent-reply__body">
         <RichText text={ix.body} symbols={symbols} onJump={onJump} />
       </div>
+      {ix.rationale && (
+        <details className="agent-reply__detail agent-reply__detail--rationale">
+          <summary className="agent-reply__detail-summary">Why this matters</summary>
+          <div className="agent-reply__detail-body">
+            <RichText text={ix.rationale} symbols={symbols} onJump={onJump} />
+          </div>
+        </details>
+      )}
+      {ix.suggestedFix && (
+        <details className="agent-reply__detail agent-reply__detail--fix">
+          <summary className="agent-reply__detail-summary">Suggested fix</summary>
+          <pre className="agent-reply__fix-code">
+            <code>{ix.suggestedFix}</code>
+          </pre>
+        </details>
+      )}
     </li>
   );
 }

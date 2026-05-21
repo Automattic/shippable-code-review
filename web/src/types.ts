@@ -527,6 +527,9 @@ export type InteractionIntent = AskIntent | ResponseIntent;
  *  annotation pipeline; `agent` is the live dialogue agent. */
 export type InteractionAuthorRole = "user" | "ai" | "agent";
 
+/** Agent's self-reported confidence in a top-level comment. */
+export type Confidence = "low" | "medium" | "high";
+
 /**
  * The unified primitive. One shape for every reviewer signal. The author
  * dimension is encoded in `authorRole`; the role determines persistence
@@ -556,6 +559,15 @@ export interface Interaction {
 
   /** Verifier hook — present on some AI-authored interactions. */
   runRecipe?: { source: string; inputs: Record<string, string> };
+
+  /**
+   * Structured fields on agent-authored top-level comments. `rationale` is
+   * required for top-level agent posts at the MCP boundary; the other two are
+   * optional. Absent on reply-mode and pre-existing rows.
+   */
+  rationale?: string;
+  suggestedFix?: string;
+  confidence?: Confidence;
 
   /**
    * Queue state mirrored from the server's StoredInteraction:

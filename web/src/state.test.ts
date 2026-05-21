@@ -1445,6 +1445,9 @@ describe("MERGE_AGENT_REPLIES — top-level entries", () => {
     intent?: "comment" | "question" | "request" | "blocker";
     target?: "line" | "block";
     postedAt?: string;
+    rationale?: string;
+    suggestedFix?: string;
+    confidence?: "low" | "medium" | "high";
   }): import("./state").PolledAgentReply {
     return {
       id: args.id,
@@ -1456,6 +1459,9 @@ describe("MERGE_AGENT_REPLIES — top-level entries", () => {
       authorRole: "agent",
       target: args.target ?? (args.lines.includes("-") ? "block" : "line"),
       postedAt: args.postedAt ?? "2026-04-30T00:01:00Z",
+      rationale: args.rationale,
+      suggestedFix: args.suggestedFix,
+      confidence: args.confidence,
     };
   }
 
@@ -1540,6 +1546,33 @@ describe("MERGE_AGENT_REPLIES — top-level entries", () => {
     const keys = Object.keys(s2.interactions);
     expect(keys).toHaveLength(1);
     expect(s2.interactions[keys[0]]).toHaveLength(1);
+  });
+
+  it("carries rationale/suggestedFix/confidence onto the merged Interaction", () => {
+    const s = initialState([csForTopLevel()]);
+    const merged = reducer(s, {
+      type: "MERGE_AGENT_REPLIES",
+      polled: [
+        topLevel({
+          id: "ag_7",
+          file: "src/foo.ts",
+          lines: "7",
+          rationale: "this leaks a handle",
+          suggestedFix: "close(fd)",
+          confidence: "high",
+        }),
+      ],
+    });
+    // The thread key carries a freshly-minted id segment — locate it by
+    // discovery rather than reconstructing the literal.
+    const keys = Object.keys(merged.interactions);
+    expect(keys).toHaveLength(1);
+    expect(merged.interactions[keys[0]][0]).toMatchObject({
+      id: "ag_7",
+      rationale: "this leaks a handle",
+      suggestedFix: "close(fd)",
+      confidence: "high",
+    });
   });
 });
 

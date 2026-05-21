@@ -268,6 +268,64 @@
   color: var(--blue);
 }
 
+/* Confidence chip — sits in the head row next to the agent label. */
+.agent-reply__confidence {
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 2px;
+  border: 1px solid currentColor;
+  line-height: 1.4;
+}
+.agent-reply__confidence--high {
+  color: var(--green, #6c6);
+}
+.agent-reply__confidence--medium {
+  color: var(--yellow, #caa233);
+}
+.agent-reply__confidence--low {
+  color: var(--fg-mute);
+}
+
+/* Collapsible rationale / suggested-fix sections — collapsed by default so
+   a glance shows body + intent + chip only. */
+.agent-reply__detail {
+  margin-top: 4px;
+  font-size: 11px;
+}
+.agent-reply__detail-summary {
+  cursor: pointer;
+  color: var(--fg-dim);
+  letter-spacing: 0.02em;
+  list-style: none;
+}
+.agent-reply__detail-summary::-webkit-details-marker {
+  display: none;
+}
+.agent-reply__detail-summary::before {
+  content: "▸ ";
+  color: var(--fg-mute);
+}
+.agent-reply__detail[open] .agent-reply__detail-summary::before {
+  content: "▾ ";
+}
+.agent-reply__detail-body {
+  margin-top: 3px;
+  color: var(--fg);
+  line-height: 1.5;
+}
+.agent-reply__fix-code {
+  margin: 3px 0 0 0;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  font-size: 11px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
 .composer {
   margin-top: 6px;
   display: flex;

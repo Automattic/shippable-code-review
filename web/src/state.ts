@@ -1,5 +1,6 @@
 import type {
   CharRange,
+  Confidence,
   Cursor,
   ChangeSet,
   DetachedInteraction,
@@ -62,6 +63,10 @@ export type PolledAgentReply =
       authorRole: "agent";
       target: "line" | "block";
       postedAt: string;
+      /** Structured fields, present only when the agent supplied them. */
+      rationale?: string;
+      suggestedFix?: string;
+      confidence?: Confidence;
     };
 
 /**
@@ -1093,6 +1098,16 @@ function mergeAgentInteractions(
       continue;
     }
 
+    // Structured fields ride only top-level agent posts; carried through
+    // whether the entry resolves to a thread or lands in detached.
+    const structured: Pick<
+      Interaction,
+      "rationale" | "suggestedFix" | "confidence"
+    > = {};
+    if (p.rationale !== undefined) structured.rationale = p.rationale;
+    if (p.suggestedFix !== undefined) structured.suggestedFix = p.suggestedFix;
+    if (p.confidence !== undefined) structured.confidence = p.confidence;
+
     // Top-level: resolve (file, lines) against the active changeset.
     const located = activeCs
       ? resolveAgentTopLevelAnchor(activeCs, p.file, p.lines)
@@ -1118,6 +1133,7 @@ function mergeAgentInteractions(
           authorRole: "agent",
           body: p.body,
           createdAt: p.postedAt,
+          ...structured,
         },
       });
     } else {
@@ -1135,6 +1151,7 @@ function mergeAgentInteractions(
         body: p.body,
         createdAt: p.postedAt,
         anchorPath: p.file,
+        ...structured,
       };
       detachedAdditions.push({ interaction, threadKey: detachedKey });
     }

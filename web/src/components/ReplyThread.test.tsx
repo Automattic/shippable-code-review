@@ -649,3 +649,53 @@ describe("ReplyThread — two-level thread layout (user comment head + nested re
     expect(listItems.length).toBe(1);
   });
 });
+
+describe("ReplyThread — structured agent fields", () => {
+  it("renders a confidence chip when confidence is set", () => {
+    const { container } = renderThread([
+      userIx({ agentQueueStatus: "pending" }),
+      agentIx({ target: "line", intent: "request", confidence: "high" }),
+    ]);
+    const chip = container.querySelector(".agent-reply__confidence");
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent).toMatch(/high/i);
+    expect(
+      container.querySelector(".agent-reply__confidence--high"),
+    ).not.toBeNull();
+  });
+
+  it("renders rationale and suggestedFix as collapsed <details> sections", () => {
+    const { container } = renderThread([
+      userIx({ agentQueueStatus: "pending" }),
+      agentIx({
+        target: "line",
+        intent: "request",
+        rationale: "this leaks a handle",
+        suggestedFix: "close(fd)",
+      }),
+    ]);
+    const rationale = container.querySelector(
+      "details.agent-reply__detail--rationale",
+    ) as HTMLDetailsElement | null;
+    const fix = container.querySelector(
+      "details.agent-reply__detail--fix",
+    ) as HTMLDetailsElement | null;
+    expect(rationale).not.toBeNull();
+    expect(fix).not.toBeNull();
+    // Collapsed by default — a glance shows body + intent + chip only.
+    expect(rationale!.open).toBe(false);
+    expect(fix!.open).toBe(false);
+    expect(rationale!.textContent).toContain("this leaks a handle");
+    expect(fix!.textContent).toContain("close(fd)");
+  });
+
+  it("renders none of the structured fields when the interaction lacks them", () => {
+    const { container } = renderThread([
+      userIx({ agentQueueStatus: "pending" }),
+      agentIx({ target: "reply", intent: "accept" }),
+    ]);
+    expect(container.querySelector(".agent-reply__confidence")).toBeNull();
+    expect(container.querySelector(".agent-reply__detail--rationale")).toBeNull();
+    expect(container.querySelector(".agent-reply__detail--fix")).toBeNull();
+  });
+});
