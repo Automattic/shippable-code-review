@@ -86,4 +86,23 @@ describe("stripMermaidClickDirectives", () => {
   it("returns an empty string for an empty input", () => {
     expect(stripMermaidClickDirectives("")).toBe("");
   });
+
+  it("strips a click directive after a `;` statement separator", () => {
+    // Mermaid's flowchart grammar accepts SEMI as a separator, so this
+    // parses as two statements and a line-anchored regex would miss the
+    // second one.
+    const input = 'flowchart TD\n  A --> B; click A "javascript:alert(1)"';
+    const out = stripMermaidClickDirectives(input);
+    expect(out).not.toMatch(/click\s+A/);
+    expect(out).not.toContain("javascript:");
+    expect(out).toContain("A --> B;");
+  });
+
+  it("strips multiple click directives chained with `;` on one line", () => {
+    const input = 'flowchart TD\n  click A "x"; click B "javascript:y"; A --> B';
+    const out = stripMermaidClickDirectives(input);
+    expect(out).not.toMatch(/click\s+[AB]/);
+    expect(out).not.toContain("javascript:");
+    expect(out).toContain("A --> B");
+  });
 });

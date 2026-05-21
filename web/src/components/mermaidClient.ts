@@ -38,12 +38,17 @@ export function ensureMermaidReadyForUntrustedMarkdown(): void {
   });
 }
 
-// `click` is a flowchart keyword and only appears at the start of a line
-// (leading whitespace allowed). Match any line whose first non-whitespace
-// token is `click`; that covers `click X "url"`, `click X "url" "tooltip"`,
+// `click` is a flowchart statement, so it must be preceded by a statement
+// separator — start-of-input, newline, or `;` (mermaid's flowchart grammar
+// accepts SEMI alongside NEWLINE, so `A --> B; click A "javascript:..."`
+// parses as two statements and would slip past a line-anchored regex).
+// We consume from that boundary up to (but not including) the next
+// separator, which covers `click X "url"`, `click X "url" "tooltip"`,
 // `click X call cb(arg) "tooltip"`, `click X href "url"`, and the
-// bare-callback form. Node labels live inside `[]`/`()`/`{}` and can't start
-// the line, so this won't touch them.
+// bare-callback form. The boundary char itself is preserved so subsequent
+// statements still parse. Node labels live inside `[]`/`()`/`{}`, so a
+// literal `click` inside a label can't sit right after a separator and
+// won't be matched.
 export function stripMermaidClickDirectives(source: string): string {
-  return source.replace(/^[ \t]*click[ \t][^\n]*$/gm, "");
+  return source.replace(/(^|[\n;])[ \t]*click[ \t][^\n;]*/g, "$1");
 }
