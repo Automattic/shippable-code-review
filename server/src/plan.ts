@@ -8,6 +8,7 @@ import type {
   Claim,
   EntryPoint,
   EvidenceRef,
+  Question,
   ReviewPlan,
   StructureMap,
 } from "../../web/src/types.ts";
@@ -38,12 +39,32 @@ const EntryPointSchema = z.object({
   reason: ClaimSchema,
 });
 
+const QuestionTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("changeset") }),
+  z.object({ kind: z.literal("file"), path: z.string() }),
+  z.object({ kind: z.literal("hunk"), hunkId: z.string() }),
+  z.object({
+    kind: z.literal("symbol"),
+    name: z.string(),
+    definedIn: z.string(),
+  }),
+]);
+
+const QuestionSchema = z.object({
+  id: z.string(),
+  type: z.enum(["q1", "q2"]),
+  target: QuestionTargetSchema,
+  prompt: z.string(),
+  claudeAnswer: z.string(),
+});
+
 const PlanResponseSchema = z.object({
   intent: z.array(ClaimSchema),
   // No max here — the model sometimes returns more than the prompt asks for.
   // We truncate to 3 in `assemblePlan` after evidence validation, so we keep
   // the best-validated 3 instead of blowing up the whole response.
   entryPoints: z.array(EntryPointSchema),
+  questions: z.array(QuestionSchema),
 });
 
 export type PlanResponse = z.infer<typeof PlanResponseSchema>;
@@ -92,7 +113,9 @@ To keep the diff under token limits, files that are auto-generated (e.g. \`packa
 
 You will be called via structured output (JSON schema). Return only the schema-conformant object. Do not include prose outside the structured output.`;
 
-export async function generatePlan(cs: ChangeSet): Promise<ReviewPlan> {
+export async function generatePlan(
+  cs: ChangeSet,
+): Promise<{ plan: ReviewPlan; questions: Question[] }> {
   const map = buildStructureMap(cs);
   const userContent = buildUserMessage(cs, map);
 
@@ -238,11 +261,11 @@ export function elideReason(path: string): string | null {
   return null;
 }
 
-function assemblePlan(
+export function assemblePlan(
   cs: ChangeSet,
   map: StructureMap,
   parsed: PlanResponse,
-): ReviewPlan {
+): { plan: ReviewPlan; questions: Question[] } {
   const fileIds = new Set(cs.files.map((f) => f.id));
   const filePaths = new Set(map.files.map((f) => f.path));
   const hunkIds = new Set<string>();
@@ -292,10 +315,29 @@ function assemblePlan(
     if (entryPoints.length >= 3) break;
   }
 
+  const questions: Question[] = [];
+  for (const raw of parsed.questions) {
+    const t = raw.target;
+    let ok = false;
+    switch (t.kind) {
+      case "changeset":
+        ok = true;
+        break;
+      case "file":
+        ok = filePaths.has(t.path);
+        break;
+      case "hunk":
+        ok = hunkIds.has(t.hunkId);
+        break;
+      case "symbol":
+        ok = symbols.has(`${t.name}@${t.definedIn}`);
+        break;
+    }
+    if (ok) questions.push(raw);
+  }
+
   return {
-    headline: cs.title,
-    intent,
-    map,
-    entryPoints,
+    plan: { headline: cs.title, intent, map, entryPoints },
+    questions,
   };
 }

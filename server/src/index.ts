@@ -244,14 +244,14 @@ async function handlePlan(
   const started = Date.now();
   console.log(`[server] /api/plan cs=${cs.id} files=${cs.files.length}`);
   try {
-    const plan = await generatePlan(cs);
+    const { plan, questions } = await generatePlan(cs);
     const ms = Date.now() - started;
     console.log(
-      `[server]   → ok in ${ms}ms: ${plan.intent.length} claims, ${plan.entryPoints.length} entry points`,
+      `[server]   → ok in ${ms}ms: ${plan.intent.length} claims, ${plan.entryPoints.length} entry points, ${questions.length} questions`,
     );
     writeCorsHeaders(res, origin);
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ plan }));
+    res.end(JSON.stringify({ plan, questions }));
   } catch (err) {
     const ms = Date.now() - started;
     console.error(`[server]   → err in ${ms}ms:`, err);

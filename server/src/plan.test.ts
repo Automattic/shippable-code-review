@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { buildUserMessage, elideReason } from "./plan.ts";
+import { assemblePlan, buildUserMessage, elideReason } from "./plan.ts";
 import { buildStructureMap } from "../../web/src/plan.ts";
-import type { ChangeSet, DiffFile, Hunk } from "../../web/src/types.ts";
+import type {
+  ChangeSet,
+  DiffFile,
+  Hunk,
+  StructureMap,
+} from "../../web/src/types.ts";
 
 describe("elideReason", () => {
   it("elides known lockfiles by basename, anywhere in the tree", () => {
@@ -148,5 +153,157 @@ describe("buildUserMessage byte budget", () => {
     expect(structureSection).not.toContain("internalUnused");
     expect(structureSection).not.toContain("scratchA");
     expect(structureSection).not.toContain("scratchB");
+  });
+});
+
+describe("assemblePlan question validation", () => {
+  const cs = {
+    id: "cs-1",
+    title: "x",
+    description: "d",
+    branch: "f",
+    base: "main",
+    author: "u",
+    files: [
+      {
+        id: "cs-1/a.ts",
+        path: "a.ts",
+        language: "ts",
+        status: "modified",
+        hunks: [
+          {
+            id: "h-a-1",
+            header: "@@",
+            oldStart: 1,
+            oldCount: 1,
+            newStart: 1,
+            newCount: 1,
+            lines: [],
+          },
+        ],
+      },
+    ],
+  } as unknown as ChangeSet;
+  const map: StructureMap = {
+    files: [
+      {
+        fileId: "cs-1/a.ts",
+        path: "a.ts",
+        status: "modified",
+        added: 1,
+        removed: 0,
+        isTest: false,
+      },
+    ],
+    symbols: [
+      { name: "foo", definedIn: "a.ts", referencedIn: [], exported: true },
+    ],
+  };
+
+  it("keeps resolvable questions across all target kinds", () => {
+    const parsed = {
+      intent: [],
+      entryPoints: [],
+      questions: [
+        {
+          id: "q-1",
+          type: "q1" as const,
+          target: { kind: "file" as const, path: "a.ts" },
+          prompt: "what?",
+          claudeAnswer: "answer",
+        },
+        {
+          id: "q-2",
+          type: "q2" as const,
+          target: { kind: "hunk" as const, hunkId: "h-a-1" },
+          prompt: "what if?",
+          claudeAnswer: "...",
+        },
+        {
+          id: "q-3",
+          type: "q1" as const,
+          target: { kind: "symbol" as const, name: "foo", definedIn: "a.ts" },
+          prompt: "what does foo do?",
+          claudeAnswer: "...",
+        },
+      ],
+    };
+    const result = assemblePlan(cs, map, parsed);
+    expect(result.questions.map((q) => q.id)).toEqual(["q-1", "q-2", "q-3"]);
+  });
+
+  it("drops unresolvable questions and keeps the rest", () => {
+    const parsed = {
+      intent: [],
+      entryPoints: [],
+      questions: [
+        {
+          id: "q-good",
+          type: "q1" as const,
+          target: { kind: "file" as const, path: "a.ts" },
+          prompt: "p",
+          claudeAnswer: "a",
+        },
+        {
+          id: "q-bad-path",
+          type: "q1" as const,
+          target: { kind: "file" as const, path: "ghost.ts" },
+          prompt: "p",
+          claudeAnswer: "a",
+        },
+        {
+          id: "q-bad-hunk",
+          type: "q2" as const,
+          target: { kind: "hunk" as const, hunkId: "h-ghost" },
+          prompt: "p",
+          claudeAnswer: "a",
+        },
+        {
+          id: "q-bad-sym",
+          type: "q1" as const,
+          target: { kind: "symbol" as const, name: "ghost", definedIn: "a.ts" },
+          prompt: "p",
+          claudeAnswer: "a",
+        },
+      ],
+    };
+    const result = assemblePlan(cs, map, parsed);
+    expect(result.questions.map((q) => q.id)).toEqual(["q-good"]);
+  });
+
+  it("returns an empty array when every question is unresolvable", () => {
+    const parsed = {
+      intent: [],
+      entryPoints: [],
+      questions: [
+        {
+          id: "q-bad",
+          type: "q1" as const,
+          target: { kind: "file" as const, path: "ghost.ts" },
+          prompt: "p",
+          claudeAnswer: "a",
+        },
+      ],
+    };
+    const result = assemblePlan(cs, map, parsed);
+    expect(result.questions).toEqual([]);
+  });
+
+  it("always accepts changeset-target questions", () => {
+    const parsed = {
+      intent: [],
+      entryPoints: [],
+      questions: [
+        {
+          id: "q-cs",
+          type: "q1" as const,
+          target: { kind: "changeset" as const },
+          prompt: "p",
+          claudeAnswer: "a",
+        },
+      ],
+    };
+    const result = assemblePlan(cs, map, parsed);
+    expect(result.questions.map((q) => q.id)).toEqual(["q-cs"]);
   });
 });

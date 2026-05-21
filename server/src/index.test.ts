@@ -994,10 +994,13 @@ describe("AI endpoints consult auth-store for anthropic key", () => {
     const spy = vi
       .spyOn(planMod, "generatePlan")
       .mockResolvedValue({
-        headline: "x",
-        intent: [],
-        map: { files: [], symbols: [] },
-        entryPoints: [],
+        plan: {
+          headline: "x",
+          intent: [],
+          map: { files: [], symbols: [] },
+          entryPoints: [],
+        },
+        questions: [],
       });
     try {
       await postJson(`${baseUrl}/api/auth/set`, {
