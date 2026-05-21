@@ -315,16 +315,6 @@
   color: var(--fg);
   line-height: 1.5;
 }
-.agent-reply__fix-code {
-  margin: 3px 0 0 0;
-  padding: 4px 6px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  font-size: 11px;
-  overflow-x: auto;
-  white-space: pre;
-}
 
 .composer {
   margin-top: 6px;

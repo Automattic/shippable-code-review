@@ -697,6 +697,9 @@ describe("ReplyThread — structured agent fields", () => {
     expect(fix!.open).toBe(false);
     expect(rationale!.textContent).toContain("this leaks a handle");
     expect(fix!.textContent).toContain("close(fd)");
+    // suggestedFix renders as regular text, not a code container.
+    expect(fix!.querySelector(".agent-reply__detail-body")).not.toBeNull();
+    expect(fix!.querySelector("pre")).toBeNull();
   });
 
   it("renders none of the structured fields when the interaction lacks them", () => {

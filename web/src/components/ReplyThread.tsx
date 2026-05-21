@@ -302,9 +302,9 @@ function AgentRow({
       {ix.suggestedFix && (
         <details className="agent-reply__detail agent-reply__detail--fix">
           <summary className="agent-reply__detail-summary">Suggested fix</summary>
-          <pre className="agent-reply__fix-code">
-            <code>{ix.suggestedFix}</code>
-          </pre>
+          <div className="agent-reply__detail-body">
+            <RichText text={ix.suggestedFix} symbols={symbols} onJump={onJump} />
+          </div>
         </details>
       )}
     </>

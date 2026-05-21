@@ -45,6 +45,20 @@ the spec's open questions.
   file-anchored thread keys`); the feature branch was rebased onto it and all
   gates then passed. No feature code was changed to work around it.
 
+## Post-ship changes
+
+- **`AgentRow` bypassed for thread heads** (fixed): rebasing onto main's
+  inline-interactions change routed every thread *head* through the user-row
+  renderer. A top-level agent comment is a head, so it skipped `AgentRow` and
+  none of the structured fields rendered. `AgentRow` gained an `asItem` prop so
+  a head renders as a `<div>` and a nested reply as a `<li>`; the head branch
+  now dispatches agent-authored heads to `AgentRow`.
+- **`suggestedFix` renders as regular text, not a code block**: `spec.md` and
+  `requirements.md` item 6 specified a code block. On review it reads better as
+  prose — `suggestedFix` now renders via the `RichText` renderer in a normal
+  `.agent-reply__detail-body`, the same as `rationale`. `RichText` still
+  formats inline code spans, so literal code in the fix stays legible.
+
 ## Verification
 
 - Quality gates green: `web/` build + lint + 597 tests; `server/` typecheck +
