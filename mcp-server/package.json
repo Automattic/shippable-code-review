@@ -12,7 +12,9 @@
     "postbuild": "chmod +x dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:sidecar": "rm -f ../src-tauri/binaries/shippable-mcp-aarch64-apple-darwin && bun build --compile --minify --sourcemap --target=bun-darwin-arm64 ./src/index.ts --outfile ../src-tauri/binaries/shippable-mcp-aarch64-apple-darwin",
+    "build:sidecar:x64": "rm -f ../src-tauri/binaries/shippable-mcp-x86_64-apple-darwin && bun build --compile --minify --sourcemap --target=bun-darwin-x64 ./src/index.ts --outfile ../src-tauri/binaries/shippable-mcp-x86_64-apple-darwin"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.8.0"

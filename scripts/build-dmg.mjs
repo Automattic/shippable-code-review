@@ -64,11 +64,12 @@ function run(command, args, cwd) {
   }
 }
 
-// Cross-arch sidecar: ensure the matching binary exists before cargo runs.
-// The tauri beforeBuildCommand builds the host-arch sidecar unconditionally;
-// when targeting the other arch we need its sidecar built too.
+// Cross-arch sidecars: ensure the matching binaries exist before cargo runs.
+// The tauri beforeBuildCommand builds host-arch sidecars unconditionally;
+// when targeting the other arch we need its sidecars built too.
 if (targetArg && targetTriple !== hostTriple) {
   run("bun", ["run", sidecarScript], path.join(rootDir, "server"));
+  run("bun", ["run", sidecarScript], path.join(rootDir, "mcp-server"));
 }
 
 const cargoArgs = ["tauri", "build", "-b", "app"];

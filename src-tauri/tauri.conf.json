@@ -7,7 +7,7 @@
     "frontendDist": "../web/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "(cd server && bun run build:sidecar) && (cd web && npm run dev)",
-    "beforeBuildCommand": "(cd server && bun run build:sidecar) && (cd web && npm run build)"
+    "beforeBuildCommand": "(cd server && bun run build:sidecar) && (cd mcp-server && bun run build:sidecar) && (cd web && npm run build)"
   },
   "app": {
     "windows": [
@@ -37,7 +37,8 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/shippable-server"
+      "binaries/shippable-server",
+      "binaries/shippable-mcp"
     ],
     "resources": {
       "../library": "library"

@@ -9,6 +9,7 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 mod keychain;
+mod mcp_targets;
 mod menu;
 
 // Origins the bundled sidecar should accept. Covers the WebView origin Tauri
@@ -345,6 +346,8 @@ pub fn run() {
             keychain::keychain_get,
             keychain::keychain_set,
             keychain::keychain_remove,
+            mcp_targets::discover_mcp_targets,
+            mcp_targets::register_mcp_targets,
         ])
         .setup(|app| {
             // Logger runs in both debug and release. The .app bundle has no

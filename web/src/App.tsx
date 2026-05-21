@@ -14,6 +14,9 @@ import {
   setWindowChangeset,
   setWindowTitle,
 } from "./multiWindow";
+import { useRegisterMcp } from "./useRegisterMcp";
+import { NoticeModal } from "./components/NoticeModal";
+import { RegisterMcpModal } from "./components/RegisterMcpModal";
 import type {
   ChangeSet,
   DetachedInteraction,
@@ -154,6 +157,14 @@ function truncate(s: string, n: number): string {
 export default function App() {
   const [themeId, setThemeId] = useTheme();
   const { findOpen, closeFind } = useTauriMenu();
+  const {
+    picker: mcpPicker,
+    notice: mcpNotice,
+    binaryPath: mcpBinaryPath,
+    confirm: confirmMcpRegister,
+    cancel: cancelMcpPicker,
+    dismissNotice: dismissMcpNotice,
+  } = useRegisterMcp();
   const [boot] = useState<BootSeed>(() => resolveBoot());
   const [hydrated] = useState(() =>
     boot.applyPersisted
@@ -442,6 +453,22 @@ export default function App() {
         />
         <FindBar open={findOpen} onClose={closeFind} />
         {toast && <Toast message={toast} onClose={dismissToast} />}
+        {mcpPicker && (
+          <RegisterMcpModal
+            targets={mcpPicker.targets}
+            binaryPath={mcpBinaryPath}
+            onConfirm={confirmMcpRegister}
+            onCancel={cancelMcpPicker}
+          />
+        )}
+        {mcpNotice && (
+          <NoticeModal
+            title={mcpNotice.title}
+            message={mcpNotice.message}
+            details={mcpNotice.details}
+            onClose={dismissMcpNotice}
+          />
+        )}
       </>
     );
   }
@@ -462,6 +489,14 @@ export default function App() {
       />
       <FindBar open={findOpen} onClose={closeFind} />
       {toast && <Toast message={toast} onClose={dismissToast} />}
+      {mcpNotice && (
+        <NoticeModal
+          title={mcpNotice.title}
+          message={mcpNotice.message}
+          details={mcpNotice.details}
+          onClose={dismissMcpNotice}
+        />
+      )}
     </>
   );
 }

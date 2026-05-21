@@ -13,6 +13,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let new_window = MenuItemBuilder::with_id("shippable:new-window", "New Window")
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
+    let register_mcp =
+        MenuItemBuilder::with_id("shippable:register-mcp", "Register MCP…").build(app)?;
     let find = MenuItemBuilder::with_id("shippable:find", "Find")
         .accelerator("CmdOrCtrl+F")
         .build(app)?;
@@ -28,6 +30,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
     let app_menu = SubmenuBuilder::new(app, "Shippable")
         .about(Some(AboutMetadataBuilder::new().build()))
+        .separator()
+        .item(&register_mcp)
         .separator()
         .services()
         .separator()
@@ -83,6 +87,7 @@ pub fn action_for(id: &MenuId) -> Option<&'static str> {
         "shippable:zoom-out" => Some("zoom-out"),
         "shippable:zoom-reset" => Some("zoom-reset"),
         "shippable:new-window" => Some("new-window"),
+        "shippable:register-mcp" => Some("register-mcp"),
         _ => None,
     }
 }
