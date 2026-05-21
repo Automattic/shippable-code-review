@@ -336,9 +336,13 @@ function InspectorBody({ parent, onParentTitle }: InspectorBodyProps) {
         void emitInspectorAction(parent, { type: "next-comment" })
       }
       agentContext={agentContext}
-      // PR pill + auth modal stay in the docked path — passing no
-      // worktreeSource keeps Inspector's branch-lookup effect from firing
-      // in the child window.
+      worktreePath={snapshot.worktreePath}
+      pillMatch={snapshot.pillMatch}
+      pillBusy={snapshot.pillBusy}
+      pillError={snapshot.pillError}
+      onPillClick={() =>
+        void emitInspectorAction(parent, { type: "pill-click" })
+      }
     />
   );
 }

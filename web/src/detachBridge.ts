@@ -20,6 +20,7 @@ import {
 } from "./multiWindow";
 import type { InspectorViewModel, SidebarViewModel } from "./view";
 import type { PromptRunView } from "./components/PromptRunsPanel";
+import type { PrMatch } from "./githubPrClient";
 import type {
   AgentContextSlice,
   AgentSessionRef,
@@ -72,6 +73,14 @@ export interface InspectorSnapshot {
   agentContext: AgentContextData | null;
   /** Same parent-identifier string as in SidebarSnapshot. */
   parentTitle: string;
+  /** Worktree path threaded through to DetachedThreadCard's "view at" panel
+   *  in the detached child. Null when the changeset isn't worktree-loaded. */
+  worktreePath: string | null;
+  /** PR-pill state, owned by the parent so the detached Inspector renders
+   *  against the same lookup result the docked one sees. */
+  pillMatch: PrMatch | null;
+  pillBusy: boolean;
+  pillError: string | null;
 }
 
 export type InspectorAction =
@@ -90,7 +99,8 @@ export type InspectorAction =
   | {
       type: "verify-ai-note";
       recipe: { source: string; inputs: Record<string, string> };
-    };
+    }
+  | { type: "pill-click" };
 
 export type DetachStateMsg =
   | { kind: "sidebar"; snapshot: SidebarSnapshot }
@@ -102,6 +112,26 @@ export type DetachActionMsg =
 
 export interface DetachReadyMsg {
   kind: DetachedKind;
+}
+
+// ── Action dispatch helper ────────────────────────────────────────────────
+
+export interface DetachActionHandlers {
+  onSidebar: (action: SidebarAction) => void;
+  onInspector: (action: InspectorAction) => void;
+}
+
+/**
+ * Route a detach-action message to the right handler. Extracted so the
+ * round-trip test can verify every action variant lands on the expected
+ * callback without standing up a Tauri event listener.
+ */
+export function dispatchDetachAction(
+  msg: DetachActionMsg,
+  handlers: DetachActionHandlers,
+): void {
+  if (msg.kind === "sidebar") handlers.onSidebar(msg.action);
+  else if (msg.kind === "inspector") handlers.onInspector(msg.action);
 }
 
 // ── Event-name helpers ────────────────────────────────────────────────────
@@ -231,11 +261,10 @@ export function useDetachBridge({
       stopAction = await listen<DetachActionMsg>(
         detachActionEvent(selfLabel),
         (ev) => {
-          if (ev.payload.kind === "sidebar") {
-            onSidebarActionRef.current(ev.payload.action);
-          } else if (ev.payload.kind === "inspector") {
-            onInspectorActionRef.current(ev.payload.action);
-          }
+          dispatchDetachAction(ev.payload, {
+            onSidebar: (a) => onSidebarActionRef.current(a),
+            onInspector: (a) => onInspectorActionRef.current(a),
+          });
         },
       );
     })();

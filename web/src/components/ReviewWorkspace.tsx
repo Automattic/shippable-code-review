@@ -82,7 +82,13 @@ import { KEYMAP, type ActionId } from "../keymap";
 import { clearSession } from "../persist";
 import type { ThemeId } from "../tokens";
 import type { RecentSource } from "../recents";
-import { loadGithubPr, GithubFetchError } from "../githubPrClient";
+import {
+  GH_ERROR_MESSAGES,
+  GithubFetchError,
+  loadGithubPr,
+  lookupPrForBranch,
+  type PrMatch,
+} from "../githubPrClient";
 import {
   asTokenRejectionHint,
   type TokenRejectionHint,
@@ -264,6 +270,14 @@ export function ReviewWorkspace({
   const [agentLoading, setAgentLoading] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
   const [agentRefreshTick, setAgentRefreshTick] = useState(0);
+
+  // PR pill state — lifted out of Inspector so the detached child window
+  // can render against the same lookup result. The match comes from the
+  // server's branch→PR lookup; busy/error track the merge flow. See
+  // docs/plans/detached-sidebars.md slice (e).
+  const [pillMatch, setPillMatch] = useState<PrMatch | null>(null);
+  const [pillBusy, setPillBusy] = useState(false);
+  const [pillError, setPillError] = useState<string | null>(null);
 
   // PR refresh state — tracks per-cs whether a refresh is in flight,
   // and whether the last refresh failed with auth-rejected (surfaces a banner).
@@ -1027,6 +1041,78 @@ export function ReviewWorkspace({
     }));
   };
 
+  // PR-pill machinery — owned by ReviewWorkspace so the detached Inspector
+  // window can drive the same pill from a snapshot push. The lookup runs
+  // once per worktreePath change; the click handler dispatches the merge
+  // or surfaces the token modal through the existing prRefresh path.
+  const worktreePathForPill = activeWorktreeSource?.worktreePath ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      setPillMatch(null);
+      setPillError(null);
+      if (!worktreePathForPill) return;
+      try {
+        const { matched } = await lookupPrForBranch(worktreePathForPill);
+        if (!cancelled) setPillMatch(matched);
+      } catch (err) {
+        console.warn("[shippable] PR branch-lookup failed:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [worktreePathForPill]);
+
+  async function handlePillClick(): Promise<void> {
+    if (!pillMatch || cs.prSource) return;
+    setPillBusy(true);
+    setPillError(null);
+    try {
+      const result = await loadGithubPr(pillMatch.htmlUrl);
+      setPillBusy(false);
+      dispatch({
+        type: "MERGE_PR_OVERLAY",
+        changesetId: cs.id,
+        prSource: result.changeSet.prSource!,
+        prConversation: result.changeSet.prConversation ?? [],
+      });
+      dispatch({
+        type: "MERGE_PR_INTERACTIONS",
+        changesetId: cs.id,
+        prInteractions: result.prInteractions,
+        prDetached: result.prDetached,
+      });
+    } catch (err) {
+      setPillBusy(false);
+      if (err instanceof GithubFetchError) {
+        if (err.discriminator === "github_token_required") {
+          setPrRefreshTokenModal({
+            host: err.host ?? "github.com",
+            reason: "first-time",
+            pendingHtmlUrl: "",
+            pendingAction: () => handlePillClick(),
+          });
+        } else if (err.discriminator === "github_auth_failed") {
+          setPrRefreshTokenModal({
+            host: err.host ?? "github.com",
+            reason: "rejected",
+            pendingHtmlUrl: "",
+            pendingAction: () => handlePillClick(),
+            hint: asTokenRejectionHint(err.hint),
+          });
+        } else {
+          setPillError(
+            GH_ERROR_MESSAGES[err.discriminator] ??
+              "Couldn't load PR overlay.",
+          );
+        }
+      } else {
+        setPillError("Couldn't load PR overlay.");
+      }
+    }
+  }
+
   const inspectorAgentContext = activeWorktreeSource
     ? {
         slice: agentSlice,
@@ -1049,6 +1135,10 @@ export function ReviewWorkspace({
     lineHasAiNote,
     agentContext: inspectorAgentContext,
     parentTitle,
+    worktreePath: worktreePathForPill,
+    pillMatch: cs.prSource ? null : pillMatch,
+    pillBusy,
+    pillError,
   };
 
   const handleInspectorAction = (action: InspectorAction) => {
@@ -1099,6 +1189,9 @@ export function ReviewWorkspace({
         break;
       case "verify-ai-note":
         handleVerifyAiNote(action.recipe);
+        break;
+      case "pill-click":
+        void handlePillClick();
         break;
     }
   };
@@ -1736,32 +1829,11 @@ export function ReviewWorkspace({
                 : undefined
             }
             prConversation={cs.prConversation}
-            worktreeSource={activeWorktreeSource ?? undefined}
-            prSource={cs.prSource}
-            changesetId={cs.id}
-            onMergePrOverlay={(csId, prSource, prConversation, prInteractions, prDetached) => {
-              dispatch({
-                type: "MERGE_PR_OVERLAY",
-                changesetId: csId,
-                prSource,
-                prConversation,
-              });
-              dispatch({
-                type: "MERGE_PR_INTERACTIONS",
-                changesetId: csId,
-                prInteractions,
-                prDetached,
-              });
-            }}
-            onAuthError={(host, reason, retry, hint) => {
-              setPrRefreshTokenModal({
-                host,
-                reason,
-                pendingHtmlUrl: "",
-                pendingAction: retry,
-                hint,
-              });
-            }}
+            worktreePath={worktreePathForPill}
+            pillMatch={cs.prSource ? null : pillMatch}
+            pillBusy={pillBusy}
+            pillError={pillError}
+            onPillClick={() => void handlePillClick()}
             onDetach={
               isTauri()
                 ? () => void openDetachedWindow("inspector")

@@ -12,12 +12,15 @@
 // Action routing through the Tauri event bus is a one-line `switch` —
 // covered by the manual UI exercise per the plan.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DiffFile, DiffLine, Cursor, Interaction } from "./types";
 import { buildInspectorViewModel, buildSidebarViewModel } from "./view";
-import type {
-  InspectorSnapshot,
-  SidebarSnapshot,
+import {
+  dispatchDetachAction,
+  type InspectorAction,
+  type InspectorSnapshot,
+  type SidebarAction,
+  type SidebarSnapshot,
 } from "./detachBridge";
 import type { PromptRunView } from "./components/PromptRunsPanel";
 import type { SymbolIndex } from "./symbols";
@@ -151,6 +154,10 @@ function makeInspectorSnapshot(
     lineHasAiNote: false,
     agentContext: null,
     parentTitle: "feat/example",
+    worktreePath: null,
+    pillMatch: null,
+    pillBusy: false,
+    pillError: null,
   };
 }
 
@@ -178,5 +185,81 @@ describe("detach bridge — inspector snapshot stability", () => {
     const a = makeInspectorSnapshot(null, 0);
     const b = makeInspectorSnapshot(userKey, 0);
     expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
+  });
+});
+
+// ── Action round-trip ────────────────────────────────────────────────────
+
+describe("detach bridge — action round-trip", () => {
+  function routeOne(
+    payload:
+      | { kind: "sidebar"; action: SidebarAction }
+      | { kind: "inspector"; action: InspectorAction },
+  ): { sidebar: SidebarAction[]; inspector: InspectorAction[] } {
+    const sidebarCalls: SidebarAction[] = [];
+    const inspectorCalls: InspectorAction[] = [];
+    dispatchDetachAction(payload, {
+      onSidebar: (a) => sidebarCalls.push(a),
+      onInspector: (a) => inspectorCalls.push(a),
+    });
+    return { sidebar: sidebarCalls, inspector: inspectorCalls };
+  }
+
+  it("routes each sidebar action variant to onSidebar with the original args", () => {
+    const cases: SidebarAction[] = [
+      { type: "pick-file", fileId: "f-a" },
+      { type: "jump-to-first-comment", fileId: "f-b" },
+      { type: "close-run", id: "run-1" },
+      { type: "toggle-wide" },
+    ];
+    for (const action of cases) {
+      const got = routeOne({ kind: "sidebar", action });
+      expect(got.sidebar).toEqual([action]);
+      expect(got.inspector).toEqual([]);
+    }
+  });
+
+  it("routes each inspector action variant to onInspector with the original args", () => {
+    const cursor: Cursor = {
+      changesetId: "cs",
+      fileId: "f-i",
+      hunkId: "cs/src/i.ts#h1",
+      lineIdx: 0,
+    };
+    const selection = { hunkId: "cs/src/i.ts#h1", anchor: 0, head: 2 };
+    const cases: InspectorAction[] = [
+      { type: "jump", cursor },
+      { type: "jump-to-block", cursor, selection },
+      { type: "toggle-ack", hunkId: "h1", lineIdx: 3 },
+      { type: "start-draft", key: "user:h1:0" },
+      { type: "close-draft" },
+      { type: "submit-reply", key: "user:h1:0", body: "yes" },
+      { type: "retry-reply", key: "user:h1:0", replyId: "r1" },
+      { type: "delete-reply", key: "user:h1:0", replyId: "r1" },
+      { type: "prev-comment" },
+      { type: "next-comment" },
+      { type: "pick-session", sessionFilePath: "/x" },
+      { type: "refresh" },
+      {
+        type: "verify-ai-note",
+        recipe: { source: "print(1)", inputs: { x: "1" } },
+      },
+      { type: "pill-click" },
+    ];
+    for (const action of cases) {
+      const got = routeOne({ kind: "inspector", action });
+      expect(got.inspector).toEqual([action]);
+      expect(got.sidebar).toEqual([]);
+    }
+  });
+
+  it("ignores unknown discriminator without throwing", () => {
+    const onSidebar = vi.fn();
+    const onInspector = vi.fn();
+    // @ts-expect-error — exercising the runtime path when a future kind
+    // slips through ahead of TS types being updated.
+    dispatchDetachAction({ kind: "unknown" }, { onSidebar, onInspector });
+    expect(onSidebar).not.toHaveBeenCalled();
+    expect(onInspector).not.toHaveBeenCalled();
   });
 });

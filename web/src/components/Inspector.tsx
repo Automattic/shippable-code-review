@@ -7,8 +7,6 @@ import type {
   Interaction,
   LineSelection,
   PrConversationItem,
-  PrSource,
-  WorktreeSource,
 } from "../types";
 import type { SymbolIndex } from "../symbols";
 import { CodeText } from "./CodeText";
@@ -21,18 +19,8 @@ import { RichText } from "./RichText";
 import { ReplyThread } from "./ReplyThread";
 import { DetachedThreadCard } from "./DetachedThreadCard";
 import { AgentContextSection } from "./AgentContextSection";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { MouseEvent, RefObject } from "react";
-import {
-  loadGithubPr,
-  lookupPrForBranch,
-  GithubFetchError,
-  GH_ERROR_MESSAGES,
-} from "../githubPrClient";
-import {
-  asTokenRejectionHint,
-  type TokenRejectionHint,
-} from "../useGithubPrLoad";
 import { openExternal } from "../openExternal";
 import type { PrMatch } from "../githubPrClient";
 
@@ -144,49 +132,24 @@ interface Props {
    */
   agentContext?: AgentContextProps;
   /**
-   * Worktree provenance for the active ChangeSet. When present, the Inspector
-   * fires a branch-lookup to see if there's a matching open PR and renders
-   * a pill offering to overlay it.
+   * PR-pill state surfaced by the parent. `pillMatch` is the matching open
+   * PR found for the active worktree's branch; the parent's effect handles
+   * the branch lookup and ownership of busy/error so the detached Inspector
+   * window can drive the same pill from a snapshot push.
    */
-  worktreeSource?: WorktreeSource;
-  /**
-   * Whether the active ChangeSet already has an applied PR overlay. When true,
-   * the pill hides itself.
-   */
-  prSource?: PrSource | null;
-  /**
-   * Dispatch handler for applying the PR overlay. Receives the metadata
-   * (prSource, prConversation) and the bucketed PR-sourced replies so the
-   * parent can dispatch MERGE_PR_OVERLAY + MERGE_PR_REPLIES.
-   */
-  onMergePrOverlay?: (
-    changesetId: string,
-    prSource: PrSource,
-    prConversation: PrConversationItem[],
-    prInteractions: Record<string, import("../types").Interaction[]>,
-    prDetached: import("../types").DetachedInteraction[],
-  ) => void;
-  /**
-   * Called when the pill click fails with a GitHub auth error. The parent
-   * opens the token modal for the given host+reason and re-runs the retry
-   * callback after the user supplies a token.
-   */
-  onAuthError?: (
-    host: string,
-    reason: "first-time" | "rejected",
-    retry: () => Promise<void>,
-    hint?: TokenRejectionHint,
-  ) => void;
-  /**
-   * The changeset id of the active worktree-loaded ChangeSet. Used as the
-   * target id for MERGE_PR_OVERLAY dispatch.
-   */
-  changesetId?: string;
+  pillMatch?: PrMatch | null;
+  pillBusy?: boolean;
+  pillError?: string | null;
+  /** Click handler for the PR pill. Hidden when undefined. */
+  onPillClick?: () => void;
   /**
    * Issue-level PR conversation items. Populated when the changeset was loaded
    * from a GitHub PR; absent/empty otherwise.
    */
   prConversation?: PrConversationItem[];
+  /** Worktree path threaded through DetachedThreadCard's "view at" panel.
+   *  Null when the changeset wasn't loaded from a worktree. */
+  worktreePath?: string | null;
   /** Number of comment stops in the changeset; 0 disables the nav buttons. */
   commentCount: number;
   onPrevComment: () => void;
@@ -216,11 +179,11 @@ export function Inspector({
   onVerifyAiNote,
   agentContext,
   prConversation,
-  worktreeSource,
-  prSource,
-  onMergePrOverlay,
-  changesetId,
-  onAuthError,
+  pillMatch = null,
+  pillBusy = false,
+  pillError = null,
+  onPillClick,
+  worktreePath = null,
   commentCount,
   onPrevComment,
   onNextComment,
@@ -258,70 +221,12 @@ export function Inspector({
       ? Object.fromEntries(agentContext.delivered.map((d) => [d.id, d]))
       : undefined;
 
-  // PR pill: look up matching open PR for the worktree branch once on mount.
-  // Hidden when: no worktreeSource, prSource already applied, or no PR found.
-  const [pillMatch, setPillMatch] = useState<PrMatch | null>(null);
-  const [pillBusy, setPillBusy] = useState(false);
-  const [pillError, setPillError] = useState<string | null>(null);
-
-  const worktreePath = worktreeSource?.worktreePath ?? null;
-  useEffect(() => {
-    let cancelled = false;
-    // Clear stale match immediately on path change, then start the new lookup.
-    void (async () => {
-      setPillMatch(null);
-      if (!worktreePath) return;
-      try {
-        const { matched } = await lookupPrForBranch(worktreePath);
-        if (!cancelled) setPillMatch(matched);
-      } catch (err) {
-        // Silently swallow; pill just doesn't appear.
-        console.warn("[Inspector] branch-lookup failed:", err);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [worktreePath]);
-
-
-  async function handlePillClick() {
-    if (!pillMatch || !changesetId || !onMergePrOverlay) return;
-    setPillBusy(true);
-    setPillError(null);
-    try {
-      const result = await loadGithubPr(pillMatch.htmlUrl);
-      setPillBusy(false);
-      onMergePrOverlay(
-        changesetId,
-        result.changeSet.prSource!,
-        result.changeSet.prConversation ?? [],
-        result.prInteractions,
-        result.prDetached,
-      );
-    } catch (err) {
-      setPillBusy(false);
-      if (err instanceof GithubFetchError) {
-        if (err.discriminator === "github_token_required") {
-          onAuthError?.(err.host ?? "github.com", "first-time", () => handlePillClick());
-        } else if (err.discriminator === "github_auth_failed") {
-          onAuthError?.(
-            err.host ?? "github.com",
-            "rejected",
-            () => handlePillClick(),
-            asTokenRejectionHint(err.hint),
-          );
-        } else {
-          setPillError(
-            GH_ERROR_MESSAGES[err.discriminator] ?? "Couldn't load PR overlay.",
-          );
-        }
-      } else {
-        setPillError("Couldn't load PR overlay.");
-      }
-    }
-  }
-
-  // Show the pill when: worktreeSource is set, prSource not yet applied, lookup found a PR.
-  const showPill = worktreeSource != null && !prSource && pillMatch != null;
+  // PR pill state is owned by the parent so the detached Inspector window
+  // can render against the same data the docked one does — see slice (e)
+  // of docs/plans/detached-sidebars.md. The pill renders only when the
+  // parent surfaces a non-null `pillMatch` (worktreeSource and !prSource
+  // gates live with the lookup in the parent).
+  const showPill = pillMatch != null;
 
   return (
     <aside className="inspector" aria-label="inspector">
@@ -406,11 +311,11 @@ export function Inspector({
           <button
             className="inspector__pr-pill-btn"
             disabled={pillBusy}
-            onClick={handlePillClick}
+            onClick={onPillClick}
           >
             {pillBusy
               ? "Loading PR overlay…"
-              : `Matching PR: #${pillMatch!.number} — ${pillMatch!.title}`}
+              : `Matching PR: #${pillMatch.number} — ${pillMatch.title}`}
           </button>
           {pillError && (
             <span className="inspector__pr-pill-err">{pillError}</span>
