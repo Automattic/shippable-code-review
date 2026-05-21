@@ -617,6 +617,13 @@ export function blockCommentKey(hunkId: string, lo: number, hi: number): string 
   return `block:${hunkId}:${lo}-${hi}`;
 }
 
+export function userFileCommentKey(fileId: string, newNo: number): string {
+  return `userFile:${fileId}:${newNo}`;
+}
+export function blockFileCommentKey(fileId: string, lo: number, hi: number): string {
+  return `blockFile:${fileId}:${lo}-${hi}`;
+}
+
 /**
  * Parsed shape of a thread key. `lineIdx` is the anchor line (0 for thread
  * kinds with no line context); block keys also expose lo/hi for the range.
@@ -625,6 +632,8 @@ export type ParsedReplyKey =
   | { kind: "note"; hunkId: string; lineIdx: number }
   | { kind: "user"; hunkId: string; lineIdx: number }
   | { kind: "block"; hunkId: string; lo: number; hi: number; lineIdx: number }
+  | { kind: "userFile"; fileId: string; newNo: number; lineIdx: 0 }
+  | { kind: "blockFile"; fileId: string; lo: number; hi: number; lineIdx: 0 }
   | { kind: "hunkSummary"; hunkId: string; lineIdx: 0 }
   | { kind: "teammate"; hunkId: string; lineIdx: 0 };
 
@@ -664,6 +673,28 @@ export function parseReplyKey(key: string): ParsedReplyKey | null {
       const hi = parseInt(range.slice(dash + 1), 10);
       if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
       return { kind: "block", hunkId, lo, hi, lineIdx: lo };
+    }
+    case "userFile": {
+      const last = rest.lastIndexOf(":");
+      if (last < 0) return null;
+      const fileId = rest.slice(0, last);
+      if (fileId.length === 0) return null;
+      const newNo = parseInt(rest.slice(last + 1), 10);
+      if (!Number.isFinite(newNo)) return null;
+      return { kind: "userFile", fileId, newNo, lineIdx: 0 };
+    }
+    case "blockFile": {
+      const last = rest.lastIndexOf(":");
+      if (last < 0) return null;
+      const fileId = rest.slice(0, last);
+      if (fileId.length === 0) return null;
+      const range = rest.slice(last + 1);
+      const dash = range.indexOf("-");
+      if (dash < 0) return null;
+      const lo = parseInt(range.slice(0, dash), 10);
+      const hi = parseInt(range.slice(dash + 1), 10);
+      if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+      return { kind: "blockFile", fileId, lo, hi, lineIdx: 0 };
     }
     case "hunkSummary":
       if (rest.length === 0) return null;
