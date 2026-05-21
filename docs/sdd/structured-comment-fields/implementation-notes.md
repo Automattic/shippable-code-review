@@ -53,11 +53,15 @@ the spec's open questions.
   none of the structured fields rendered. `AgentRow` gained an `asItem` prop so
   a head renders as a `<div>` and a nested reply as a `<li>`; the head branch
   now dispatches agent-authored heads to `AgentRow`.
-- **`suggestedFix` renders as regular text, not a code block**: `spec.md` and
-  `requirements.md` item 6 specified a code block. On review it reads better as
-  prose — `suggestedFix` now renders via the `RichText` renderer in a normal
-  `.agent-reply__detail-body`, the same as `rationale`. `RichText` still
-  formats inline code spans, so literal code in the fix stays legible.
+- **`suggestedFix` renders as prose, not a code block**: `spec.md` and
+  `requirements.md` item 6 specified a code block. In practice agents often
+  leave a prose-only `suggestedFix`, which looked wrong wrapped in a monospace
+  container. It now renders via the `RichText` renderer in a normal
+  `.agent-reply__detail-body`, the same as `rationale` — `RichText` still turns
+  `` `backtick` `` spans into `<code>` and triple-backtick fences into code
+  blocks (language-tagged fences are syntax-highlighted via Shiki; untagged
+  ones render plain), so code stays legible. The `suggestedFix` schema
+  description tells the agent to backtick its code and language-tag fences.
 
 ## Verification
 

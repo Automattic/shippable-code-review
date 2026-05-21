@@ -27,7 +27,7 @@ const WATCH_TOOL_DESCRIPTION =
 const POST_COMMENT_DESCRIPTION =
   "Post a review interaction back to Shippable. Two modes, distinguished by which fields you supply:\n\n" +
   "• Reply mode — set `parentInteractionId` (the id from a `<interaction>` element returned by `shippable_check_review_comments`) and `intent` to 'accept' | 'reject' | 'ack'. Use after addressing one of the reviewer's interactions.\n\n" +
-  "• Top-level mode — set `target` ('line' | 'block'), `file` (repo-relative path), `lines` (e.g. '118' or '72-79'), and `intent` to 'comment' | 'question' | 'request' | 'blocker'. Use when you noticed something on your own and want to start a fresh thread on a particular line or range. A top-level comment MUST include `rationale` (why it matters); it may also include `suggestedFix` (a concrete code/text fix) and `confidence` ('low' | 'medium' | 'high'). These three fields apply to top-level mode only and are ignored in reply mode.\n\n" +
+  "• Top-level mode — set `target` ('line' | 'block'), `file` (repo-relative path), `lines` (e.g. '118' or '72-79'), and `intent` to 'comment' | 'question' | 'request' | 'blocker'. Use when you noticed something on your own and want to start a fresh thread on a particular line or range. A top-level comment MUST include `rationale` (why it matters); it may also include `suggestedFix` (a concrete fix — backtick any code) and `confidence` ('low' | 'medium' | 'high'). These three fields apply to top-level mode only and are ignored in reply mode.\n\n" +
   "Put your prose in `replyText`. Also call when the user asks you to 'report back to shippable' or similar.";
 
 async function main(): Promise<void> {
@@ -146,7 +146,7 @@ async function main(): Promise<void> {
           .string()
           .optional()
           .describe(
-            "Top-level mode only, optional: a concrete fix as free-form code or text the reader can apply by hand. Ignored in reply mode.",
+            "Top-level mode only, optional: a concrete fix the reader can apply by hand. Free-form text — wrap inline code in `backticks` and multi-line code in triple-backtick ``` fences ```; tag the fence with a language (e.g. ```ts) for syntax highlighting. Text outside backticks renders as plain prose. Ignored in reply mode.",
           ),
         confidence: z
           .enum(["low", "medium", "high"])
