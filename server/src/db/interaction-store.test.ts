@@ -5,7 +5,7 @@ import {
   deleteInteraction,
   enqueueToWorktree,
   getInteractionsByChangeset,
-  isDeliveredInteractionId,
+  interactionExistsForWorktree,
   listAgentReplies,
   listByQueueStatus,
   postAgentInteraction,
@@ -418,23 +418,46 @@ describe("listAgentReplies", () => {
   });
 });
 
-describe("isDeliveredInteractionId", () => {
-  it("returns true after the interaction is delivered via pullAndAck", () => {
+describe("interactionExistsForWorktree", () => {
+  it("returns true for a delivered interaction", () => {
     upsertInteraction(makeIx({ id: "chk-1", changesetId: "cs-chk" }));
     enqueueToWorktree("chk-1", "/wt/mu");
     pullAndAck("/wt/mu");
 
-    expect(isDeliveredInteractionId("/wt/mu", "chk-1")).toBe(true);
+    expect(interactionExistsForWorktree("/wt/mu", "chk-1")).toBe(true);
   });
 
-  it("returns false for a pending (not yet delivered) interaction", () => {
+  it("returns true for a pending (not yet delivered) interaction", () => {
     upsertInteraction(makeIx({ id: "chk-2", changesetId: "cs-chk2" }));
     enqueueToWorktree("chk-2", "/wt/nu");
 
-    expect(isDeliveredInteractionId("/wt/nu", "chk-2")).toBe(false);
+    expect(interactionExistsForWorktree("/wt/nu", "chk-2")).toBe(true);
+  });
+
+  it("returns true for an agent-authored interaction", () => {
+    postAgentInteraction({
+      id: "chk-agent",
+      worktreePath: "/wt/rho",
+      threadKey: null,
+      target: "line",
+      intent: "comment",
+      author: "agent",
+      body: "agent finding",
+      createdAt: new Date().toISOString(),
+      payload: { file: "f.ts", lines: "1" },
+    });
+
+    expect(interactionExistsForWorktree("/wt/rho", "chk-agent")).toBe(true);
   });
 
   it("returns false for an unknown id", () => {
-    expect(isDeliveredInteractionId("/wt/xi", "no-such")).toBe(false);
+    expect(interactionExistsForWorktree("/wt/xi", "no-such")).toBe(false);
+  });
+
+  it("returns false for an interaction belonging to a different worktree", () => {
+    upsertInteraction(makeIx({ id: "chk-3", changesetId: "cs-chk3" }));
+    enqueueToWorktree("chk-3", "/wt/sigma");
+
+    expect(interactionExistsForWorktree("/wt/other", "chk-3")).toBe(false);
   });
 });

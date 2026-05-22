@@ -1244,16 +1244,16 @@ async function handleAgentPostReply(
       res.end(JSON.stringify({ error: "reply intent must be ack | accept | reject" }));
       return;
     }
-    // Reject replies whose parentId never appeared in this worktree's
-    // delivered list — an agent posting against a fabricated id is either
-    // confused or talking past us; either way it would silently create an
-    // orphan that the UI merge step drops.
-    if (!agentQueue.isDeliveredInteractionId(wtPath, parentId)) {
+    // Reject replies whose parentId isn't a real interaction for this
+    // worktree — a fabricated id would silently create an orphan the UI
+    // merge step drops. A reviewer comment (any queue state) or an
+    // agent-authored comment are all valid targets.
+    if (!agentQueue.interactionExistsForWorktree(wtPath, parentId)) {
       writeCorsHeaders(res, origin);
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
-          error: `parentId ${JSON.stringify(parentId)} is not a delivered interaction for this worktree`,
+          error: `parentId ${JSON.stringify(parentId)} is not an interaction for this worktree`,
         }),
       );
       return;

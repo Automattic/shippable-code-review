@@ -5,7 +5,7 @@ import {
   getByIdsForWorktree as storeGetByIds,
   postAgentInteraction,
   listAgentReplies,
-  isDeliveredInteractionId as storeIsDelivered,
+  interactionExistsForWorktree as storeInteractionExists,
   type AgentQueueStatus,
   type StoredInteraction,
 } from "./db/interaction-store.ts";
@@ -246,9 +246,9 @@ export function withReferencedParents(
 }
 
 /**
- * Post a reply-shaped agent entry (responds to a delivered reviewer
- * interaction). Caller already validated the parentId exists in the
- * delivered set.
+ * Post a reply-shaped agent entry — a response to another interaction
+ * (reviewer comment or agent comment). Caller already validated that the
+ * parentId is a real interaction for the worktree.
  */
 export function postReply(
   worktreePath: string,
@@ -386,15 +386,15 @@ export function listReplies(worktreePath: string): AgentReplyWireItem[] {
 }
 
 /**
- * Returns true when `id` was previously delivered for this worktree.
- * Used by the reply endpoint to defensively reject replies anchored to ids
- * the agent never actually saw.
+ * Returns true when `id` is a real interaction for this worktree. Used by the
+ * reply endpoint to reject replies anchored to ids that don't exist for the
+ * worktree, while allowing replies to agent-authored comments.
  */
-export function isDeliveredInteractionId(
+export function interactionExistsForWorktree(
   worktreePath: string,
   id: string,
 ): boolean {
-  return storeIsDelivered(worktreePath, id);
+  return storeInteractionExists(worktreePath, id);
 }
 
 /** Test-only: reset the backing database and the monotonic clock. */

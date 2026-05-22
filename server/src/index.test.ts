@@ -546,7 +546,7 @@ describe("POST /api/agent/replies", () => {
     expect(r.status).toBe(400);
   });
 
-  it("rejects an unknown parentId (not in delivered set for this worktree)", async () => {
+  it("rejects an unknown parentId (no interaction with that id for this worktree)", async () => {
     const r = await postJson(`${baseUrl}/api/agent/replies`, {
       worktreePath,
       parentId: "no-such-id",
@@ -554,13 +554,37 @@ describe("POST /api/agent/replies", () => {
       intent: "ack",
     });
     expect(r.status).toBe(400);
-    expect(String(r.body.error)).toMatch(/not a delivered interaction/);
+    expect(String(r.body.error)).toMatch(/not an interaction for this worktree/);
+  });
+
+  it("lets an agent reply to its own top-level comment", async () => {
+    const top = await postJson(`${baseUrl}/api/agent/replies`, {
+      worktreePath,
+      file: "src/api.ts",
+      lines: "5-9",
+      target: "block",
+      body: "This handler swallows errors.",
+      intent: "blocker",
+    });
+    expect(top.status).toBe(200);
+    const agentTopId = top.body.id as string;
+
+    // Agent-authored rows never enter the delivered queue lifecycle, but they
+    // are real interactions for the worktree — a valid reply target.
+    const reply = await postJson(`${baseUrl}/api/agent/replies`, {
+      worktreePath,
+      parentId: agentTopId,
+      body: "Fixed — added a rethrow.",
+      intent: "accept",
+    });
+    expect(reply.status).toBe(200);
+    expect(typeof reply.body.id).toBe("string");
   });
 
   it("returns { id } on success and persists via GET", async () => {
-    // Seed + pull to mint a real delivered parentId — the post-reply
-    // endpoint validates that parentId belongs to the worktree's
-    // delivered set (defensive per spec § Data Flow).
+    // Seed a real reviewer interaction to reply against — the post-reply
+    // endpoint validates that parentId is a real interaction for the
+    // worktree (defensive per spec § Data Flow).
     const realCommentId = await seedPending(worktreePath, { body: "hi" });
     await postJson(`${baseUrl}/api/agent/interactions`, { worktreePath, status: "unread" });
 

@@ -293,18 +293,18 @@ export function listAgentReplies(worktreePath: string): StoredInteraction[] {
 }
 
 /**
- * Returns true if the interaction was delivered to this worktree.
- * Used by the reply endpoint to reject replies anchored to ids the agent
- * never received.
+ * Returns true if `id` is a real interaction belonging to this worktree —
+ * a reviewer comment in any queue state, or an agent-authored row. The reply
+ * endpoint uses it to reject replies anchored to ids that don't exist for the
+ * worktree, while still letting an agent reply to its own (or another
+ * agent's) comment, which never enters the delivered queue lifecycle.
  */
-export function isDeliveredInteractionId(
+export function interactionExistsForWorktree(
   worktreePath: string,
   id: string,
 ): boolean {
   const row = getDb()
-    .prepare(
-      `SELECT 1 FROM interactions WHERE worktree_path = ? AND id = ? AND agent_queue_status = '${DELIVERED}'`,
-    )
+    .prepare("SELECT 1 FROM interactions WHERE worktree_path = ? AND id = ?")
     .get(worktreePath, id);
   return row !== undefined;
 }

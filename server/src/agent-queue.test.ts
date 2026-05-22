@@ -14,7 +14,7 @@ import {
   listReplies,
   formatPayload,
   resetForTests,
-  isDeliveredInteractionId,
+  interactionExistsForWorktree,
   isValidInteractionPair,
   markWatchPoll,
   isWatching,
@@ -195,12 +195,13 @@ describe("StoredInteraction → wire projection", () => {
 });
 
 describe("delivered", () => {
-  it("isDeliveredInteractionId is true only after a pull", () => {
+  it("interactionExistsForWorktree is true once an interaction exists for the worktree", () => {
     const id = seedEnqueued(WT);
-    expect(isDeliveredInteractionId(WT, id)).toBe(false);
+    // True as soon as the row exists — independent of the pull lifecycle.
+    expect(interactionExistsForWorktree(WT, id)).toBe(true);
     pullAndAck(WT);
-    expect(isDeliveredInteractionId(WT, id)).toBe(true);
-    expect(isDeliveredInteractionId(WT, "no-such-id")).toBe(false);
+    expect(interactionExistsForWorktree(WT, id)).toBe(true);
+    expect(interactionExistsForWorktree(WT, "no-such-id")).toBe(false);
   });
 
   it("listDelivered returns [] for an unknown worktree", () => {
