@@ -1,36 +1,56 @@
 # Comprehension quiz
 
-When the reviewer asks for an AI plan, the server also generates a small set of comprehension questions about the diff. The reviewer answers them as they sign off files; their answer sits next to Claude's expected answer for self-evaluation. The intent is to give a reviewer a low-friction "do I actually understand this?" surface — not to grade them, not to score, not to gate sign-off.
+When the reviewer asks for an AI plan, the server also generates a set of comprehension questions about the diff. The reviewer answers them as they sign off files and as they sign off the changeset; their answer sits next to Claude's expected answer for self-evaluation. The intent is to give a reviewer a low-friction "do I actually understand this?" surface — not to grade them, not to score, not to gate sign-off.
+
+> This plan replaces the first cut (dice + cooldown). Questions are now surfaced **deterministically on sign-off events**, the question count is **sized to the diff (2–10)**, and the cap is **(files in changeset + 1)**. The history doc lives in `git log` under the `feat/quiz-no-dice` branch.
 
 ## Goal
 
 What this enables:
 
-- A reviewer who clicked "Send to Claude" gets a handful of questions for the changeset, ranging across whole-changeset, per-file, per-hunk, and per-symbol scope.
-- On Shift+M (file mark), a 1/10 dice roll surfaces one randomly-picked question targeting that file (or any hunk/symbol in it). A cooldown suppresses immediate repeat prompts.
-- When the future top-level sign-off feature lands, marking a whole changeset always surfaces one changeset-level question.
+- A reviewer who clicked "Send to Claude" gets a set of questions sized to the diff (2–10), distributed across changeset, per-file, per-hunk, and per-symbol scope.
+- On **Shift+M (file mark)**, the first unanswered question targeting that file (file/hunk-in-file/symbol-defined-in-file) surfaces. **One** per file mark — any extras for the same file are held.
+- On **Shift+S (changeset sign-off)**, every remaining unanswered question surfaces sequentially: the changeset-level question first, then all held-over file/hunk/symbol questions.
 - The reviewer types an answer, submits, and sees Claude's expected answer beside their own. Three self-eval buttons ("Got it", "Claude's off", "Missed it") record how it went.
 - Per-changeset progress (`2 / 6 answered`) persists across reloads.
+- Inside a Shift+S sequence, the panel shows "Question N of M" and auto-advances on Submit / Skip / dismiss.
 
 What this does **not** try to do:
 
 - Grade the reviewer. There is no verdict API call. Match / mismatch is the reviewer's call after they read both answers.
-- Gate sign-off. Skipping a quiz still marks the file reviewed. The mark already landed when the dice was rolled.
+- Gate sign-off. Skipping a quiz during the Shift+S sequence still completes the sign-off. The sign-off lands when Shift+S is hit; the quiz queue is a pass-through, not a gate.
 - Q3 ("write a test for this") — deferred to its own design pass because the Code Runner integration is qualitatively different from the prose comparison of Q1/Q2. The data shape leaves `type: "q3"` reserved from day one so the server can start emitting them without a schema bump.
 
 ## Framing
 
 The reveal screen reads "check your understanding," not "you got it right / wrong." When the reviewer's answer diverges from Claude's, the prompt is *"here's what Claude thinks — is it right?"* — not *"you missed this."* Claude does not know everything; the feature is about the reviewer building their own confidence in their reading of the diff, not about Claude as authority.
 
+The original dice mechanic was meant to keep the reviewer honest (you can't dodge a random check). The deterministic replacement preserves that property by binding questions to the sign-off gestures the reviewer is already performing — Shift+M to mark a file, Shift+S to mark the changeset. Skipping a quiz is allowed but the prompt appears unavoidably.
+
 ## Three question types
 
-| Type | What it asks | Target kinds (this cut) |
+| Type | What it asks | Target kinds |
 |---|---|---|
 | Q1 | "What does this do?" — short prose | `changeset`, `file` |
 | Q2 | "Will this break if we send it X?" — prose with a specific input | `hunk`, `symbol` |
 | Q3 | "Write a test for this" — code, runs in the Code Runner | *(deferred)* |
 
 The model is asked to bias output toward Q1 at the changeset and file level, and Q2 at the hunk/symbol level — Q2 needs a concrete function or hunk to be answerable from the diff alone.
+
+## Count rubric
+
+The server prompt asks for **2 to 10 questions**, capped at **(files in changeset + 1)**. The model picks the count using a cognitive-load heuristic — not a LOC table.
+
+**Bias the count up** when the diff introduces new public APIs, new abstractions, cross-module flow, or touches risky surfaces (auth, persistence, IPC, parsing user input, schema changes).
+
+**Bias the count down** for repetitive or mechanical diffs: rename swept across many call sites, config bumps, lockfile-only changes, snapshot-test regeneration, formatter sweeps.
+
+**LOC is a tiebreaker only.** A 50-LOC auth change can warrant 5 questions; a 500-LOC sweep-rename can warrant 2.
+
+**Distribution within the count:**
+- Exactly **one changeset-level Q1** (the closer at sign-off).
+- The rest as file-level Q1s — one per file — plus 0–2 hunk/symbol Q2s for the richest files.
+- Floor of 2 guarantees one of each kind, so a quiz lands regardless of which sign-off gesture the reviewer uses.
 
 ## Data model
 
@@ -56,7 +76,7 @@ type Question = {
 
 ### Persisted reviewer state
 
-Lives on `ReviewState`. Schema bumps `v: 5 → v: 6`. No migration; per the existing exact-version load policy, a `v: 5` snapshot boots empty.
+Lives on `ReviewState`. Schema bumps `v: 6 → v: 7`. No migration; per the existing exact-version load policy, a `v: 6` snapshot boots empty.
 
 ```ts
 type QuizState = {
@@ -66,216 +86,195 @@ type QuizState = {
     submittedAt: number;
     selfEval: "got_it" | "claude_wrong" | "missed" | null;
   }>;
-  active: { questionId: string } | null;   // currently surfaced quiz
-  lastQuizAt: number | null;
-  asked: string[];                          // question ids already surfaced
+  active: {
+    questionId: string;
+    /** "single" — fired by a file mark; dismiss clears active.
+     *  "sequence" — fired by Shift+S; dismiss advances to the next
+     *  unanswered question if any. */
+    mode: "single" | "sequence";
+  } | null;
+  asked: string[];     // question ids already surfaced
 };
 ```
 
-Design notes on the shape:
+Shape notes:
 
-- **Keyed by `changesetId`, not by review token.** Questions reference files/hunks/symbols by id. When the diff content shifts (force-push, dirty-tree edit), some refs may go stale; on hydration the evidence validator drops stale questions. Re-fetch is one "Send to Claude" click away. The same trade-off applies to the existing plan claims.
-- **`asked` is a flat id list, not partitioned per type.** A question seen once is not surfaced again, regardless of type or trigger.
-- **`selfEval` can be `null` after submit.** The reveal captures the answer immediately; picking a self-eval bucket is a separate action and may never happen. The answer record survives either way.
-
-### Cooldown
-
-```ts
-const COOLDOWN_MS = 10 * 60 * 1000;  // 10 minutes
-```
-
-`Date.now() - lastQuizAt < COOLDOWN_MS` blocks the trigger. Skipping a quiz still updates `lastQuizAt` — a skip is "I just saw a quiz prompt," and stacking another immediately is exactly the pile-up we're avoiding. `reset review` clears `lastQuizAt` along with the rest of `ReviewState`.
+- **No `lastQuizAt`.** Cooldown is gone; the field would always be dead weight.
+- **`mode` on `active`.** Two surfacing rules share one panel; the mode tells the reducer how to behave on Submit/Skip/SelfEval-dismiss. It's load-bearing for the auto-advance.
+- **Keyed by `changesetId`.** Same trade-off as before: stale targets get dropped by the evidence validator on hydration; re-fetch via "Send to Claude".
+- **`asked` semantics unchanged.** A question seen once is not surfaced again.
+- **`selfEval` can stay `null`.** Self-eval is a separate action; the answer survives without it.
 
 ## Server changes — `server/src/plan.ts`
 
-Extend the existing `PlanResponseSchema`:
+The schema is unchanged. The system prompt's "## Comprehension questions" section rewrites:
 
-```ts
-const QuestionTargetSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("changeset") }),
-  z.object({ kind: z.literal("file"), path: z.string() }),
-  z.object({ kind: z.literal("hunk"), hunkId: z.string() }),
-  z.object({ kind: z.literal("symbol"), name: z.string(), definedIn: z.string() }),
-]);
+- Band: **2 to 10** (was 3 to 8).
+- Hard cap: **total ≤ (files in changeset + 1)**, instructed in prose.
+- Cognitive-load rubric in prose (per "Count rubric" above).
+- Distribution: exactly one changeset Q1, the rest file-level Q1s and 0–2 hunk/symbol Q2s.
+- Negative list unchanged: no out-of-diff dependencies, no stylistic prompts, nothing answerable from the file list alone.
 
-const QuestionSchema = z.object({
-  id: z.string(),
-  type: z.enum(["q1", "q2"]),     // q3 reserved on the web side
-  target: QuestionTargetSchema,
-  prompt: z.string(),
-  claudeAnswer: z.string(),
-});
-
-const PlanResponseSchema = z.object({
-  intent: z.array(ClaimSchema),
-  entryPoints: z.array(EntryPointSchema),
-  questions: z.array(QuestionSchema),  // NEW
-});
-```
-
-`SYSTEM_PROMPT` grows a "## Comprehension questions" section:
-
-- Asks for 3–8 questions distributed across the changeset.
-- Biases distribution: roughly 1 changeset-level Q1, the rest split between file-level Q1 and hunk/symbol-level Q2.
-- Requires every `target` to resolve in the same `StructureMap` that claim evidence resolves against.
-- States the framing — "the reviewer will compare their answer to yours, then self-evaluate" — so the model writes `claudeAnswer` as a reviewer would, not as documentation.
-- For Q2: requires enough specifics (input value, expected behavior) that "would this break?" is answerable from the diff alone.
-
-`assemblePlan` gets a third validator pass mirroring the existing claim/entry-point filter: drop any question whose `target` doesn't resolve. If that leaves zero questions, the plan still returns — questions are best-effort, not a failure mode for the plan call.
+The plan call's `assemblePlan` validator stays as-is — it already drops questions whose `target` doesn't resolve in the StructureMap.
 
 ### Cache impact
 
-The system prompt grows by ~500 tokens. Anthropic's ephemeral cache prefix shifts, so the first request after deploy is a full miss; subsequent calls repopulate. Per-call token cost rises by ~700 tokens (system + output). Negligible against the diff payload.
+The system prompt grows by ~150 tokens net (new rubric prose, no schema change). One-time cache prefix shift; negligible going forward.
 
 ## Web flow
 
 ### Generation
 
-`usePlan.ts` keeps owning the `/api/plan` lifecycle. The result interface grows:
-
-```ts
-export interface UsePlanResult {
-  plan: ReviewPlan;
-  questions: Question[];          // empty when status is "idle" or "fallback"
-  status: PlanStatus;
-  // ...
-}
-```
-
-When the AI plan resolves, the hook also dispatches `STORE_QUESTIONS` so questions outlive the hook (which resets on changeset switch).
+`usePlan` continues to dispatch `STORE_QUESTIONS` on resolve. No change.
 
 ### Reducer actions
 
-New actions in `web/src/state.ts`:
+`MAYBE_TRIGGER_QUIZ` is **renamed and reshaped** to `TRIGGER_QUIZ_FOR_FILE`. It no longer takes `now` or `roll`:
 
 ```ts
-| { type: "STORE_QUESTIONS"; changesetId: string; questions: Question[] }
-| { type: "MAYBE_TRIGGER_QUIZ"; changesetId: string; fileId: string;
-    now: number; roll: number }
-| { type: "DISMISS_QUIZ"; now: number }
+| { type: "TRIGGER_QUIZ_FOR_FILE"; changesetId: string; fileId: string }
+| { type: "TRIGGER_QUIZ_FOR_CHANGESET"; changesetId: string }
+| { type: "DISMISS_QUIZ" }
 | { type: "SUBMIT_QUIZ_ANSWER"; questionId: string; answer: string; now: number }
-| { type: "SET_QUIZ_SELF_EVAL"; questionId: string;
-    selfEval: "got_it" | "claude_wrong" | "missed" }
+| { type: "SET_QUIZ_SELF_EVAL"; questionId: string; selfEval: QuizSelfEval }
+| { type: "CLEAR_QUIZ_ACTIVE" }
 ```
 
-The reducer stays pure: `now` and `roll` are passed in by the dispatcher, not read inside the reducer.
+`DISMISS_QUIZ` drops `now` — no `lastQuizAt` to update.
 
-### Trigger pipeline
+The reducer stays pure: clock is supplied to `SUBMIT_QUIZ_ANSWER` only.
 
-```
-TOGGLE_FILE_REVIEWED (existing) → dispatcher also fires MAYBE_TRIGGER_QUIZ
-                                  with Date.now() and Math.random()
-                                  └─ no questions for this changeset → no-op
-                                     within cooldown → no-op
-                                     eligible = questions where
-                                       target.kind === "file" && path === this
-                                       || target.kind === "hunk" && hunkId in this file
-                                       || target.kind === "symbol" && definedIn === this
-                                     minus questions in `asked`
-                                     eligible empty → no-op
-                                     roll >= 0.1 → no-op (dice miss)
-                                     else: set state.quiz.active
-```
+### Surfacing rules
 
-The dispatcher (a thin wrapper around `dispatch` invoked from the keyboard handler and command palette) reads the clock and the PRNG. Tests inject both.
+**`TRIGGER_QUIZ_FOR_FILE` (Shift+M off → on, file f):**
+- If `active` set: no-op (one at a time).
+- If no questions for the changeset: no-op.
+- Pick the first unanswered question whose target is in f (file f, hunk in f, or symbol defined in f), excluding `asked`. If none, no-op.
+- Set `active = { questionId, mode: "single" }`.
 
-Off-transition (un-signoff) does **not** trigger. Changeset-target questions are not eligible on file-mark — they wait for the changeset-mark trigger.
+**`TRIGGER_QUIZ_FOR_CHANGESET` (Shift+S off → on):**
+- If `active` set: no-op.
+- Pick the first unanswered question, prioritizing changeset-level targets then file/hunk/symbol. Excludes `asked`. If none, no-op.
+- Set `active = { questionId, mode: "sequence" }`.
 
-`asked` is updated on Submit and on Dismiss (Skip / Esc). It is **not** updated when `active` clears for other reasons — e.g. switching changesets mid-quiz — so the question stays eligible if the reviewer returns.
+**Dismiss / Skip / SelfEval-then-close in `mode: "single"`:** clear `active`.
+
+**Dismiss / Skip / SelfEval-then-close in `mode: "sequence"`:** find the next unanswered question (same priority as above); if found, set `active = { questionId, mode: "sequence" }`; else clear `active`.
+
+Off-transition (un-signoff) does **not** trigger.
+
+`asked` is updated on Submit and on Dismiss/Skip, just as before.
 
 ### Submit / reveal
 
-1. Reviewer types `answer`, hits Submit → `SUBMIT_QUIZ_ANSWER` stores it, updates `lastQuizAt`, adds to `asked`, leaves `active` set (reveal state).
+1. Reviewer types `answer`, hits Submit → `SUBMIT_QUIZ_ANSWER` stores it, adds to `asked`, leaves `active` set with the **same mode**.
 2. Claude's answer reveals beside the reviewer's.
 3. Reviewer picks "Got it", "Claude's off", or "Missed it" → `SET_QUIZ_SELF_EVAL` records the bucket. The bucket can stay `null` if the reviewer never picks.
-4. A subsequent `DISMISS_QUIZ` (or the next quiz triggering) clears `active`.
+4. A `DISMISS_QUIZ` (Skip / Esc / panel close) either clears `active` (single mode) or advances to the next (sequence mode).
 
 Submit is disabled until the textarea has at least one non-whitespace character.
 
-### Changeset-mark trigger (deferred until top-level sign-off lands)
+### Dispatcher wiring
 
-When the top-level changeset sign-off feature lands, it dispatches `MAYBE_TRIGGER_QUIZ` filtered to `target.kind === "changeset"` with no dice roll — changeset-mark is a stronger gesture than file-mark, and there's only one such event per changeset visit. Same reducer, same panel. This plan reserves the data shape but does not implement the trigger.
+`dispatchToggleFileReviewedWithQuiz` is renamed to `dispatchToggleFileReviewed` and simplified:
+
+```ts
+function dispatchToggleFileReviewed(
+  dispatch: Dispatch<Action>,
+  changesetId: string,
+  fileId: string,
+  wasReviewed: boolean,
+) {
+  dispatch({ type: "TOGGLE_FILE_REVIEWED", fileId });
+  if (wasReviewed) return; // only on off → on
+  dispatch({ type: "TRIGGER_QUIZ_FOR_FILE", changesetId, fileId });
+}
+```
+
+The changeset sign-off path adds a peer dispatcher that fires after the existing `TOGGLE_CHANGESET_REVIEWED`:
+
+```ts
+function dispatchToggleChangesetReviewedWithQuiz(
+  dispatch: Dispatch<Action>,
+  changesetId: string,
+  wasReviewed: boolean,
+) {
+  dispatch({ type: "TOGGLE_CHANGESET_REVIEWED", changesetId });
+  if (wasReviewed) return; // only on off → on
+  dispatch({ type: "TRIGGER_QUIZ_FOR_CHANGESET", changesetId });
+}
+```
+
+The PRNG seam (`__shippableQuizRng`) and `QUIZ_DICE_THRESHOLD` / `QUIZ_COOLDOWN_MS` constants are removed.
 
 ## UI
 
-The quiz panel slots into the left `Sidebar` (`web/src/components/Sidebar.tsx`) as a new `<section className="panel">` at the **top**, above `PromptRunsPanel`. The existing stack pattern (panel → panel) carries over.
+QuizPanel keeps the expand-to-list affordance (merged in `feat/quiz-panel-history`):
+- Clickable header with chevron and `N / M`.
+- Inline list of answered + unanswered rows; click an answered row to re-open its reveal.
+- Unanswered rows show only the target label (no prompt — no spoilers).
 
-**Resting state** (questions exist, no active quiz): a compact section with header "Comprehension" and a counter like `2 / 6 answered`. Body collapsed.
+Two additions:
 
-**Active state** (a quiz just triggered): the section expands in place. Target chip ("About: src/utils/storage.ts" / "About: this changeset"), the prompt, a multiline textarea, Submit and Skip buttons. No overlay, no layout shift outside the sidebar.
-
-**Reveal state** (after Submit): target chip, prompt, reviewer's answer in a quote block, Claude's answer in a second quote block, then the three self-eval buttons.
-
-**Sidebar hidden when a quiz triggers:** auto-show the sidebar (`setShowSidebar(true)`) on first quiz of the session. Doing it every time would override the reviewer's preference; once per session is enough of a nudge.
-
-**One at a time:** if a quiz is already active and another trigger fires, the second is dropped. The cooldown should make this rare; the safety check is in the reducer.
-
-**Esc dismisses** (fires `DISMISS_QUIZ`). No other quiz-specific shortcuts.
+- **Sequence indicator.** When `active.mode === "sequence"`, render "Question N of M" inside the panel body, computed from `asked ∪ {active.questionId}` over the total question list for the changeset. Disappears outside a sequence.
+- **Auto-advance.** Submit → reveal → self-eval → Esc (or Skip) inside a sequence dispatches `DISMISS_QUIZ` which advances; outside a sequence, dismiss just closes. No UI change in the panel for this — the reducer does the work.
 
 ## Error handling
 
-- **Plan call fails entirely** → `usePlan` lands in `status: "fallback"`. No questions stored. Quiz panel renders nothing. Retrying "Send to Claude" can populate questions on success.
-- **Plan succeeds, `questions` empty or all invalidated** → no panel. Same posture as a plan with zero entry points.
-- **Some questions invalidate, others survive** → keep the survivors. Same posture as the existing claim/entry-point filter.
-- **localStorage full or unavailable** → existing persist failure path. No quiz-specific handling.
-- **Trigger fires before `STORE_QUESTIONS` lands** → reducer exits before the dice roll. Silent no-op.
-- **Reviewer switches changesets mid-quiz** → `active` clears with the rest of the per-changeset transient state. Draft answer is lost. Not in scope to autosave.
-- **`v: 6` snapshot present** → load. Anything else (`v: 5`, missing, corrupt) → boot empty (existing exact-version policy).
-
-## Privacy and cost
-
-Already covered by the plan opt-in. "Send to Claude" is the consent moment; questions ride along on that same trip. No additional opt-in, no additional disclosure surface. The feature doc (`docs/features/comprehension-quiz.md`, to be written) calls this out.
+- **Plan call fails entirely** → no questions stored. Quiz panel renders nothing. Same as before.
+- **Plan succeeds, `questions` empty or all invalidated** → no panel. Same as before.
+- **`TRIGGER_QUIZ_FOR_FILE` fires for a file with no eligible Q** → silent no-op.
+- **`TRIGGER_QUIZ_FOR_CHANGESET` fires with everything answered** → silent no-op (Shift+S still completes its sign-off).
+- **Reviewer Esc-dismisses mid-sequence** → `DISMISS_QUIZ` advances to next. If the reviewer wants out of the sequence entirely, repeat Esc until exhausted, or unmark the changeset. (The latter is *not* a no-op for `reviewedChangesets` but doesn't clear `asked`.)
+- **Reviewer switches changesets mid-quiz** → `active` clears with the rest of the per-changeset transient state. Draft answer is lost. Same as before.
+- **`v: 7` snapshot present** → load. Anything else (`v: 6`, `v: 5`, missing, corrupt) → boot empty.
 
 ## Testing
 
 Per `docs/plans/test-strategy.md`: real reducer, real persist, no mocks of the system under test.
 
 **Reducer (unit, vitest):**
+- `TRIGGER_QUIZ_FOR_FILE` no-ops with no questions / no eligible / active already set.
+- `TRIGGER_QUIZ_FOR_FILE` sets `active = { questionId, mode: "single" }` to the head of the eligible queue.
+- `TRIGGER_QUIZ_FOR_FILE` after one file mark surfaces only the head — a second eligible Q for the same file stays unsurfaced.
+- `TRIGGER_QUIZ_FOR_CHANGESET` no-ops with everything answered or active already set.
+- `TRIGGER_QUIZ_FOR_CHANGESET` prioritizes changeset-level Q, then falls back to held-over file/hunk/symbol Qs.
+- `DISMISS_QUIZ` in `mode: "single"` clears `active`.
+- `DISMISS_QUIZ` in `mode: "sequence"` with more unanswered → advances; with none → clears.
+- `SUBMIT_QUIZ_ANSWER` → `SET_QUIZ_SELF_EVAL` → `DISMISS_QUIZ` round-trip in both modes.
 
-- `STORE_QUESTIONS` lands questions on the correct changeset key.
-- `MAYBE_TRIGGER_QUIZ` with no questions → no change.
-- `MAYBE_TRIGGER_QUIZ` within cooldown → no change.
-- `MAYBE_TRIGGER_QUIZ` with all eligible in `asked` → no change.
-- `MAYBE_TRIGGER_QUIZ` past cooldown with `roll = 0.05` → `active` set.
-- `MAYBE_TRIGGER_QUIZ` past cooldown with `roll = 0.5` → no change.
-- `DISMISS_QUIZ` updates `lastQuizAt`, adds the question id to `asked`, clears `active`.
-- `SUBMIT_QUIZ_ANSWER` stores the answer, updates `lastQuizAt`, adds to `asked`, keeps `active`.
-- `SET_QUIZ_SELF_EVAL` writes the bucket without touching `active`.
+**Eligibility (unit, vitest):** `eligibleQuestionsForFile` and the new `pickNextForChangeset` helper, exercised against synthetic changesets.
 
-**Evidence validator (unit, vitest):** synthetic ChangeSet + StructureMap, `PlanResponse.questions` mixing resolvable and unresolvable targets; assert which survive.
+**Persist (unit, vitest):** v:7 round-trip; v:6 snapshot rejected and boots empty; `active.mode` survives serialization.
 
-**Integration (vitest):** real `ReviewState` reducer, real persist round-trip. Hydrate with stored questions, dispatch through the dispatcher wrapper with controlled `rng`, walk submit → reveal → self-eval, assert the persist serializer produces a `v: 6` snapshot that hydrates back.
+**Integration (vitest):** real reducer + persist. Generate questions, mark a file, assert one surfaces with `mode: "single"`; dismiss; mark again, assert nothing surfaces (asked). Hit changeset sign-off, assert sequence walks through remaining Qs.
 
-**E2E (Playwright):** one golden-path journey in `web/e2e/`:
-
-1. Load a fixture changeset.
-2. Send to Claude (mock the `/api/plan` response with 3 questions).
-3. Mark a file as reviewed with the dice forced to land via a test-mode dispatcher seam (gated on `import.meta.env.MODE === "test"`).
-4. Assert the panel opens, type an answer, submit, reveal, click "Got it."
-5. Reload the page; assert counter says `1 / 3`, panel collapsed.
+**E2E (Playwright):** update existing golden path to:
+1. Mock `/api/plan` with 4 questions (1 changeset + 2 file + 1 hunk).
+2. Mark file A → one Q fires deterministically. Submit, self-eval.
+3. Mark file B → next file-level Q fires.
+4. Hit Shift+S → sequence fires: changeset Q first, then the leftover hunk Q.
+5. Reload; assert counter is `4 / 4`, panel collapsed.
 
 **Anti-patterns to avoid** (per the test-strategy doc):
-
 - Don't mock the reducer or its actions.
 - Don't mock the persist module — use the real one.
-- Don't mock `Math.random` or `Date.now` globally; inject through the dispatcher wrapper.
+- No clock injection needed for trigger logic now that the dice/cooldown are gone. `Date.now()` is only consulted in `SUBMIT_QUIZ_ANSWER` for the answer's timestamp.
 
 ## Out of scope (this cut)
 
-- **Q3 — "write a test for this".** Code Runner embedding, input-slot detection, "did it run" signal, and rendering Claude's example test alongside the reviewer's are different concerns from the prose flow. Own design pass. The data shape (`type: "q3"`) is reserved so the server can start emitting them without breaking persistence.
-- **Changeset-mark trigger UI.** The top-level sign-off feature is not yet built. This plan reserves the data shape and reducer behavior; the trigger wiring lands with that feature.
-- **Cooldown configurability.** Constant in code. Not user-tunable.
+- **Q3 — "write a test for this".** Same posture as the original plan; reserved type, deferred design.
 - **Per-reviewer history across changesets.** A future "how did I do overall" aggregate is plausible but adds scope without near-term need.
-- **Multiple AI providers for questions.** Same single-provider posture as the plan. When the plan extends to multi-provider, questions extend with it for free.
-- **Grading API.** No verdict call. Reviewer self-evaluates.
+- **Sequence pacing.** No delay or animation between consecutive prompts in a Shift+S sequence; each replaces the previous on Submit/Skip.
+- **Forced ordering by file location.** Within a target kind, questions surface in the order the server emitted them. We do not re-sort by diff position.
 
 ## Files of interest
 
-- `server/src/plan.ts` — `PlanResponseSchema` extension, prompt addendum, `assemblePlan` validator extension.
-- `web/src/types.ts` — `Question`, `QuestionTarget` shared between front and back; `QuizState` for the reducer.
-- `web/src/state.ts` — new actions, reducer cases, `dispatchToggleFileReviewed` wrapper that reads clock/PRNG.
-- `web/src/persist.ts` — schema bump `v: 5 → v: 6`, serializer for `quiz` slice.
-- `web/src/usePlan.ts` — surface `questions` on the hook result, dispatch `STORE_QUESTIONS` on resolve.
-- `web/src/components/Sidebar.tsx` — new `<QuizPanel>` section at the top of the stack.
-- `web/src/components/QuizPanel.tsx` (new) — resting / active / reveal states.
-- `web/src/components/ReviewWorkspace.tsx` — wire the dispatcher wrapper into the keyboard handler and command palette.
+- `server/src/plan.ts` — SYSTEM_PROMPT "## Comprehension questions" section: new band, cap, rubric.
+- `web/src/types.ts` — `QuizState`: remove `lastQuizAt`, extend `active` with `mode`.
+- `web/src/quiz.ts` — remove `pickRandomQuestion`. Add `pickNextForFile` (deterministic head over eligible) and `pickNextForChangeset` (prioritizes changeset target, falls back to leftovers).
+- `web/src/state.ts` — drop `QUIZ_COOLDOWN_MS` / `QUIZ_DICE_THRESHOLD`; replace `MAYBE_TRIGGER_QUIZ` with `TRIGGER_QUIZ_FOR_FILE` and `TRIGGER_QUIZ_FOR_CHANGESET`; teach `DISMISS_QUIZ` / `SUBMIT_QUIZ_ANSWER` to honor `mode`.
+- `web/src/persist.ts` — schema bump v:6 → v:7; drop `lastQuizAt` validation; validate `active.mode`.
+- `web/src/components/ReviewWorkspace.tsx` — replace `dispatchToggleFileReviewedWithQuiz`; add `dispatchToggleChangesetReviewedWithQuiz`. Remove PRNG seam.
+- `web/src/components/QuizPanel.tsx` — add "Question N of M" indicator when `active.mode === "sequence"`.
+- `web/src/quiz.test.ts`, `web/src/state.test.ts`, `web/src/persist.test.ts` — update for new actions / shape; drop dice/cooldown tests.
