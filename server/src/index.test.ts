@@ -232,6 +232,31 @@ describe("POST /api/agent/interactions", () => {
     expect(all.body.payload).toContain(`parentId="${reviewerId}"`);
   });
 
+  it("status=all returns a worktree comment authored but never enqueued", async () => {
+    // A comment authored in a worktree session carries worktree_path from
+    // birth — `all` returns it even though it was never enqueued.
+    const up = await postJson(`${baseUrl}/api/interactions`, {
+      id: "rev-authored-not-queued",
+      changesetId: "cs-int-test",
+      target: "line",
+      intent: "comment",
+      author: "you",
+      authorRole: "user",
+      body: "authored but never queued",
+      worktreePath,
+      anchorPath: "src/foo.ts",
+      anchorLineNo: 3,
+    });
+    expect(up.status).toBe(200);
+
+    const all = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "all",
+    });
+    expect(all.status).toBe(200);
+    expect(all.body.payload).toContain("authored but never queued");
+  });
+
   it("status=unread surfaces a reviewer reply to an agent comment with its parent", async () => {
     // Agent posts a top-level finding.
     const post = await postJson(`${baseUrl}/api/agent/replies`, {
@@ -274,6 +299,53 @@ describe("POST /api/agent/interactions", () => {
     expect(unread.body.payload).toContain(`parentId="${agentCommentId}"`);
     expect(unread.body.payload).toContain("thanks, will fix");
     expect(unread.body.payload).toContain("agent finding");
+  });
+
+  it("status=unread surfaces a reply's parent when the parent was authored in-session but never enqueued", async () => {
+    // Reviewer top-level comment — authored in the worktree session (so it
+    // carries worktree_path) but never enqueued to the agent's queue.
+    const upTop = await postJson(`${baseUrl}/api/interactions`, {
+      id: "rev-top-unenqueued",
+      changesetId: "cs-int-test",
+      target: "line",
+      intent: "question",
+      author: "you",
+      authorRole: "user",
+      body: "why can this be null here?",
+      worktreePath,
+      anchorPath: "src/db.ts",
+      anchorLineNo: 12,
+    });
+    expect(upTop.status).toBe(200);
+
+    // A reviewer reply to it — this one IS enqueued.
+    const upReply = await postJson(`${baseUrl}/api/interactions`, {
+      id: "rev-reply-to-unenqueued",
+      changesetId: "cs-int-test",
+      target: "reply",
+      intent: "comment",
+      author: "you",
+      authorRole: "user",
+      body: "never mind, it's guarded on line 9",
+      worktreePath,
+      parentId: "rev-top-unenqueued",
+    });
+    expect(upReply.status).toBe(200);
+    await postJson(`${baseUrl}/api/interactions/enqueue`, {
+      id: "rev-reply-to-unenqueued",
+      worktreePath,
+    });
+
+    const unread = await postJson(`${baseUrl}/api/agent/interactions`, {
+      worktreePath,
+      status: "unread",
+    });
+    expect(unread.status).toBe(200);
+    // Only the reply drains; the never-enqueued parent rides along read-only.
+    expect(unread.body.ids).toEqual(["rev-reply-to-unenqueued"]);
+    expect(unread.body.payload).toContain(`parentId="rev-top-unenqueued"`);
+    expect(unread.body.payload).toContain("never mind, it's guarded on line 9");
+    expect(unread.body.payload).toContain("why can this be null here?");
   });
 
   it("rejects a missing status", async () => {

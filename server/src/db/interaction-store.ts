@@ -225,6 +225,10 @@ export function listAllForWorktree(worktreePath: string): StoredInteraction[] {
  * Look up interactions for a worktree by id. Used to pull in the parent
  * comment a reply references, regardless of queue status. Missing ids are
  * silently skipped.
+ *
+ * Scoped to `worktree_path` — every interaction authored in a worktree
+ * session carries it, so a referenced parent resolves here without widening
+ * the lookup to other worktrees' rows.
  */
 export function getByIdsForWorktree(
   worktreePath: string,

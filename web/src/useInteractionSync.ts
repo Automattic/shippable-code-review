@@ -46,19 +46,23 @@ export function useInteractionSync(
   state: ReviewState,
   dispatch: React.Dispatch<Action>,
   changesetId: string | null,
+  worktreePath: string | null,
 ): React.Dispatch<Action> {
-  // Latest state + changesetId in refs so the wrapper identity is stable
-  // (it's threaded deep through the tree as `dispatch`).
+  // Latest state + changesetId + worktreePath in refs so the wrapper identity
+  // is stable (it's threaded deep through the tree as `dispatch`).
   const stateRef = useRef(state);
   const changesetIdRef = useRef(changesetId);
+  const worktreePathRef = useRef(worktreePath);
   useEffect(() => {
     stateRef.current = state;
     changesetIdRef.current = changesetId;
+    worktreePathRef.current = worktreePath;
   });
 
   return useCallback(
     (action: Action) => {
       const csId = changesetIdRef.current;
+      const wtPath = worktreePathRef.current ?? undefined;
       const fail = (threadKey: string, id: string) => (err: unknown) => {
         console.error("[shippable] interaction sync failed:", err);
         dispatch({
@@ -73,14 +77,14 @@ export function useInteractionSync(
         if (action.type === "ADD_INTERACTION") {
           const ix = action.interaction;
           if (shouldMirror(ix)) {
-            upsertInteraction(ix, csId).catch(fail(action.targetKey, ix.id));
+            upsertInteraction(ix, csId, wtPath).catch(fail(action.targetKey, ix.id));
           }
         } else if (action.type === "TOGGLE_ACK") {
           const next = reducer(stateRef.current, action);
           const threadKey = lineNoteReplyKey(action.hunkId, action.lineIdx);
           const ix = ackedInteraction(stateRef.current, next, threadKey);
           if (ix && shouldMirror(ix)) {
-            upsertInteraction(ix, csId).catch(fail(threadKey, ix.id));
+            upsertInteraction(ix, csId, wtPath).catch(fail(threadKey, ix.id));
           }
         } else if (action.type === "DELETE_INTERACTION") {
           // The interaction may be agent/PR-sourced — only DB-row deletes

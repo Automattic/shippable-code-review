@@ -1182,7 +1182,7 @@ function ReviewWorkspaceInner({
     setDraftingKey(null);
     if (activeWorktreeSource) {
       const worktreePath = activeWorktreeSource.worktreePath;
-      upsertInteraction(interaction, cs.id)
+      upsertInteraction(interaction, cs.id, worktreePath)
         .then(() => enqueueInteraction(interactionId, worktreePath))
         .catch((err: unknown) => {
           console.error("[shippable] enqueue failed:", err);
@@ -1207,7 +1207,7 @@ function ReviewWorkspaceInner({
       interactionId: replyId,
       error: false,
     });
-    upsertInteraction(ix, cs.id)
+    upsertInteraction(ix, cs.id, worktreePath)
       .then(() => enqueueInteraction(replyId, worktreePath))
       .catch((err: unknown) => {
         console.error("[shippable] retry enqueue failed:", err);

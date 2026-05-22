@@ -129,7 +129,14 @@ export async function handleInteractionsUpsert(
       typeof b.createdAt === "string"
         ? b.createdAt
         : new Date().toISOString(),
-    worktreePath: null,
+    // A comment authored in a worktree session belongs to that worktree from
+    // birth — the client sends `worktreePath` so it's stamped at creation,
+    // not only on enqueue. The UPSERT's ON CONFLICT clause leaves the column
+    // untouched, so this never resets an already-enqueued row.
+    worktreePath:
+      typeof b.worktreePath === "string" && b.worktreePath.length > 0
+        ? b.worktreePath
+        : null,
     agentQueueStatus: null,
     payload,
   };

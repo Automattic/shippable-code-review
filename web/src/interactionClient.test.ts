@@ -184,6 +184,50 @@ describe("upsertInteraction", () => {
     expect(sent.anchorPath).toBe("src/foo.ts");
   });
 
+  it("includes worktreePath in the body when the changeset is worktree-backed", async () => {
+    const stub = makeFetch(true, 200, { ok: true });
+    vi.stubGlobal("fetch", stub);
+
+    const ix = {
+      id: "ix-1",
+      threadKey: "note:abc",
+      target: "line" as const,
+      intent: "comment" as const,
+      author: "alice",
+      authorRole: "user" as const,
+      body: "looks good",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    await upsertInteraction(ix, "cs-1", "/Users/me/wt");
+
+    const [, init] = stub.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(sent.worktreePath).toBe("/Users/me/wt");
+  });
+
+  it("omits worktreePath for a non-worktree changeset", async () => {
+    const stub = makeFetch(true, 200, { ok: true });
+    vi.stubGlobal("fetch", stub);
+
+    const ix = {
+      id: "ix-1",
+      threadKey: "note:abc",
+      target: "line" as const,
+      intent: "comment" as const,
+      author: "alice",
+      authorRole: "user" as const,
+      body: "looks good",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    await upsertInteraction(ix, "cs-1");
+
+    const [, init] = stub.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(sent).not.toHaveProperty("worktreePath");
+  });
+
   it("resolves to void on success", async () => {
     vi.stubGlobal("fetch", makeFetch(true, 200, { ok: true }));
     const ix = {

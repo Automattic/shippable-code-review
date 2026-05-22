@@ -329,7 +329,12 @@ export default function App() {
   // Mirror local user-authored interaction mutations back to the DB. The
   // wrapped dispatch is what the review UI uses; App's own LOAD_CHANGESET /
   // RELOAD_CHANGESET dispatches pass through it untouched.
-  const syncedDispatch = useInteractionSync(state, dispatch, activeCsId);
+  const syncedDispatch = useInteractionSync(
+    state,
+    dispatch,
+    activeCsId,
+    activeCs?.worktreeSource?.worktreePath ?? null,
+  );
   const provenance: WorktreeProvenance | null = useMemo(() => {
     const src = activeCs?.worktreeSource;
     if (!src || !src.state) return null;

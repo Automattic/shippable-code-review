@@ -58,15 +58,22 @@ export async function fetchInteractions(changesetId: string): Promise<Interactio
 }
 
 /** Persist (insert or update) one interaction. The server collects optional
- *  fields into payload itself, so we send everything flat plus changesetId. */
+ *  fields into payload itself, so we send everything flat plus changesetId.
+ *  `worktreePath` is passed when the changeset is worktree-backed, so the
+ *  comment is stamped to that worktree at creation — not only on enqueue. */
 export async function upsertInteraction(
   interaction: Interaction,
   changesetId: string,
+  worktreePath?: string,
 ): Promise<void> {
   // Spread sends transient fields like enqueueError over the wire; the server's
   // PAYLOAD_FIELDS allowlist silently drops anything it doesn't recognise, so
   // this is safe and no explicit omission is needed here.
-  await postJson<{ ok: true }>("/api/interactions", { ...interaction, changesetId });
+  await postJson<{ ok: true }>("/api/interactions", {
+    ...interaction,
+    changesetId,
+    ...(worktreePath ? { worktreePath } : {}),
+  });
 }
 
 /** Delete one interaction by id. Returns true if a row was removed. */
