@@ -1,6 +1,6 @@
 import { getDb } from "../db/index.ts";
 import { consentGranted } from "./consent.ts";
-import type { Stat } from "./known.ts";
+import { resolveStat, type Stat } from "./known.ts";
 import { LogSink, McSink, type StatSink } from "./sink.ts";
 
 // The one recording entry point. Fire-and-forget, never throws — a failed stat
@@ -16,7 +16,7 @@ function activeSink(): StatSink {
 
 export function recordStat(name: Stat, count = 1): void {
   try {
-    activeSink().record(name, count);
+    activeSink().record(resolveStat(name), count);
   } catch {
     // Best-effort: stats never propagate errors to callers.
   }

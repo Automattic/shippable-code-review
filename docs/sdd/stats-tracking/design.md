@@ -57,15 +57,8 @@ no startup-fixed sink. Consent is cached in memory so `recordStat` never
 blocks on a DB read.
 
 The group name comes from `SHIPPABLE_STATS_GROUP` (default `shippable`).
-Group and stat name are each capped at 32 characters and must be static
-slugs — the `KNOWN_STATS` allowlist and the fixed server-side names already
-guarantee this.
-
-> **MC note:** bumping `g.gif` auto-creates the stat — there is no
-> registration step and no infra blocker; counts land from the first request.
-> Low-volume stats (<100 hits) don't surface in the MC stat search page until
-> they cross that threshold, though they are still recorded. Pick a
-> `SHIPPABLE_STATS_GROUP` value not already used by another product.
+Group and stat name must be static slugs — the `KNOWN_STATS` allowlist and
+the fixed server-side names already guarantee this.
 
 ### Consent
 
@@ -124,7 +117,7 @@ Dimensions are encoded in the name — each name is independently graphable in M
 |------------------------|------------------------------------------------------------------|--------------|
 | `review-started`       | a changeset is first opened into the review UI (once per id)     | web → server |
 | `review-completed`     | a changeset is marked reviewed (`reviewedChangesets`)            | web → server |
-| `file-marked-okay`     | a file is toggled reviewed **on** (not on toggle-off)            | web → server |
+| `file-reviewed`        | a file is toggled reviewed **on** (not on toggle-off)            | web → server |
 | `comment-posted-user`  | `POST /api/interactions` upsert, ask intent, `authorRole: user`, deduped per interaction id | server |
 | `comment-posted-agent` | `POST /api/agent/replies` — each agent interaction stored        | server       |
 | `comment-posted-ai`    | `POST /api/review` stream completes successfully                 | server       |
@@ -140,11 +133,11 @@ allows at most one MC bump per install ever (a crash between the dedup insert
 and the pixel send can lose it; acceptable for best-effort stats), so the MC
 total approximates the count of unique installs. `install-active` is
 `recordStatOnce("install-active", installId + ":" + <UTC YYYY-MM-DD>)` — one
-bump per install per day; MC's own time bucketing then yields daily-active
+bump per install per day, so the per-day bump count tracks daily-active
 installs. Neither sends the id; both rely on the local `stat_dedup` table.
 
 A `KNOWN_STATS` allowlist constant holds the **three web-reportable** names
-(`review-started`, `review-completed`, `file-marked-okay`) — it is the single
+(`review-started`, `review-completed`, `file-reviewed`) — it is the single
 source of truth for what the `/api/stats/event` endpoint will accept. The
 server-side names are string literals at their call sites and must never be
 acceptable from the web.
@@ -207,7 +200,7 @@ actions, never from reducers (reducers stay pure):
 - changeset loaded into review → `reportStat("review-started", changesetId)`
 - mark-changeset-reviewed handler → `reportStat("review-completed")`
 - toggle-file-reviewed handler, on the **on** transition only →
-  `reportStat("file-marked-okay")`
+  `reportStat("file-reviewed")`
 
 `reportStat` always fires regardless of consent — the server routes the event
 to `LogSink` or `McSink` per consent. The web app does not gate on consent.
@@ -271,6 +264,4 @@ Per `docs/plans/test-strategy.md` (integration tier uses real in-process
 ## Open questions
 
 None blocking. `LogSink` is fully functional with no MC setup, and `McSink`
-works the moment consent is granted — `g.gif` auto-creates the stat, so there
-is no infra task to wait on. The only loose end is confirming the
-`SHIPPABLE_STATS_GROUP` value doesn't collide with an existing MC group.
+works the moment consent is granted.

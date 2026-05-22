@@ -28,12 +28,13 @@ typecheck and lint clean; the full Playwright e2e suite (58 tests) passes.
   `initDb()` would invert the db→stats module dependency.
 - **Impact**: install counters are verified by a direct unit test rather than a
   `createApp()` boot assertion. Confirmed working end-to-end — the e2e server
-  logs `[stat] install-new +1` / `[stat] install-active +1` on boot.
+  logs `[stat] install-new → shippable-installs/new +1` and
+  `[stat] install-active → shippable-installs/active +1` on boot.
 
 ### `review-completed` counts the on-transition only
 - **Spec said**: the wiring section listed "mark-changeset-reviewed handler —
   `reportStat("review-completed")`" without the explicit "on transition only"
-  qualifier it gave `file-marked-okay`.
+  qualifier it gave `file-reviewed`.
 - **Implementation does**: fires `review-completed` only on the off→on
   transition, and not at all for the token-null no-op (paste/upload).
 - **Reason**: `TOGGLE_CHANGESET_REVIEWED` is a toggle; counting an un-review as
@@ -48,7 +49,8 @@ typecheck and lint clean; the full Playwright e2e suite (58 tests) passes.
   the real sinks — `LogSink` via a `console.log` spy, `McSink` via a stubbed
   `fetch` — through a shared `captureStats()` / `startTestServer()` helper in
   `server/src/test-helpers.ts`. The `SHIPPABLE_STATS_GROUP` env override was
-  also removed; `McSink`'s group is the hardcoded constant `shippable`.
+  also removed; `McSink`'s group came from a hardcoded constant `shippable`
+  (later split per lifecycle area — see Notes).
 - **Reason**: keep test scaffolding out of production code, and a universal
   server-test harness over per-file `listen()` boilerplate.
 - **Impact**: `record.ts`, `consent.ts`, and `sink.ts` export only product API;
@@ -66,8 +68,10 @@ typecheck and lint clean; the full Playwright e2e suite (58 tests) passes.
   welcome-page journeys. The shared fixture now installs
   `mockStatsConsent(page, "granted")` by default; banner tests override it to
   `"undecided"` before `visit()`.
-- **Open item**: the MC group is hardcoded `shippable`. Confirm it does not
-  collide with an existing MC group before MC consent is exercised in
-  production. Non-blocking — `LogSink` needs no MC setup.
+- **Stats groups (follow-up)**: the single `shippable` group was split into
+  three lifecycle groups — `shippable-reviews`, `shippable-comments`,
+  `shippable-installs` — so each group's rolled-up total stays meaningful.
+  Each stat maps to a `{ group, name }` target in `known.ts`, which `McSink`
+  resolves and reports.
 - **Follow-up**: `stat_dedup` is never pruned — see the "Follow-ups" section in
   [`spec.md`](./spec.md) for the cleanup (cap `dedupKey` length, add retention).

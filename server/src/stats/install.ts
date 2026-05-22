@@ -7,7 +7,7 @@ const INSTALL_ID_KEY = "install_id";
 
 // Opaque random token identifying this install. Generated and persisted on the
 // first call; returned unchanged afterwards. It never leaves the host — it is
-// only ever used as a recordStatOnce dedup key, so MC receives bumps, not the id.
+// only ever used as a recordStatOnce dedup key, so only bump counts are sent, not the id.
 export function installId(): string {
   const existing = getSetting(INSTALL_ID_KEY);
   if (existing) return existing;

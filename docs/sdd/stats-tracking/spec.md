@@ -10,7 +10,7 @@ sending anything off a contributor's machine before they agree.
 
 ## Requirements Summary
 
-- Count review activity (started/completed, file-marked-okay, comments by
+- Count review activity (started/completed, file-reviewed, comments by
   user/agent/AI, AI review requests) and install identity (`install-new`,
   `install-active`).
 - One fire-and-forget recording API; never throws.
@@ -88,7 +88,7 @@ Bumps `SCHEMA_HEAD` to 2, appends `MIGRATIONS[1]`, creating:
 
 ### Stat catalog
 
-`review-started`, `review-completed`, `file-marked-okay` (web-reportable —
+`review-started`, `review-completed`, `file-reviewed` (web-reportable —
 `KNOWN_STATS`); `comment-posted-user/-agent/-ai`, `ai-review-request`,
 `install-new`, `install-active` (server-side only). See the design doc table
 for exact firing conditions.
@@ -120,13 +120,11 @@ for exact firing conditions.
 
 - **Sink lifetime** — chosen per record call from live consent, not fixed at
   startup, so mid-session consent works with no restart.
-- **MC infra** — none needed: `g.gif` auto-creates the stat on first bump.
+- **MC infra** — none needed.
 - **Consent shape** — binary (`granted` / `undecided`); declining stores
   nothing, so there is no deny state or close button.
 - **MC group** — the group is hardcoded `shippable`; the `SHIPPABLE_STATS_GROUP`
-  env override was removed as unused (review feedback). Still owed before MC
-  consent is exercised in production: confirm `shippable` does not collide with
-  an existing MC group. Non-blocking for `LogSink`.
+  env override was removed as unused (review feedback). Non-blocking for `LogSink`.
 
 ## Follow-ups
 

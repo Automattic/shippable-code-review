@@ -1,6 +1,6 @@
 import { getSetting, setSetting } from "./settings.ts";
 
-// MC stats consent. Binary and one-way: the user is `undecided` until they opt
+// Stats consent. Binary and one-way: the user is `undecided` until they opt
 // in, after which they are `granted` forever. Declining stores nothing.
 
 const CONSENT_KEY = "stats_mc_consent";

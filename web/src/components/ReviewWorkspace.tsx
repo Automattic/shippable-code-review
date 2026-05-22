@@ -739,7 +739,7 @@ function ReviewWorkspaceInner({
         // Count only the off→on transition, not un-marking.
         const fileId = state.cursor.fileId;
         if (!state.reviewedFiles.has(fileId)) {
-          reportStat("file-marked-okay");
+          reportStat("file-reviewed");
         }
         dispatchToggleFileReviewedWithQuiz(
           dispatch,

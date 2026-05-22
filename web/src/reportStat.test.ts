@@ -38,7 +38,7 @@ describe("reportStat", () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error("network"));
     vi.stubGlobal("fetch", fetchMock);
 
-    expect(() => reportStat("file-marked-okay")).not.toThrow();
+    expect(() => reportStat("file-reviewed")).not.toThrow();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
   });
 });

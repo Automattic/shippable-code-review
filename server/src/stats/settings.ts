@@ -1,7 +1,7 @@
 import { getDb } from "../db/index.ts";
 
 // Generic key/value store backed by the `settings` table (schema v2). Holds the
-// install id and the MC consent flag — small, slow-changing server-side state.
+// install id and the stats consent flag — small, slow-changing server-side state.
 
 export function getSetting(key: string): string | undefined {
   const row = getDb()

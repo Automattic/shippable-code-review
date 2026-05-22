@@ -34,7 +34,7 @@ they've agreed to it.
 - Server is a hard dependency in every deployment shape (per AGENTS.md).
 - Persistence is SQLite via the existing migration runner (`SCHEMA_HEAD`,
   `MIGRATIONS`).
-- Group and stat names are static slugs, each capped at 32 characters.
+- Group and stat names are static slugs.
 
 ## Scope
 

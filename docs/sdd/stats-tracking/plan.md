@@ -77,7 +77,7 @@ and inject a recording test sink — see `docs/plans/test-strategy.md`.
   2. Verify the tests fail.
   3. Define the `StatSink` interface (`record(name, count)`); implement
      `LogSink` (console only) and `McSink` (fire-and-forget `fetch`, all errors
-     swallowed, group from env capped at 32 chars).
+     swallowed).
   4. Verify the tests pass.
   5. Commit: `feat(server): add StatSink with log and MC pixel sinks`
 - **Verify**: sink tests pass.
@@ -92,7 +92,7 @@ and inject a recording test sink — see `docs/plans/test-strategy.md`.
      no-op, distinct keys both count; neither throws on a sink/DB error.
   2. Verify the tests fail.
   3. Add `KNOWN_STATS` (the three web-reportable names:
-     `review-started`, `review-completed`, `file-marked-okay`). Implement
+     `review-started`, `review-completed`, `file-reviewed`). Implement
      `recordStat` (sink chosen per call from `consentGranted()`) and
      `recordStatOnce` (`INSERT OR IGNORE` into `stat_dedup`, sink fires only
      when `changes() === 1`). Allow a test sink to be injected. Both swallow
@@ -191,7 +191,7 @@ and inject a recording test sink — see `docs/plans/test-strategy.md`.
      it from the **UI handlers** (never reducers): changeset loaded into review
      → `reportStat("review-started", changesetId)`; mark-changeset-reviewed →
      `reportStat("review-completed")`; toggle-file-reviewed on the **on**
-     transition only → `reportStat("file-marked-okay")`.
+     transition only → `reportStat("file-reviewed")`.
   4. Verify the test passes; `npm run build` + `npm run lint` clean.
   5. Commit: `feat(web): report review-activity stats to the server`
 - **Verify**: reportStat test passes, web build + lint clean.

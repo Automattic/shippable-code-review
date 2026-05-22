@@ -50,7 +50,9 @@ export interface StatCapture {
 export function captureStats(): StatCapture {
   const calls: Array<{ name: string; count: number }> = [];
   const spy = vi.spyOn(console, "log").mockImplementation((...args) => {
-    const m = /^\[stat] (\S+) \+(\d+)$/.exec(String(args[0]));
+    // Extracts the stat id and count; tolerant of whatever the LogSink puts
+    // between them — the exact line format is sink.test.ts's to assert.
+    const m = /^\[stat] (\S+).* \+(\d+)$/.exec(String(args[0]));
     if (m) calls.push({ name: m[1], count: Number(m[2]) });
   });
   return {
