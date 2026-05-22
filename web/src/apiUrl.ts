@@ -37,6 +37,12 @@ function isTauri(): boolean {
 // `shippable:sidecar-ready` from the sidecar's stdout handler when it sees
 // the server's "listening" line, and the gate awaits that before probing.
 //
+// Tauri events aren't buffered, so an emit that fires before the WebView
+// finishes importing `@tauri-apps/api/event` is lost. We close that race by
+// querying `get_sidecar_status` after subscribing — Rust mirrors both port
+// and failure into queryable state, so a late subscriber recovers the verdict
+// regardless of subscribe timing.
+//
 // Non-Tauri (browser dev): no sidecar to wait for, returns ready immediately
 // and the gate falls through to its existing fetch — which will surface
 // "unreachable" the usual way if `npm run dev` isn't running.
@@ -44,8 +50,17 @@ export type SidecarReady =
   | { ok: true }
   | { ok: false; reason: string };
 
+type SidecarStatus = {
+  port: number | null;
+  failure: string | null;
+};
+
 export async function waitForSidecarReady(
-  timeoutMs = 10000,
+  // Rust commits to a verdict by t=15s (the TCP probe deadline). The JS
+  // ceiling sits past that so the event/status path always wins the race
+  // against this timer; the timer only exists so a pathologically broken
+  // Tauri IPC channel can't hang the spinner forever.
+  timeoutMs = 20000,
 ): Promise<SidecarReady> {
   if (!isTauri()) return { ok: true };
 
@@ -74,10 +89,14 @@ export async function waitForSidecarReady(
     (e) => finish({ ok: false, reason: e.payload }),
   );
 
-  // Recheck after listeners are registered: if the event fired between
-  // mount and subscribe we'd miss it, but the port will already be set.
-  const port = await invoke<number | null>("get_sidecar_port");
-  if (port != null) finish({ ok: true });
+  // Recheck after listeners are registered. Either field being set means
+  // Rust already decided; the matching event may have fired before our
+  // subscribe finished. Success wins if both are somehow set (can't happen
+  // by construction in lib.rs, but be deterministic if a future change
+  // breaks the invariant).
+  const status = await invoke<SidecarStatus>("get_sidecar_status");
+  if (status.port != null) finish({ ok: true });
+  else if (status.failure != null) finish({ ok: false, reason: status.failure });
 
   const timer = setTimeout(
     () => finish({ ok: false, reason: "sidecar didn't report ready in time" }),

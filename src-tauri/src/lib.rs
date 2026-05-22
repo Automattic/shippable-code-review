@@ -32,14 +32,36 @@ struct SidecarRuntime {
     port: Option<u16>,
     child: Option<CommandChild>,
     /// Set once either the forwarder or the probe has decided the sidecar
-    /// won't come up. Coordinates between the two tasks so we emit
-    /// `shippable:sidecar-failed` at most once.
-    failed: bool,
+    /// won't come up. Holds the same payload that went out via
+    /// `shippable:sidecar-failed`, so a late JS subscriber that missed the
+    /// emit can recover the reason by querying `get_sidecar_status`.
+    /// Coordinates the two tasks so we emit at most once.
+    failure: Option<String>,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct SidecarStatus {
+    port: Option<u16>,
+    failure: Option<String>,
 }
 
 #[tauri::command]
 fn get_sidecar_port(state: State<SidecarState>) -> Option<u16> {
     state.inner.lock().unwrap().port
+}
+
+/// Snapshot of the sidecar's current decision: whether it's bound a port,
+/// whether it's given up, or neither (still starting). Lets the WebView's
+/// boot gate recover from the lost-event-before-subscribe race —
+/// `shippable:sidecar-failed` can fire in the ~1s before JS finishes
+/// importing `@tauri-apps/api/event`, and Tauri events aren't buffered.
+#[tauri::command]
+fn get_sidecar_status(state: State<SidecarState>) -> SidecarStatus {
+    let guard = state.inner.lock().unwrap();
+    SidecarStatus {
+        port: guard.port,
+        failure: guard.failure.clone(),
+    }
 }
 
 // ── Multi-window registry ──────────────────────────────────────────────
@@ -558,25 +580,24 @@ fn start_sidecar(app: tauri::AppHandle) {
                                 payload.code,
                                 payload.signal
                             );
+                            let msg = format!(
+                                "sidecar exited before listening \
+                                 (code={:?}, signal={:?})",
+                                payload.code, payload.signal
+                            );
                             let claimed_failure = {
                                 let state = app_for_forwarder.state::<SidecarState>();
                                 let mut guard = state.inner.lock().unwrap();
-                                if guard.port.is_some() || guard.failed {
+                                if guard.port.is_some() || guard.failure.is_some() {
                                     false
                                 } else {
-                                    guard.failed = true;
+                                    guard.failure = Some(msg.clone());
                                     true
                                 }
                             };
                             if claimed_failure {
-                                let _ = app_for_forwarder.emit(
-                                    "shippable:sidecar-failed",
-                                    format!(
-                                        "sidecar exited before listening \
-                                         (code={:?}, signal={:?})",
-                                        payload.code, payload.signal
-                                    ),
-                                );
+                                let _ = app_for_forwarder
+                                    .emit("shippable:sidecar-failed", msg);
                             }
                             break;
                         }
@@ -631,7 +652,7 @@ fn spawn_sidecar_probe(app: tauri::AppHandle, port: u16, startup: Instant) {
             {
                 let state = app.state::<SidecarState>();
                 let guard = state.inner.lock().unwrap();
-                if guard.failed {
+                if guard.failure.is_some() {
                     return;
                 }
                 if guard.port.is_some() {
@@ -660,23 +681,23 @@ fn spawn_sidecar_probe(app: tauri::AppHandle, port: u16, startup: Instant) {
                     // binding (so the sidecar crashed on EADDRINUSE), or
                     // the sidecar hung during startup. Either way, the
                     // user can't do anything but retry.
+                    let msg = format!(
+                        "sidecar listener did not come up on 127.0.0.1:{port} \
+                         within 15s. Most likely the port was taken between us \
+                         and the sidecar, or the sidecar crashed during startup. \
+                         Last connect error: {e}"
+                    );
                     let claimed_failure = {
                         let state = app.state::<SidecarState>();
                         let mut guard = state.inner.lock().unwrap();
-                        if guard.port.is_some() || guard.failed {
+                        if guard.port.is_some() || guard.failure.is_some() {
                             false
                         } else {
-                            guard.failed = true;
+                            guard.failure = Some(msg.clone());
                             true
                         }
                     };
                     if claimed_failure {
-                        let msg = format!(
-                            "sidecar listener did not come up on 127.0.0.1:{port} \
-                             within 15s. Most likely the port was taken between us \
-                             and the sidecar, or the sidecar crashed during startup. \
-                             Last connect error: {e}"
-                        );
                         log::warn!("{msg}");
                         let _ = app.emit("shippable:sidecar-failed", msg);
                     }
@@ -693,6 +714,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             get_sidecar_port,
+            get_sidecar_status,
             open_new_window,
             open_detached_window,
             reattach_detached_window,
