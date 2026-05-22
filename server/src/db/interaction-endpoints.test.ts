@@ -1,23 +1,16 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { resetForTests } from "./index.ts";
 import {
-  describe,
-  it,
-  expect,
-  beforeEach,
-  afterEach,
-} from "vitest";
-import type { Server } from "node:http";
-import { createApp } from "../index.ts";
-import { initDb, resetForTests } from "./index.ts";
-import {
-  resetStatSinksForTests,
-  setStatSinksForTests,
-} from "../stats/record.ts";
-import type { StatSink } from "../stats/sink.ts";
+  captureStats,
+  startTestServer,
+  type StatCapture,
+  type TestServer,
+} from "../test-helpers.ts";
 
 // Integration-tier: real createApp() in-process, DB isolated to :memory:.
-// Each test gets a fresh DB — beforeEach inits, afterEach tears down.
+// Each test gets a fresh server + DB — beforeEach boots, afterEach tears down.
 
-let server: Server;
+let ts: TestServer;
 let baseUrl: string;
 
 // Minimal valid interaction body for POST /api/interactions.
@@ -57,24 +50,13 @@ async function deleteJson(url: string): Promise<{ status: number; body: any }> {
 }
 
 beforeEach(async () => {
-  await initDb({ SHIPPABLE_DB_PATH: ":memory:" });
-  server = createApp();
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const addr = server.address();
-  if (!addr || typeof addr === "string") {
-    throw new Error("server.address() not an object");
-  }
-  baseUrl = `http://127.0.0.1:${addr.port}`;
+  ts = await startTestServer();
+  baseUrl = ts.baseUrl;
 });
 
 afterEach(async () => {
-  await new Promise<void>((resolve, reject) =>
-    server.close((err) => (err ? reject(err) : resolve())),
-  );
+  await ts.close();
   resetForTests();
-  resetStatSinksForTests();
 });
 
 // ─── GET /api/interactions ───────────────────────────────────────────────────
@@ -376,49 +358,55 @@ describe("DELETE /api/interactions", () => {
 
 // ─── comment-posted-user stat ────────────────────────────────────────────────
 
-class RecordingSink implements StatSink {
-  calls: string[] = [];
-  record(name: string): void {
-    this.calls.push(name);
-  }
-}
-
 describe("POST /api/interactions stat wiring", () => {
-  it("counts comment-posted-user once for a user ask interaction", async () => {
-    const sink = new RecordingSink();
-    setStatSinksForTests(sink, sink);
+  let stats: StatCapture;
 
+  beforeEach(() => {
+    stats = captureStats();
+  });
+
+  afterEach(() => {
+    stats.restore();
+  });
+
+  it("counts comment-posted-user once for a user ask interaction", async () => {
     await postJson(`${baseUrl}/api/interactions`, makeInteraction());
 
-    expect(sink.calls.filter((n) => n === "comment-posted-user")).toHaveLength(
-      1,
-    );
+    expect(
+      stats.names().filter((n) => n === "comment-posted-user"),
+    ).toHaveLength(1);
   });
 
   it("does not re-count when the same interaction id is re-saved", async () => {
-    const sink = new RecordingSink();
-    setStatSinksForTests(sink, sink);
-
     await postJson(`${baseUrl}/api/interactions`, makeInteraction());
     await postJson(
       `${baseUrl}/api/interactions`,
       makeInteraction({ body: "edited" }),
     );
 
-    expect(sink.calls.filter((n) => n === "comment-posted-user")).toHaveLength(
-      1,
-    );
+    expect(
+      stats.names().filter((n) => n === "comment-posted-user"),
+    ).toHaveLength(1);
   });
 
   it("does not count an agent-authored interaction", async () => {
-    const sink = new RecordingSink();
-    setStatSinksForTests(sink, sink);
-
     await postJson(
       `${baseUrl}/api/interactions`,
       makeInteraction({ authorRole: "agent" }),
     );
 
-    expect(sink.calls).not.toContain("comment-posted-user");
+    expect(stats.names()).not.toContain("comment-posted-user");
+  });
+
+  it("does not count a user interaction with a non-ask intent", async () => {
+    // A valid user reply (target "reply" accepts response intents) with the
+    // non-ask intent "ack" — reaches the stat gate but fails its isAskIntent
+    // half, so it must not count.
+    await postJson(
+      `${baseUrl}/api/interactions`,
+      makeInteraction({ target: "reply", intent: "ack", authorRole: "user" }),
+    );
+
+    expect(stats.names()).not.toContain("comment-posted-user");
   });
 });

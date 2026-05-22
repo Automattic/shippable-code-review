@@ -5,24 +5,13 @@ import { getSetting, setSetting } from "./settings.ts";
 
 const CONSENT_KEY = "stats_mc_consent";
 
-// Cached so the stats hot path never does a DB round-trip. Seeded lazily from
-// the settings table on first read.
-let cache: boolean | undefined;
-
+// Read straight from the settings table. Stats fire at human pace, so a local
+// SQLite lookup per record is cheap — a cache would only buy a test-reset hook.
 export function consentGranted(): boolean {
-  if (cache === undefined) {
-    cache = getSetting(CONSENT_KEY) === "granted";
-  }
-  return cache;
+  return getSetting(CONSENT_KEY) === "granted";
 }
 
 // The only transition — consent never moves back to undecided.
 export function grantConsent(): void {
   setSetting(CONSENT_KEY, "granted");
-  cache = true;
-}
-
-/** Test-only: drop the cached value so the next read re-loads from the DB. */
-export function resetConsentForTests(): void {
-  cache = undefined;
 }

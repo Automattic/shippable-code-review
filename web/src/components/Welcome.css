@@ -369,6 +369,9 @@
 .welcome__consent-text {
   flex: 1;
 }
+.welcome__consent-err {
+  color: var(--red);
+}
 .welcome__hint {
   color: var(--fg-mute);
   font-size: 11px;

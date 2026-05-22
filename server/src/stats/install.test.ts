@@ -1,20 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { initDb, resetForTests } from "../db/index.ts";
+import { captureStats, type StatCapture } from "../test-helpers.ts";
 import { getSetting } from "./settings.ts";
 import { installId, recordInstallStats } from "./install.ts";
-import {
-  resetStatSinksForTests,
-  setStatSinksForTests,
-} from "./record.ts";
-import type { StatSink } from "./sink.ts";
-
-class RecordingSink implements StatSink {
-  calls: Array<{ name: string; count: number }> = [];
-  record(name: string, count: number): void {
-    this.calls.push({ name, count });
-  }
-}
 
 beforeEach(async () => {
   await initDb({ SHIPPABLE_DB_PATH: ":memory:" });
@@ -22,7 +11,6 @@ beforeEach(async () => {
 
 afterEach(() => {
   resetForTests();
-  resetStatSinksForTests();
 });
 
 describe("installId", () => {
@@ -46,25 +34,28 @@ describe("installId", () => {
 });
 
 describe("recordInstallStats", () => {
-  it("fires install-new and install-active once each on first startup", () => {
-    const sink = new RecordingSink();
-    setStatSinksForTests(sink, sink);
+  let stats: StatCapture;
 
+  beforeEach(() => {
+    stats = captureStats();
+  });
+
+  afterEach(() => {
+    stats.restore();
+  });
+
+  it("fires install-new and install-active once each on first startup", () => {
     recordInstallStats();
 
-    const names = sink.calls.map((c) => c.name);
-    expect(names.filter((n) => n === "install-new")).toHaveLength(1);
-    expect(names.filter((n) => n === "install-active")).toHaveLength(1);
+    expect(stats.names().filter((n) => n === "install-new")).toHaveLength(1);
+    expect(stats.names().filter((n) => n === "install-active")).toHaveLength(1);
   });
 
   it("fires neither again on a second startup the same day", () => {
-    const sink = new RecordingSink();
-    setStatSinksForTests(sink, sink);
-
     recordInstallStats();
-    sink.calls.length = 0;
+    stats.calls.length = 0;
     recordInstallStats();
 
-    expect(sink.calls).toEqual([]);
+    expect(stats.calls).toEqual([]);
   });
 });

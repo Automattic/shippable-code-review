@@ -15,11 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Server } from "node:http";
 
-import {
-  resetStatSinksForTests,
-  setStatSinksForTests,
-} from "./stats/record.ts";
-import type { StatSink } from "./stats/sink.ts";
+import { captureStats, type StatCapture } from "./test-helpers.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -602,22 +598,14 @@ describe("POST /api/agent/replies", () => {
 });
 
 describe("POST /api/agent/replies stat wiring", () => {
-  class RecordingSink implements StatSink {
-    calls: string[] = [];
-    record(name: string): void {
-      this.calls.push(name);
-    }
-  }
-
-  let sink: RecordingSink;
+  let stats: StatCapture;
 
   beforeEach(() => {
-    sink = new RecordingSink();
-    setStatSinksForTests(sink, sink);
+    stats = captureStats();
   });
 
   afterEach(() => {
-    resetStatSinksForTests();
+    stats.restore();
   });
 
   it("counts comment-posted-agent for a reply", async () => {
@@ -634,9 +622,9 @@ describe("POST /api/agent/replies stat wiring", () => {
       intent: "accept",
     });
 
-    expect(sink.calls.filter((n) => n === "comment-posted-agent")).toHaveLength(
-      1,
-    );
+    expect(
+      stats.names().filter((n) => n === "comment-posted-agent"),
+    ).toHaveLength(1);
   });
 
   it("counts comment-posted-agent for a top-level agent comment", async () => {
@@ -649,9 +637,9 @@ describe("POST /api/agent/replies stat wiring", () => {
       intent: "comment",
     });
 
-    expect(sink.calls.filter((n) => n === "comment-posted-agent")).toHaveLength(
-      1,
-    );
+    expect(
+      stats.names().filter((n) => n === "comment-posted-agent"),
+    ).toHaveLength(1);
   });
 });
 

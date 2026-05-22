@@ -81,11 +81,14 @@ export function Welcome({ recents, onLoad, onRecentsChange }: Props) {
     };
   }, []);
 
+  // Surfaced when an Allow click fails — the banner stays up (consent wasn't
+  // stored) and the error makes the dead-looking click visibly retryable.
+  const [consentErr, setConsentErr] = useState(false);
   function allowStats() {
-    // Leave the banner up if the write fails — consent wasn't stored.
+    setConsentErr(false);
     void grantConsent()
       .then(() => setConsent("granted"))
-      .catch(() => {});
+      .catch(() => setConsentErr(true));
   }
 
   // Single URL field (handles both raw diff URLs and GitHub PR HTML URLs).
@@ -267,6 +270,11 @@ export function Welcome({ recents, onLoad, onRecentsChange }: Props) {
             >
               Allow
             </button>
+            {consentErr && (
+              <span className="welcome__consent-err" role="alert">
+                Couldn't save that — try again.
+              </span>
+            )}
           </div>
         )}
 

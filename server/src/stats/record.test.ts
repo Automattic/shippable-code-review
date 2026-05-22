@@ -1,69 +1,73 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { initDb, resetForTests } from "../db/index.ts";
-import { grantConsent, resetConsentForTests } from "./consent.ts";
-import {
-  recordStat,
-  recordStatOnce,
-  resetStatSinksForTests,
-  setStatSinksForTests,
-} from "./record.ts";
-import type { StatSink } from "./sink.ts";
+import { captureStats, type StatCapture } from "../test-helpers.ts";
+import { grantConsent } from "./consent.ts";
+import { recordStat, recordStatOnce } from "./record.ts";
 
-class RecordingSink implements StatSink {
-  calls: Array<{ name: string; count: number }> = [];
-  record(name: string, count: number): void {
-    this.calls.push({ name, count });
-  }
-}
+// Real sinks, no injection: LogSink writes to the console (captured here) and
+// McSink GETs the wp.com pixel (fetch stubbed). Consent defaults to undecided,
+// so recordStat routes to the LogSink unless a test grants it.
 
-let log: RecordingSink;
-let mc: RecordingSink;
+let stats: StatCapture;
 
 beforeEach(async () => {
   await initDb({ SHIPPABLE_DB_PATH: ":memory:" });
-  resetConsentForTests();
-  log = new RecordingSink();
-  mc = new RecordingSink();
-  setStatSinksForTests(log, mc);
+  stats = captureStats();
 });
 
 afterEach(() => {
+  stats.restore();
   resetForTests();
-  resetConsentForTests();
-  resetStatSinksForTests();
+  vi.unstubAllGlobals();
 });
 
 describe("recordStat routing", () => {
   it("routes to the log sink while consent is undecided", () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
     recordStat("review-started");
-    expect(log.calls).toEqual([{ name: "review-started", count: 1 }]);
-    expect(mc.calls).toEqual([]);
+
+    expect(stats.calls).toEqual([{ name: "review-started", count: 1 }]);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("routes to the MC sink once consent is granted", () => {
+    const fetchSpy = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("fetch", fetchSpy);
+
     grantConsent();
     recordStat("review-started");
-    expect(mc.calls).toEqual([{ name: "review-started", count: 1 }]);
-    expect(log.calls).toEqual([]);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://pixel.wp.com/g.gif?v=wpcom-no-pv&x_shippable/review-started=1",
+    );
+    expect(stats.calls).toEqual([]);
   });
 
   it("flips routing live when consent is granted mid-session", () => {
+    const fetchSpy = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("fetch", fetchSpy);
+
     recordStat("review-started");
     grantConsent();
     recordStat("review-completed");
-    expect(log.calls).toEqual([{ name: "review-started", count: 1 }]);
-    expect(mc.calls).toEqual([{ name: "review-completed", count: 1 }]);
+
+    expect(stats.calls).toEqual([{ name: "review-started", count: 1 }]);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://pixel.wp.com/g.gif?v=wpcom-no-pv&x_shippable/review-completed=1",
+    );
   });
 
   it("never throws when the sink throws", () => {
-    const boom: StatSink = {
-      record() {
-        throw new Error("sink down");
-      },
-    };
-    setStatSinksForTests(boom, boom);
+    // LogSink writes via console.log — make that throw to drive the failure.
+    stats.restore();
+    const boom = vi.spyOn(console, "log").mockImplementation(() => {
+      throw new Error("sink down");
+    });
     expect(() => recordStat("review-started")).not.toThrow();
+    boom.mockRestore();
   });
 });
 
@@ -71,12 +75,12 @@ describe("recordStatOnce", () => {
   it("records the first call and ignores a repeat of the same key", () => {
     recordStatOnce("review-started", "cs-1");
     recordStatOnce("review-started", "cs-1");
-    expect(log.calls).toEqual([{ name: "review-started", count: 1 }]);
+    expect(stats.calls).toEqual([{ name: "review-started", count: 1 }]);
   });
 
   it("records distinct keys separately", () => {
     recordStatOnce("review-started", "cs-1");
     recordStatOnce("review-started", "cs-2");
-    expect(log.calls).toHaveLength(2);
+    expect(stats.calls).toHaveLength(2);
   });
 });

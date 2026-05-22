@@ -16,9 +16,9 @@ export function installId(): string {
   return id;
 }
 
-// Fire the install-identity counters at server startup. install-new bumps at
-// most once per install ever; install-active at most once per install per UTC
-// calendar day. Dedup is local — the id itself never reaches MC.
+// Install-identity counters, fired once at server startup. The dedup keys make
+// the cadence explicit: `install-new` once per install ever, `install-active`
+// once per install per UTC day.
 export function recordInstallStats(): void {
   const id = installId();
   const utcDay = new Date().toISOString().slice(0, 10);

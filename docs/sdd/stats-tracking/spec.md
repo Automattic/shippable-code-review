@@ -32,8 +32,8 @@ implementation plan*).
 A `server/src/stats/` module exposes `recordStat` / `recordStatOnce`. A
 `StatSink` interface (`record(name, count)`) has two implementations: `LogSink`
 (console only) and `McSink` (fire-and-forget GET to the `g.gif` pixel using the
-`x_<group>/<name>=<count>` multiplier form). The active sink is selected on each
-record call from an in-memory consent cache, so granting consent mid-session
+`x_shippable/<name>=<count>` multiplier form). The active sink is selected on
+each record call from the live consent state, so granting consent mid-session
 takes effect immediately with no restart.
 
 ### Alternatives Considered
@@ -63,8 +63,8 @@ banner on `Welcome.tsx`.
 - **Server events:** handler → `recordStat`/`recordStatOnce` directly (no
   re-validation — internal trust boundary) → sink.
 - **Consent:** `Welcome` → `GET /api/stats/consent`; **Allow** →
-  `POST /api/stats/consent` → `grantConsent()` writes `settings` row + updates
-  in-memory cache → next `recordStat` routes to `McSink`.
+  `POST /api/stats/consent` → `grantConsent()` writes the `settings` row → the
+  next `recordStat` reads it and routes to `McSink`.
 - **Dedup:** `recordStatOnce` does `INSERT OR IGNORE` into `stat_dedup`; sink
   fires only when `changes() === 1`.
 
@@ -74,7 +74,7 @@ banner on `Welcome.tsx`.
 |-----------|----------------|
 | `recordStat` / `recordStatOnce` | Fire-and-forget recording entry points; never throw |
 | `StatSink` + `LogSink` / `McSink` | Sink interface and the two implementations |
-| Consent cache | `consentGranted()` / `grantConsent()`; in-memory, DB-backed |
+| Consent | `consentGranted()` / `grantConsent()`; reads/writes the `settings` row |
 | `installId()` | Lazily generates + persists an opaque UUID; used only as dedup key |
 | `KNOWN_STATS` | Allowlist of the 3 web-reportable stat names |
 | `reportStat` (web) | Fire-and-forget `fetch` to `/api/stats/event` |
@@ -123,5 +123,19 @@ for exact firing conditions.
 - **MC infra** — none needed: `g.gif` auto-creates the stat on first bump.
 - **Consent shape** — binary (`granted` / `undecided`); declining stores
   nothing, so there is no deny state or close button.
-- **Only loose end** — confirm `SHIPPABLE_STATS_GROUP` (default `shippable`)
-  does not collide with an existing MC group. Non-blocking for `LogSink`.
+- **MC group** — the group is hardcoded `shippable`; the `SHIPPABLE_STATS_GROUP`
+  env override was removed as unused (review feedback). Still owed before MC
+  consent is exercised in production: confirm `shippable` does not collide with
+  an existing MC group. Non-blocking for `LogSink`.
+
+## Follow-ups
+
+Tracked here rather than built now — see [`design.md`](./design.md) for the
+rationale that these are acceptable for a prototype:
+
+- **`stat_dedup` growth** — `recordStatOnce` writes one permanent row per
+  `(name, dedupKey)` and the table is never pruned, so the daily
+  `install-active` key grows it indefinitely. Cleanups, when this matters:
+  cap `dedupKey` length at the `/api/stats/event` edge, and add a retention
+  sweep (or fold the daily `install-active` marker into a single overwriting
+  `settings` row).

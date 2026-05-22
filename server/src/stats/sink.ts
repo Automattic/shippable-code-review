@@ -6,9 +6,13 @@ export interface StatSink {
   record(name: string, count: number): void;
 }
 
-// Group and stat names must be static slugs; cap them defensively.
+// MC buckets by exact stat name, so a name must be a short static slug — a
+// stray dynamic value would spawn a junk MC stat. Cap it defensively.
 const MAX_SLUG = 32;
 const slug = (s: string): string => s.slice(0, MAX_SLUG);
+
+// Fixed MC stats group for this product.
+const STATS_GROUP = "shippable";
 
 /** Writes the bump to the console. No network — used until the user consents. */
 export class LogSink implements StatSink {
@@ -24,14 +28,8 @@ export class LogSink implements StatSink {
  * cache. All network errors are swallowed.
  */
 export class McSink implements StatSink {
-  private readonly group: string;
-
-  constructor(env: NodeJS.ProcessEnv = process.env) {
-    this.group = slug(env.SHIPPABLE_STATS_GROUP || "shippable");
-  }
-
   record(name: string, count: number): void {
-    const url = `https://pixel.wp.com/g.gif?v=wpcom-no-pv&x_${this.group}/${slug(name)}=${count}`;
+    const url = `https://pixel.wp.com/g.gif?v=wpcom-no-pv&x_${STATS_GROUP}/${slug(name)}=${count}`;
     void fetch(url).catch(() => {});
   }
 }

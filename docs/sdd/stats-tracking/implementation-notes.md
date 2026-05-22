@@ -6,16 +6,16 @@ typecheck and lint clean; the full Playwright e2e suite (58 tests) passes.
 
 ## Deviations from Spec
 
-### Consent cache is lazy-loaded, not seeded at startup
-- **Spec said**: consent is "cached in memory" and read by `consentGranted()`;
-  it implied the cache is populated when the server starts.
-- **Implementation does**: `consentGranted()` lazy-loads the cache from the
-  `settings` table on its first call; there is no startup `loadConsent()` wiring.
-- **Reason**: a self-seeding cache removes a startup-ordering dependency and the
-  matching test hook. The first read costs one in-memory SQLite query; every
-  read after is cache-only, which is what the spec actually wanted.
-- **Impact**: none functional. `resetConsentForTests()` exists so tests can drop
-  the cache between cases.
+### Consent is read straight from the DB — no in-memory cache
+- **Spec said**: consent is "cached in memory" and read by `consentGranted()`.
+- **Implementation does**: `consentGranted()` reads the `settings` row on every
+  call; there is no cache.
+- **Reason**: review feedback. The cache existed only to spare the "stats hot
+  path" a DB round-trip, but stats fire at human pace and the lookup is a local
+  SQLite read — a few microseconds. The cache's one real cost was a test-only
+  `resetConsentForTests()` export in production code; dropping the cache removes
+  that, per the project's no-test-scaffolding-in-prod rule.
+- **Impact**: none functional. One settings-table `SELECT` per recorded stat.
 
 ### Install counters fire from `main()`, not from `createApp()`
 - **Spec/plan said**: the plan's Task 7 test phrased it as "`createApp()`
@@ -41,6 +41,19 @@ typecheck and lint clean; the full Playwright e2e suite (58 tests) passes.
   catalog wording) is the transition into reviewed.
 - **Impact**: `review-completed` reflects genuine completions, not toggle churn.
 
+### Stats reach sinks without test-only injection; `SHIPPABLE_STATS_GROUP` removed
+- **Spec/plan said**: the plan tested routing by swapping in recording sinks.
+- **Implementation does** (review feedback): the `setStatSinksForTests` /
+  `resetStatSinksForTests` hooks are gone from `record.ts`. Tests assert against
+  the real sinks — `LogSink` via a `console.log` spy, `McSink` via a stubbed
+  `fetch` — through a shared `captureStats()` / `startTestServer()` helper in
+  `server/src/test-helpers.ts`. The `SHIPPABLE_STATS_GROUP` env override was
+  also removed; `McSink`'s group is the hardcoded constant `shippable`.
+- **Reason**: keep test scaffolding out of production code, and a universal
+  server-test harness over per-file `listen()` boilerplate.
+- **Impact**: `record.ts`, `consent.ts`, and `sink.ts` export only product API;
+  five server test files moved onto the shared helper.
+
 ## Notes
 
 - **Files beyond the plan's explicit list**: `web/src/statsConsent.ts` (the web
@@ -53,6 +66,8 @@ typecheck and lint clean; the full Playwright e2e suite (58 tests) passes.
   welcome-page journeys. The shared fixture now installs
   `mockStatsConsent(page, "granted")` by default; banner tests override it to
   `"undecided"` before `visit()`.
-- **Open item (unchanged from the design)**: confirm `SHIPPABLE_STATS_GROUP`
-  (default `shippable`) does not collide with an existing MC group before MC
-  consent is exercised in production. Non-blocking — `LogSink` needs no MC setup.
+- **Open item**: the MC group is hardcoded `shippable`. Confirm it does not
+  collide with an existing MC group before MC consent is exercised in
+  production. Non-blocking — `LogSink` needs no MC setup.
+- **Follow-up**: `stat_dedup` is never pruned — see the "Follow-ups" section in
+  [`spec.md`](./spec.md) for the cleanup (cap `dedupKey` length, add retention).

@@ -3,11 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { initDb, resetForTests } from "./db/index.ts";
-import {
-  resetStatSinksForTests,
-  setStatSinksForTests,
-} from "./stats/record.ts";
-import type { StatSink } from "./stats/sink.ts";
+import { captureStats, type StatCapture } from "./test-helpers.ts";
 
 // streamReview reads the Anthropic credential and constructs the SDK client.
 // Stub both so the test exercises the stat wiring without a network call.
@@ -38,13 +34,6 @@ class MockAnthropic {
 
 vi.mock("@anthropic-ai/sdk", () => ({ default: MockAnthropic }));
 
-class RecordingSink implements StatSink {
-  calls: string[] = [];
-  record(name: string): void {
-    this.calls.push(name);
-  }
-}
-
 function mockRes(): ServerResponse {
   const res = new EventEmitter() as unknown as ServerResponse & {
     writableEnded: boolean;
@@ -63,17 +52,18 @@ function mockRes(): ServerResponse {
   return res;
 }
 
-let sink: RecordingSink;
+// Consent defaults to undecided, so recorded stats land on the LogSink and are
+// read back through the captured console.
+let stats: StatCapture;
 
 beforeEach(async () => {
   await initDb({ SHIPPABLE_DB_PATH: ":memory:" });
-  sink = new RecordingSink();
-  setStatSinksForTests(sink, sink);
+  stats = captureStats();
 });
 
 afterEach(() => {
+  stats.restore();
   resetForTests();
-  resetStatSinksForTests();
   vi.restoreAllMocks();
 });
 
@@ -85,14 +75,14 @@ describe("streamReview stats", () => {
       {} as IncomingMessage,
       mockRes(),
     );
-    expect(sink.calls).toContain("ai-review-request");
-    expect(sink.calls).toContain("comment-posted-ai");
+    expect(stats.names()).toContain("ai-review-request");
+    expect(stats.names()).toContain("comment-posted-ai");
   });
 
   it("records ai-review-request but not comment-posted-ai on an invalid body", async () => {
     const { streamReview } = await import("./review.ts");
     await streamReview("not json", {} as IncomingMessage, mockRes());
-    expect(sink.calls).toContain("ai-review-request");
-    expect(sink.calls).not.toContain("comment-posted-ai");
+    expect(stats.names()).toContain("ai-review-request");
+    expect(stats.names()).not.toContain("comment-posted-ai");
   });
 });
