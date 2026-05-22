@@ -108,7 +108,6 @@ export function ReviewPlanView({
         intent={plan.intent}
         changeset={changeset}
         onNavigate={onNavigate}
-        onFilterToCommit={onFilterToCommit}
         hideStaticFiles={hideStaticMap}
       />
       {hideStaticMap && status === "ready" && plan.entryPoints.length > 0 && (
@@ -117,6 +116,13 @@ export function ReviewPlanView({
           entryPoints={plan.entryPoints}
           onJumpToEntry={onJumpToEntry}
           onNavigate={onNavigate}
+        />
+      )}
+      {changeset?.commits && changeset.commits.length > 0 && (
+        <CommitsSection
+          changeset={changeset}
+          onNavigate={onNavigate}
+          onFilterToCommit={onFilterToCommit}
         />
       )}
       {hideStaticMap ? (
@@ -203,13 +209,11 @@ function IntentSection({
   intent,
   changeset,
   onNavigate,
-  onFilterToCommit,
   hideStaticFiles,
 }: {
   intent: Claim[];
   changeset?: ChangeSet;
   onNavigate?: (ev: EvidenceRef) => void;
-  onFilterToCommit?: (sha: string) => void;
   /** Suppress the structure-derived file list nested inside the PR body.
    *  When AI is enabled the same list reappears under "all files" at the
    *  bottom of the overlay, so showing it twice would just be noise. */
@@ -278,17 +282,28 @@ function IntentSection({
           )}
         </section>
       )}
-      {changeset && hasCommits && (
-        <section className="plan__sec">
-          <div className="plan__sec-h">Commits</div>
-          <CommitGroups
-            changeset={changeset}
-            onNavigate={onNavigate}
-            onFilterToCommit={onFilterToCommit}
-          />
-        </section>
-      )}
     </>
+  );
+}
+
+function CommitsSection({
+  changeset,
+  onNavigate,
+  onFilterToCommit,
+}: {
+  changeset: ChangeSet;
+  onNavigate?: (ev: EvidenceRef) => void;
+  onFilterToCommit?: (sha: string) => void;
+}) {
+  return (
+    <section className="plan__sec">
+      <div className="plan__sec-h">Commits</div>
+      <CommitGroups
+        changeset={changeset}
+        onNavigate={onNavigate}
+        onFilterToCommit={onFilterToCommit}
+      />
+    </section>
   );
 }
 
