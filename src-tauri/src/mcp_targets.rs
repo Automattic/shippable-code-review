@@ -4,9 +4,17 @@
 // Desktop, Cursor, Windsurf); Codex CLI uses TOML with `[mcp_servers.<name>]`
 // tables. Detection is best-effort: we look for the config dir or file.
 //
-// Writes preserve everything we don't touch: JSON via serde_json with
-// `preserve_order`, TOML via `toml_edit` which keeps comments and key
-// ordering intact.
+// Writes preserve everything we don't touch — including unrelated fields
+// inside our own `shippable` entry. If the user added `args`, `env`, or
+// custom fields to the entry, we update only `command` and leave the rest.
+// JSON preserves order via `serde_json` with `preserve_order`; TOML keeps
+// comments and key ordering via `toml_edit`.
+//
+// JSON vs TOML shape: fresh entries we create are minimal — `{ command }`
+// is enough for every client we target. JSON omits `type` because all four
+// JSON clients (Claude Code, Claude Desktop, Cursor, Windsurf) treat stdio
+// as the default; Codex's TOML schema is `#[serde(untagged)]` with no
+// `type` field at all (variant is discriminated by `command` vs `url`).
 
 use std::fs;
 use std::io::Write;
@@ -235,7 +243,17 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
     })
 }
 
-fn register_json(path: &Path, binary: &str) -> Result<Option<String>, String> {
+/// What `register_json` / `register_toml` did. `Unchanged` means the file
+/// was not rewritten — so reporting `NoChange` upstream is honest about
+/// mtime and content. `Added` and `Updated { previous }` both involve a
+/// write.
+enum WriteOutcome {
+    Unchanged,
+    Added,
+    Updated { previous: String },
+}
+
+fn register_json(path: &Path, binary: &str) -> Result<WriteOutcome, String> {
     let mut root: Value = match fs::read_to_string(path) {
         Ok(t) if t.trim().is_empty() => Value::Object(Map::new()),
         Ok(t) => serde_json::from_str(&t)
@@ -252,24 +270,44 @@ fn register_json(path: &Path, binary: &str) -> Result<Option<String>, String> {
         .as_object_mut()
         .ok_or_else(|| "mcpServers must be a JSON object".to_string())?;
 
-    let previous = servers
-        .get("shippable")
-        .and_then(|v| v.get("command"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    servers.insert(
-        "shippable".to_string(),
-        json!({ "type": "stdio", "command": binary, "args": [], "env": {} }),
-    );
+    let outcome = match servers.get_mut("shippable") {
+        Some(Value::Object(entry)) => {
+            let previous = entry
+                .get("command")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            match previous {
+                Some(p) if p == binary => return Ok(WriteOutcome::Unchanged),
+                Some(p) => {
+                    entry.insert("command".to_string(), Value::String(binary.to_string()));
+                    WriteOutcome::Updated { previous: p }
+                }
+                None => {
+                    entry.insert("command".to_string(), Value::String(binary.to_string()));
+                    WriteOutcome::Added
+                }
+            }
+        }
+        // Entry missing or not an object — replace/insert a fresh minimal
+        // record. We only ship `command` here because every JSON client we
+        // target (Claude Code, Claude Desktop, Cursor, Windsurf) treats
+        // stdio as the default and fills in `args`/`env` itself.
+        _ => {
+            servers.insert(
+                "shippable".to_string(),
+                json!({ "command": binary }),
+            );
+            WriteOutcome::Added
+        }
+    };
 
     let serialized = serde_json::to_string_pretty(&root)
         .map_err(|e| format!("could not serialize JSON: {e}"))?;
     write_atomic(path, &serialized)?;
-    Ok(previous)
+    Ok(outcome)
 }
 
-fn register_toml(path: &Path, binary: &str) -> Result<Option<String>, String> {
+fn register_toml(path: &Path, binary: &str) -> Result<WriteOutcome, String> {
     let mut doc: DocumentMut = match fs::read_to_string(path) {
         Ok(t) if t.trim().is_empty() => DocumentMut::new(),
         Ok(t) => t
@@ -287,22 +325,38 @@ fn register_toml(path: &Path, binary: &str) -> Result<Option<String>, String> {
     let servers = doc["mcp_servers"]
         .as_table_mut()
         .ok_or_else(|| "mcp_servers must be a TOML table".to_string())?;
-    servers.set_implicit(true);
 
-    let previous = servers
-        .get("shippable")
-        .and_then(|item| item.as_table())
-        .and_then(|t| t.get("command"))
-        .and_then(|item| item.as_str())
-        .map(|s| s.to_string());
-
-    let mut entry = Table::new();
-    entry.insert("command", toml_edit::value(binary));
-    entry.insert("args", toml_edit::value(toml_edit::Array::new()));
-    servers.insert("shippable", Item::Table(entry));
+    let outcome = match servers.get_mut("shippable").and_then(Item::as_table_mut) {
+        Some(entry) => {
+            let previous = entry
+                .get("command")
+                .and_then(Item::as_str)
+                .map(str::to_string);
+            match previous {
+                Some(p) if p == binary => return Ok(WriteOutcome::Unchanged),
+                Some(p) => {
+                    entry.insert("command", toml_edit::value(binary));
+                    WriteOutcome::Updated { previous: p }
+                }
+                None => {
+                    entry.insert("command", toml_edit::value(binary));
+                    WriteOutcome::Added
+                }
+            }
+        }
+        // Entry missing or not a table — insert a fresh one. Codex's TOML
+        // schema is `#[serde(untagged)]` with no `type` field; `args`
+        // defaults to `[]` when absent.
+        None => {
+            let mut entry = Table::new();
+            entry.insert("command", toml_edit::value(binary));
+            servers.insert("shippable", Item::Table(entry));
+            WriteOutcome::Added
+        }
+    };
 
     write_atomic(path, &doc.to_string())?;
-    Ok(previous)
+    Ok(outcome)
 }
 
 fn register_one(spec: &Spec, binary: &str) -> RegisterOutcome {
@@ -322,33 +376,19 @@ fn register_one(spec: &Spec, binary: &str) -> RegisterOutcome {
         Format::Toml => register_toml(&path, binary),
     };
     let config_path_str = path.to_string_lossy().into_owned();
-    match result {
-        Ok(Some(prev)) if prev == binary => RegisterOutcome {
-            id: spec.id.to_string(),
-            display_name: spec.display_name.to_string(),
-            config_path: config_path_str,
-            status: OutcomeStatus::NoChange,
+    let status = match result {
+        Ok(WriteOutcome::Unchanged) => OutcomeStatus::NoChange,
+        Ok(WriteOutcome::Added) => OutcomeStatus::Added,
+        Ok(WriteOutcome::Updated { previous }) => OutcomeStatus::Replaced {
+            previous_command: previous,
         },
-        Ok(Some(prev)) => RegisterOutcome {
-            id: spec.id.to_string(),
-            display_name: spec.display_name.to_string(),
-            config_path: config_path_str,
-            status: OutcomeStatus::Replaced {
-                previous_command: prev,
-            },
-        },
-        Ok(None) => RegisterOutcome {
-            id: spec.id.to_string(),
-            display_name: spec.display_name.to_string(),
-            config_path: config_path_str,
-            status: OutcomeStatus::Added,
-        },
-        Err(e) => RegisterOutcome {
-            id: spec.id.to_string(),
-            display_name: spec.display_name.to_string(),
-            config_path: config_path_str,
-            status: OutcomeStatus::Failed { error: e },
-        },
+        Err(e) => OutcomeStatus::Failed { error: e },
+    };
+    RegisterOutcome {
+        id: spec.id.to_string(),
+        display_name: spec.display_name.to_string(),
+        config_path: config_path_str,
+        status,
     }
 }
 
@@ -421,6 +461,221 @@ mod tests {
         write_atomic(&path, "{}").expect("write_atomic should succeed");
 
         assert!(path.exists());
+        let _ = fs::remove_file(&path);
+    }
+
+    fn matches_added(o: &WriteOutcome) -> bool {
+        matches!(o, WriteOutcome::Added)
+    }
+    fn matches_unchanged(o: &WriteOutcome) -> bool {
+        matches!(o, WriteOutcome::Unchanged)
+    }
+    fn matches_updated(o: &WriteOutcome, prev: &str) -> bool {
+        matches!(o, WriteOutcome::Updated { previous } if previous == prev)
+    }
+
+    #[test]
+    fn register_json_preserves_user_customizations() {
+        let path = unique_tmp_path("preserve-customizations.json");
+        // User has set custom args and env on the shippable entry, plus
+        // another unrelated server. None of this should disappear when we
+        // bump the binary path.
+        let existing = r#"{
+  "mcpServers": {
+    "shippable": {
+      "command": "/old/path/shippable-mcp",
+      "args": ["--verbose"],
+      "env": { "RUST_LOG": "debug" }
+    },
+    "other-server": { "command": "/path/to/other" }
+  }
+}"#;
+        fs::write(&path, existing).unwrap();
+
+        let outcome =
+            register_json(&path, "/new/path/shippable-mcp").expect("register should succeed");
+        assert!(
+            matches_updated(&outcome, "/old/path/shippable-mcp"),
+            "outcome = {:?}",
+            matches_unchanged(&outcome)
+        );
+
+        let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let shippable = v
+            .get("mcpServers")
+            .and_then(|s| s.get("shippable"))
+            .and_then(Value::as_object)
+            .expect("shippable entry");
+        assert_eq!(
+            shippable.get("command").and_then(Value::as_str),
+            Some("/new/path/shippable-mcp")
+        );
+        assert_eq!(
+            shippable
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|a| a.len()),
+            Some(1),
+            "args should be preserved"
+        );
+        assert_eq!(
+            shippable
+                .get("env")
+                .and_then(Value::as_object)
+                .and_then(|o| o.get("RUST_LOG"))
+                .and_then(Value::as_str),
+            Some("debug"),
+            "env should be preserved"
+        );
+        assert!(
+            v.get("mcpServers")
+                .and_then(|s| s.get("other-server"))
+                .is_some(),
+            "other servers should survive"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn register_json_unchanged_leaves_file_byte_identical() {
+        let path = unique_tmp_path("byte-identical.json");
+        let existing = r#"{
+  "mcpServers": {
+    "shippable": {
+      "command": "/path/to/binary",
+      "args": ["--quiet"]
+    }
+  }
+}"#;
+        fs::write(&path, existing).unwrap();
+        let mtime_before = fs::metadata(&path).unwrap().modified().unwrap();
+        let bytes_before = fs::read(&path).unwrap();
+
+        // Sleep enough that the filesystem mtime resolution can tick over,
+        // otherwise an erroneous write would still look unchanged here.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let outcome = register_json(&path, "/path/to/binary").expect("register should succeed");
+        assert!(matches_unchanged(&outcome));
+
+        let mtime_after = fs::metadata(&path).unwrap().modified().unwrap();
+        let bytes_after = fs::read(&path).unwrap();
+        assert_eq!(
+            mtime_before, mtime_after,
+            "mtime must not advance on NoChange"
+        );
+        assert_eq!(bytes_before, bytes_after, "file must be byte-identical");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn register_json_creates_minimal_entry_on_fresh_file() {
+        let path = unique_tmp_path("fresh.json");
+        let _ = fs::remove_file(&path);
+
+        let outcome = register_json(&path, "/new/binary").expect("register should succeed");
+        assert!(matches_added(&outcome));
+
+        let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let shippable = v
+            .get("mcpServers")
+            .and_then(|s| s.get("shippable"))
+            .and_then(Value::as_object)
+            .expect("shippable entry");
+        assert_eq!(
+            shippable.get("command").and_then(Value::as_str),
+            Some("/new/binary")
+        );
+        // Fresh entries should be minimal — no `type`, no empty `args`/`env`.
+        assert!(shippable.get("type").is_none());
+        assert!(shippable.get("args").is_none());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn register_toml_preserves_user_customizations_and_comments() {
+        let path = unique_tmp_path("preserve.toml");
+        let existing = r#"# Codex MCP servers
+[mcp_servers.shippable]
+command = "/old/path/shippable-mcp"
+args = ["--verbose"]
+# bumped because of issue 42
+startup_timeout_sec = 30
+
+[mcp_servers.other]
+command = "/other"
+"#;
+        fs::write(&path, existing).unwrap();
+
+        let outcome =
+            register_toml(&path, "/new/path/shippable-mcp").expect("register should succeed");
+        assert!(matches_updated(&outcome, "/old/path/shippable-mcp"));
+
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(
+            after.contains("startup_timeout_sec = 30"),
+            "user customization should survive\n---\n{after}"
+        );
+        assert!(
+            after.contains("--verbose"),
+            "args should be preserved\n---\n{after}"
+        );
+        assert!(
+            after.contains("# Codex MCP servers"),
+            "top-level comment should survive\n---\n{after}"
+        );
+        assert!(
+            after.contains("# bumped because of issue 42"),
+            "inline comment should survive\n---\n{after}"
+        );
+        assert!(
+            after.contains("\"/new/path/shippable-mcp\""),
+            "command should be updated\n---\n{after}"
+        );
+        assert!(
+            after.contains("[mcp_servers.other]"),
+            "other servers should survive\n---\n{after}"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn register_toml_unchanged_leaves_file_byte_identical() {
+        let path = unique_tmp_path("byte-identical.toml");
+        let existing = r#"[mcp_servers.shippable]
+command = "/path/to/binary"
+args = ["--quiet"]
+"#;
+        fs::write(&path, existing).unwrap();
+        let bytes_before = fs::read(&path).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let outcome = register_toml(&path, "/path/to/binary").expect("register should succeed");
+        assert!(matches_unchanged(&outcome));
+
+        let bytes_after = fs::read(&path).unwrap();
+        assert_eq!(
+            bytes_before, bytes_after,
+            "file must be byte-identical on NoChange"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn register_toml_creates_minimal_entry_on_fresh_file() {
+        let path = unique_tmp_path("fresh.toml");
+        let _ = fs::remove_file(&path);
+
+        let outcome = register_toml(&path, "/new/binary").expect("register should succeed");
+        assert!(matches_added(&outcome));
+
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(after.contains("[mcp_servers.shippable]"));
+        assert!(after.contains("\"/new/binary\""));
+        // Codex's untagged enum has no `type`; fresh entries shouldn't write one.
+        assert!(!after.contains("type ="));
+        // Empty args = [] is also unnecessary noise; serde default handles it.
+        assert!(!after.contains("args ="));
         let _ = fs::remove_file(&path);
     }
 }
