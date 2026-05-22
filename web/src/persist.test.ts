@@ -235,6 +235,38 @@ describe("persist v5 — empty / unusable changeset boot path", () => {
     expect(() => loadSession([cs])).not.toThrow();
     expect(loadSession([cs])).toEqual({ state: null, drafts: {} });
   });
+
+  it("falls back to the first hunk-bearing file when files[0] is hunkless and the persisted cursor is unresolvable", () => {
+    // Same shape as the boot crash: files[0] is a binary add, files[1]
+    // has real hunks. defaultCursor used to bail at `file.hunks[0]` and
+    // drop the entire session; it should seat the cursor on the next
+    // reviewable file instead.
+    const cs: ChangeSet = {
+      ...makeChangeset(),
+      files: [
+        { id: "cs1/img.png", path: "img.png", language: "text", status: "added", hunks: [] },
+        makeFile("cs1/text.ts", [makeHunk("cs1/text.ts#h1")]),
+      ],
+    };
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        v: 7,
+        cursor: { changesetId: "cs1", fileId: "cs1/gone", hunkId: "gone", lineIdx: 0 },
+        readLines: {},
+        reviewedFiles: [],
+        reviewedChangesets: {},
+        dismissedGuides: [],
+        drafts: {},
+        quiz: { questions: {}, answers: {}, active: null, asked: [] },
+      }),
+    );
+
+    const hydrated = loadSession([cs]);
+    expect(hydrated.state).not.toBeNull();
+    expect(hydrated.state?.cursor.fileId).toBe("cs1/text.ts");
+    expect(hydrated.state?.cursor.hunkId).toBe("cs1/text.ts#h1");
+  });
 });
 
 describe("v:7 quiz persistence", () => {

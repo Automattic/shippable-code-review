@@ -99,7 +99,14 @@ export function initialState(
   seed: ChangeSet[],
   seedInteractions: Record<string, Interaction[]> = {},
 ): ReviewState {
-  if (seed.length === 0) {
+  // Same anchoring rule as LOAD_CHANGESET: skip hunkless entries (binary
+  // adds, pure renames) and seat the cursor on the first reviewable hunk.
+  // A persisted recent pointing at a changeset with a hunkless files[0]
+  // used to crash here at boot.
+  const cs = seed[0];
+  const seatFile = cs?.files.find((f) => f.hunks.length > 0);
+  const seatHunk = seatFile?.hunks[0];
+  if (!cs || !seatFile || !seatHunk) {
     return {
       cursor: EMPTY_CURSOR,
       changesets: [],
@@ -117,13 +124,10 @@ export function initialState(
       quiz: EMPTY_QUIZ,
     };
   }
-  const cs = seed[0];
-  const file = cs.files[0];
-  const hunk = file.hunks[0];
   return {
-    cursor: { changesetId: cs.id, fileId: file.id, hunkId: hunk.id, lineIdx: 0 },
+    cursor: { changesetId: cs.id, fileId: seatFile.id, hunkId: seatHunk.id, lineIdx: 0 },
     changesets: seed,
-    readLines: addLine({}, hunk.id, 0),
+    readLines: addLine({}, seatHunk.id, 0),
     reviewedFiles: new Set(),
     reviewedChangesets: {},
     dismissedGuides: new Set(),

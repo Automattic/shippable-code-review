@@ -289,6 +289,29 @@ describe("initialState", () => {
     const s = initialState([a, b]);
     expect(s.changesets.map((c) => c.id)).toEqual(["a", "b"]);
   });
+
+  it("skips a hunkless first file and seats the cursor on the next file with hunks", () => {
+    // Repro for the boot-time blank-screen crash: a persisted recent
+    // pointed at a worktree whose alphabetically-first file was a binary
+    // add (hunks: []). initialState used to read `files[0].hunks[0].id`
+    // and throw, unmounting the whole React tree.
+    const cs = makeChangeset("bin", [
+      makeFile("bin/image.png", []),
+      makeFile("bin/text.ts", [makeHunk("bin/text.ts#h1", 2)]),
+    ]);
+    const s = initialState([cs]);
+    expect(s.cursor.changesetId).toBe("bin");
+    expect(s.cursor.fileId).toBe("bin/text.ts");
+    expect(s.cursor.hunkId).toBe("bin/text.ts#h1");
+    expect(s.readLines["bin/text.ts#h1"]).toEqual(new Set([0]));
+  });
+
+  it("returns the welcome shape when no file in the seed has hunks", () => {
+    const cs = makeChangeset("only-binary", [makeFile("only-binary/a.png", [])]);
+    const s = initialState([cs]);
+    expect(s.changesets).toEqual([]);
+    expect(s.cursor).toEqual({ changesetId: "", fileId: "", hunkId: "", lineIdx: 0 });
+  });
 });
 
 // ── MOVE_LINE ──────────────────────────────────────────────────────────────

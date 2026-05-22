@@ -324,14 +324,15 @@ function validateCursor(
 function defaultCursor(changesets: ChangeSet[]): Cursor | null {
   const cs = changesets[0];
   if (!cs) return null;
-  const file = cs.files[0];
-  if (!file) return null;
-  const hunk = file.hunks[0];
-  if (!hunk) return null;
+  // Skip hunkless entries (binary adds, pure renames) and anchor on the
+  // first reviewable hunk — same rule as the reducer's LOAD_CHANGESET.
+  const seatFile = cs.files.find((f) => f.hunks.length > 0);
+  const seatHunk = seatFile?.hunks[0];
+  if (!seatFile || !seatHunk) return null;
   return {
     changesetId: cs.id,
-    fileId: file.id,
-    hunkId: hunk.id,
+    fileId: seatFile.id,
+    hunkId: seatHunk.id,
     lineIdx: 0,
   };
 }
