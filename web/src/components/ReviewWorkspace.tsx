@@ -140,17 +140,18 @@ import {
   persistHideNonActiveComments,
 } from "../commentVisibility";
 
-// Test seam: assignable from tests to force the dice roll. Production never
-// sets `window.__shippableQuizRng`, so this stays Math.random in the wild;
-// the hook is intentionally readable in any mode so Playwright (which runs
-// against the dev server) can wire it up via addInitScript.
+// Test seam: assignable from tests / DevTools to force the dice roll.
+// Read on every call (not at module load) so manual debugging via
+// `window.__shippableQuizRng = () => 0` works without a reload.
 type QuizRng = () => number;
-const quizRng: QuizRng =
-  typeof window !== "undefined" &&
-  (window as unknown as { __shippableQuizRng?: QuizRng }).__shippableQuizRng
-    ? (window as unknown as { __shippableQuizRng?: QuizRng })
-        .__shippableQuizRng!
-    : Math.random;
+function quizRng(): number {
+  if (typeof window !== "undefined") {
+    const hook = (window as unknown as { __shippableQuizRng?: QuizRng })
+      .__shippableQuizRng;
+    if (hook) return hook();
+  }
+  return Math.random();
+}
 
 function dispatchToggleFileReviewedWithQuiz(
   dispatch: Dispatch<Action>,
