@@ -31,6 +31,10 @@ struct SidecarState {
 struct SidecarRuntime {
     port: Option<u16>,
     child: Option<CommandChild>,
+    /// Set once either the forwarder or the probe has decided the sidecar
+    /// won't come up. Coordinates between the two tasks so we emit
+    /// `shippable:sidecar-failed` at most once.
+    failed: bool,
 }
 
 #[tauri::command]
@@ -457,10 +461,18 @@ fn start_sidecar(app: tauri::AppHandle) {
     // can find the ephemeral port we picked. Gated here so the bare dev
     // server doesn't also write and clobber the file in mixed setups.
     .env("SHIPPABLE_WRITE_PORT_FILE", "1")
-    // Defense-in-depth: tauri-plugin-shell inherits the parent process's
-    // environment by default. Override ANTHROPIC_API_KEY to an empty string
-    // so a key set in the shell that launched the .app can't shadow the
-    // Keychain-backed credential the web app rehydrates via /api/auth/set.
+    // Force-empty ANTHROPIC_API_KEY in the sidecar's env. The sidecar
+    // inherits the parent shell's environment by default; if the user has
+    // this var set, the Anthropic SDK's implicit fallback (when no
+    // explicit key is passed) would silently authenticate with that key
+    // instead of the Keychain credential the web app rehydrates via
+    // /api/auth/set. We've audited the sidecar (`grep process.env
+    // server/src/`): `@anthropic-ai/sdk` is the only SDK present that
+    // silently falls back to a secret-bearing env var. PATH, HTTPS_PROXY,
+    // NO_PROXY, CLAUDE_MODEL, and the SHIPPABLE_* vars are intentional
+    // pass-through and don't carry credentials. If we ever add another
+    // SDK with that pattern (openai-sdk, aws-sdk, @octokit-auth-token),
+    // the corresponding env var should join this scrub list.
     .env("ANTHROPIC_API_KEY", "");
 
     // The Bun-compiled sidecar binary can't resolve the `library/` dir
@@ -509,32 +521,36 @@ fn start_sidecar(app: tauri::AppHandle) {
                 state.inner.lock().unwrap().child = Some(child);
             }
 
-            let app_for_task = app.clone();
+            // Two tasks coordinate to surface readiness:
+            //
+            // 1. Forwarder (this task): pipes the sidecar's stdout/stderr
+            //    into our logger and notifies on premature termination.
+            //    Does NOT decide readiness — log format is not part of any
+            //    contract.
+            // 2. Probe (next task, started below): opens TCP connections
+            //    to 127.0.0.1:port until one succeeds or a deadline
+            //    elapses. That's the actual moment the listener is
+            //    accepting connections.
+            //
+            // They coordinate via `SidecarState`: probe writes `port`,
+            // either task can mark `failed`. Whoever crosses the line
+            // first emits to the WebView; the other observes and stays
+            // quiet.
+            let app_for_forwarder = app.clone();
             tauri::async_runtime::spawn(async move {
-                let mut announced = false;
                 while let Some(event) = rx.recv().await {
                     match event {
                         CommandEvent::Stdout(bytes) => {
-                            let line = String::from_utf8_lossy(&bytes);
-                            let trimmed = line.trim_end();
-                            log::info!("[sidecar] {trimmed}");
-                            // Server logs this once `listen()` callback fires
-                            // (server/src/index.ts). That's the moment the
-                            // loopback port is actually accepting connections,
-                            // so it's the moment we can let the WebView probe.
-                            if !announced && trimmed.contains("[server] listening") {
-                                announced = true;
-                                let state = app_for_task.state::<SidecarState>();
-                                state.inner.lock().unwrap().port = Some(port);
-                                log::info!(
-                                    "sidecar listener ready on 127.0.0.1:{port} in {}ms",
-                                    startup.elapsed().as_millis()
-                                );
-                                let _ = app_for_task.emit("shippable:sidecar-ready", port);
-                            }
+                            log::info!(
+                                "[sidecar] {}",
+                                String::from_utf8_lossy(&bytes).trim_end()
+                            );
                         }
                         CommandEvent::Stderr(bytes) => {
-                            log::warn!("[sidecar] {}", String::from_utf8_lossy(&bytes).trim_end());
+                            log::warn!(
+                                "[sidecar] {}",
+                                String::from_utf8_lossy(&bytes).trim_end()
+                            );
                         }
                         CommandEvent::Terminated(payload) => {
                             log::warn!(
@@ -542,21 +558,41 @@ fn start_sidecar(app: tauri::AppHandle) {
                                 payload.code,
                                 payload.signal
                             );
-                            if !announced {
-                                let _ = app_for_task.emit(
+                            let claimed_failure = {
+                                let state = app_for_forwarder.state::<SidecarState>();
+                                let mut guard = state.inner.lock().unwrap();
+                                if guard.port.is_some() || guard.failed {
+                                    false
+                                } else {
+                                    guard.failed = true;
+                                    true
+                                }
+                            };
+                            if claimed_failure {
+                                let _ = app_for_forwarder.emit(
                                     "shippable:sidecar-failed",
                                     format!(
-                                        "sidecar exited before listening (code={:?}, signal={:?})",
+                                        "sidecar exited before listening \
+                                         (code={:?}, signal={:?})",
                                         payload.code, payload.signal
                                     ),
                                 );
                             }
                             break;
                         }
-                        _ => {}
+                        other => {
+                            // CommandEvent is `#[non_exhaustive]`; the
+                            // current set includes an `Error` variant
+                            // among others. Log unknown shapes instead of
+                            // swallowing so future-us has something to
+                            // grep for when the sidecar misbehaves.
+                            log::debug!("[sidecar] unhandled event: {other:?}");
+                        }
                     }
                 }
             });
+
+            spawn_sidecar_probe(app.clone(), port, startup);
         }
         Err(e) => {
             log::warn!(
@@ -566,6 +602,89 @@ fn start_sidecar(app: tauri::AppHandle) {
             let _ = app.emit("shippable:sidecar-failed", format!("spawn failed: {e}"));
         }
     }
+}
+
+/// Connect-loop on 127.0.0.1:<port> until the listener accepts or a hard
+/// deadline elapses. This is the *real* readiness signal; the previous
+/// substring-sniff on sidecar stdout coupled us to a log line and offered
+/// no timeout. A TCP probe also catches the port-allocation race: if
+/// another process grabbed the port between `find_free_port` and the
+/// sidecar binding, the sidecar crashes on EADDRINUSE and we surface that
+/// as a clear "didn't come up" error rather than an indefinite UI hang.
+fn spawn_sidecar_probe(app: tauri::AppHandle, port: u16, startup: Instant) {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::net::{SocketAddr, TcpStream};
+        use std::time::Duration;
+
+        let addr: SocketAddr = match format!("127.0.0.1:{port}").parse() {
+            Ok(a) => a,
+            Err(e) => {
+                log::warn!("sidecar probe: could not build socket addr: {e}");
+                return;
+            }
+        };
+        let deadline = startup + Duration::from_secs(15);
+
+        loop {
+            // The forwarder may have already marked failure; bail before
+            // we waste another connect attempt.
+            {
+                let state = app.state::<SidecarState>();
+                let guard = state.inner.lock().unwrap();
+                if guard.failed {
+                    return;
+                }
+                if guard.port.is_some() {
+                    return;
+                }
+            }
+
+            match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
+                Ok(_) => {
+                    let state = app.state::<SidecarState>();
+                    state.inner.lock().unwrap().port = Some(port);
+                    log::info!(
+                        "sidecar listener ready on 127.0.0.1:{port} in {}ms",
+                        startup.elapsed().as_millis()
+                    );
+                    let _ = app.emit("shippable:sidecar-ready", port);
+                    return;
+                }
+                Err(e) => {
+                    if Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    // Took too long. Most likely: another process grabbed
+                    // the port between find_free_port() and the sidecar
+                    // binding (so the sidecar crashed on EADDRINUSE), or
+                    // the sidecar hung during startup. Either way, the
+                    // user can't do anything but retry.
+                    let claimed_failure = {
+                        let state = app.state::<SidecarState>();
+                        let mut guard = state.inner.lock().unwrap();
+                        if guard.port.is_some() || guard.failed {
+                            false
+                        } else {
+                            guard.failed = true;
+                            true
+                        }
+                    };
+                    if claimed_failure {
+                        let msg = format!(
+                            "sidecar listener did not come up on 127.0.0.1:{port} \
+                             within 15s. Most likely the port was taken between us \
+                             and the sidecar, or the sidecar crashed during startup. \
+                             Last connect error: {e}"
+                        );
+                        log::warn!("{msg}");
+                        let _ = app.emit("shippable:sidecar-failed", msg);
+                    }
+                    return;
+                }
+            }
+        }
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
