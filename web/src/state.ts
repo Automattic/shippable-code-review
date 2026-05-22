@@ -86,7 +86,7 @@ export const EMPTY_CURSOR: Cursor = {
 };
 
 export const QUIZ_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
-export const QUIZ_DICE_THRESHOLD = 0.1;          // 1-in-10
+export const QUIZ_DICE_THRESHOLD = 1 / 3;        // 1-in-3
 
 const EMPTY_QUIZ: QuizState = {
   questions: {},
