@@ -1053,7 +1053,7 @@ describe("DiffView inline threads", () => {
     expect(regions[1].querySelector(".thread__start--cta")).toBeNull();
   });
 
-  it("observes inline regions via one live ResizeObserver and re-scrolls on resize", () => {
+  it("observes inline regions via one live ResizeObserver and re-scrolls a visible cursor on resize", () => {
     // jsdom has no ResizeObserver; install a stub that faithfully models
     // observe/unobserve/disconnect per instance, so the test can fire a resize
     // for a chosen node and assert which observer is watching which nodes.
@@ -1100,6 +1100,25 @@ describe("DiffView inline threads", () => {
       ) as HTMLElement;
       const scrollSpy = vi.spyOn(cursorLine, "scrollIntoView");
 
+      // The observer re-scrolls only a cursor still inside the viewport. jsdom
+      // has no layout, so place the cursor explicitly; with no scrollable
+      // ancestor findScrollContainer falls back to window (innerHeight 768).
+      const rect = (top: number, bottom: number) =>
+        ({
+          top,
+          bottom,
+          left: 0,
+          right: 0,
+          width: 0,
+          height: bottom - top,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      const cursorRect = vi
+        .spyOn(cursorLine, "getBoundingClientRect")
+        .mockReturnValue(rect(200, 220));
+
       // A reply landing rebuilds the view model — DiffView re-renders with a
       // fresh `inlineThreads` object but no cursor/hunk/file move. `991630b`
       // created the observer inside an effect keyed on `inlineThreads`, so each
@@ -1121,6 +1140,13 @@ describe("DiffView inline threads", () => {
       scrollSpy.mockClear();
       fireResize(hunkRegion);
       expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+
+      // A cursor the user has scrolled fully off-screen stays put: resizing a
+      // distant thread (deleting, expanding, replying) must not yank it back.
+      scrollSpy.mockClear();
+      cursorRect.mockReturnValue(rect(900, 920));
+      fireResize(region);
+      expect(scrollSpy).not.toHaveBeenCalled();
 
       // Unmount disconnects the observer; later resizes are inert.
       unmount();

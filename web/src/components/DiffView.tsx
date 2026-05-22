@@ -388,18 +388,16 @@ export function DiffView({
       if (!cursor) return;
       // Keep an on-screen cursor visible through a resize, but don't chase a
       // cursor the user has scrolled away from: deleting, expanding, or
-      // replying to a distant thread must not yank the viewport back. A
-      // resize can only displace a visible cursor by the region's own
-      // growth — always under one viewport — so anything farther than that
-      // means the user deliberately navigated elsewhere.
+      // replying to a thread must not yank the viewport back. A resize can
+      // nudge a still-visible cursor off the edge by the region's own growth,
+      // but a cursor fully off-screen is one the user left deliberately.
       const sc = findScrollContainer(cursor);
       const view =
         sc instanceof HTMLElement
           ? sc.getBoundingClientRect()
           : { top: 0, bottom: window.innerHeight };
       const r = cursor.getBoundingClientRect();
-      const vh = view.bottom - view.top;
-      if (r.bottom < view.top - vh || r.top > view.bottom + vh) return;
+      if (r.bottom <= view.top || r.top >= view.bottom) return;
       cursor.scrollIntoView({ block: "nearest" });
     }));
     ro.observe(el);
