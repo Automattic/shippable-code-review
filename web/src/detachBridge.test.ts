@@ -47,8 +47,10 @@ function makeSnapshot(wide: boolean, runs: PromptRunView[]): SidebarSnapshot {
     viewModel: buildSidebarViewModel({
       files,
       currentFileId: "f-a",
+      changesetId: "cs-test",
       readLines: {},
       reviewedFiles: new Set(),
+      quiz: { questions: {}, answers: {}, active: null, lastQuizAt: null, asked: [] },
       interactions,
     }),
     runs,
@@ -62,15 +64,19 @@ describe("detach bridge — sidebar snapshot stability", () => {
     const a = buildSidebarViewModel({
       files,
       currentFileId: "f-a",
+      changesetId: "cs-test",
       readLines: {},
       reviewedFiles: new Set(),
+      quiz: { questions: {}, answers: {}, active: null, lastQuizAt: null, asked: [] },
       interactions,
     });
     const b = buildSidebarViewModel({
       files,
       currentFileId: "f-a",
+      changesetId: "cs-test",
       readLines: {},
       reviewedFiles: new Set(),
+      quiz: { questions: {}, answers: {}, active: null, lastQuizAt: null, asked: [] },
       interactions,
     });
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
