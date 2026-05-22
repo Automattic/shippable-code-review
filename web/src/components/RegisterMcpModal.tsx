@@ -42,7 +42,7 @@ export function RegisterMcpModal({ snippets, onClose }: Props) {
       <div
         className="modal__box"
         onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: 640 }}
+        style={{ maxWidth: 720 }}
       >
         <header className="modal__h">
           <span className="modal__h-label">Set up Shippable MCP</span>
@@ -106,7 +106,7 @@ function SnippetRow({ snippet }: { snippet: McpSnippet }) {
       <div className="modal__hint" style={{ margin: "4px 0 6px" }}>
         {pasteHint}
       </div>
-      <CopyBlock text={snippet.value} multiline={snippet.kind !== "command"} />
+      <CopyBlock text={snippet.value} />
     </li>
   );
 }
@@ -117,13 +117,7 @@ function describeStatus(s: McpSnippet): string {
   return `currently points at ${s.current_command}`;
 }
 
-function CopyBlock({
-  text,
-  multiline,
-}: {
-  text: string;
-  multiline: boolean;
-}) {
+function CopyBlock({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -150,8 +144,12 @@ function CopyBlock({
           background: "var(--code-bg, rgba(0,0,0,0.04))",
           borderRadius: 4,
           fontSize: 12,
-          whiteSpace: multiline ? "pre" : "pre-wrap",
-          overflowX: "auto",
+          // pre-wrap keeps newlines/indent for JSON/TOML blocks, and lets
+          // command lines wrap on whitespace. overflow-wrap: anywhere is the
+          // escape hatch for long unbroken paths (e.g. the absolute sidecar
+          // path in `claude mcp add shippable -- /Applications/…/shippable-mcp`).
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
         }}
       >
         <code>{text}</code>

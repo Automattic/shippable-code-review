@@ -509,9 +509,16 @@ const BINARY_PLACEHOLDER: &str = "<path-to-shippable-mcp-from-packaged-build>";
 
 fn build_snippet(spec: &Spec, binary: &str) -> TargetSnippet {
     let path = config_path(spec).unwrap_or_default();
+    // Clients that ship their own MCP-install CLI get a one-line command;
+    // anything else gets a config-file snippet the user pastes themselves.
+    // Codex CLI: `codex mcp add <name> -- <command>` (in tree since 0.x;
+    // see openai/codex codex-rs/cli/src/mcp_cmd.rs).
     let body = match (spec.id, spec.format) {
         ("claude-code", _) => SnippetBody::Command {
             value: format!("claude mcp add shippable -- {binary}"),
+        },
+        ("codex", _) => SnippetBody::Command {
+            value: format!("codex mcp add shippable -- {binary}"),
         },
         (_, Format::Json) => SnippetBody::Json {
             value: format!(
@@ -525,9 +532,10 @@ fn build_snippet(spec: &Spec, binary: &str) -> TargetSnippet {
         },
     };
     let config_path = match spec.id {
-        // For the CLI command, the "path" we show is the CLI itself —
-        // users invoke it, they don't open a file.
+        // For CLI commands, the "path" we show is the CLI invocation point —
+        // users run a tool, they don't open a file.
         "claude-code" => "claude (CLI)".to_string(),
+        "codex" => "codex (CLI)".to_string(),
         _ => tildify(&path),
     };
     TargetSnippet {
