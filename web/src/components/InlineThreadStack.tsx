@@ -18,15 +18,20 @@ import { DetachedThreadCard } from "./DetachedThreadCard";
 
 /**
  * Wraps a jump action so a card's onClick ignores clicks that originated
- * inside an interactive sub-zone — the reply thread (`.thread`: replies,
- * expandable detail sections, links, the composer) or the note action
- * cluster (`.ainote__actions`) — or while the user is selecting text.
- * Only clicks on the card's own chrome jump to the line.
+ * inside an interactive or readable sub-zone rather than the card's own
+ * chrome — the reply thread (`.thread`: replies, links, the composer), the
+ * action cluster (`.ainote__actions`) or the expandable detail body
+ * (`.ainote__detail`) — or while the user is selecting text. The summary
+ * row stays clickable so the card's headline still jumps to the line.
  */
 function cardClick(jump: () => void) {
   return (e: MouseEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest("button, textarea, input, .thread, .ainote__actions"))
+    if (
+      target.closest(
+        "button, textarea, input, .thread, .ainote__actions, .ainote__detail",
+      )
+    )
       return;
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed && sel.toString().length > 0) return;
