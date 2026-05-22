@@ -85,6 +85,7 @@ vi.mock("../usePlan", () => ({
     status: "idle",
     error: undefined,
     generate: () => undefined,
+    regenerate: () => undefined,
   }),
 }));
 

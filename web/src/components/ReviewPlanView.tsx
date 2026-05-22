@@ -23,17 +23,24 @@ interface Props {
   onJumpToEntry?: (entry: EntryPoint) => void;
   /** Called when any evidence reference is clicked (file, hunk, symbol). */
   onNavigate?: (ev: EvidenceRef) => void;
-  /** "idle" before the user has opted in; "loading" while in flight;
+  /** "idle" before any AI request has run; "loading" while in flight;
    *  "ready" once the AI plan has replaced the rule-based one;
    *  "fallback" if the request errored. Omit for the gallery / rule-only
    *  rendering path. */
   status?: "idle" | "loading" | "ready" | "fallback";
   /** Error message to surface when status === "fallback". */
   error?: string;
-  /** Wire this up to whatever sends the diff to the AI provider. The button
-   *  is shown when status === "idle" — we don't auto-send because the diff
-   *  leaves the user's machine. */
-  onGenerateAi?: () => void;
+  /** Whether an Anthropic credential is configured. Drives the new
+   *  AI-forward layout (hide static map while loading and once AI is
+   *  ready) plus the privacy chip and Regenerate button. When false the
+   *  view falls back to the original full-Map layout. */
+  aiEnabled?: boolean;
+  /** Click handler for the Regenerate button. Shown only when
+   *  `aiEnabled` and `status` is "ready" or "fallback". */
+  onRegenerate?: () => void;
+  /** Click handler for the "Configure API key" link surfaced in the
+   *  no-key path. Should open the credentials/settings panel. */
+  onConfigureKey?: () => void;
   changeset?: ChangeSet;
   /** Reload the diff filtered to a single commit. When provided, commit SHAs
    *  in the per-commit list render as clickable buttons. */
@@ -46,7 +53,9 @@ export function ReviewPlanView({
   onNavigate,
   status,
   error,
-  onGenerateAi,
+  aiEnabled,
+  onRegenerate,
+  onConfigureKey,
   changeset,
   onFilterToCommit,
 }: Props) {
@@ -60,26 +69,28 @@ export function ReviewPlanView({
     [changeset?.graph, plan, showDiagram, includeMarkdown],
   );
 
+  // Auto-fire hides the static analysis once AI has succeeded; the diff
+  // structure is busy and competes with the AI claims. While loading it is
+  // hidden too, so the first paint is just headline + PR body + commits.
+  // On fallback we revert to today's layout so the user is not left blank.
+  const hideStaticMap =
+    !!aiEnabled && (status === "loading" || status === "ready");
+
   return (
     <section className="plan">
       <header className="plan__h">
-        <div className="plan__h-label">plan</div>
-        <h1 className="plan__headline">{plan.headline}</h1>
-        {status === "idle" && onGenerateAi && (
-          <div className="plan__h-action">
-            <button
-              type="button"
-              className="plan__h-btn"
-              onClick={onGenerateAi}
-              title="Sends the diff content to Claude over the network"
-            >
-              Send to Claude
-            </button>
-            <span className="plan__h-hint">
-              the full diff will leave your machine
-            </span>
+        <div className="plan__h-row">
+          <div className="plan__h-titles">
+            <div className="plan__h-label">plan</div>
+            <h1 className="plan__headline">{plan.headline}</h1>
           </div>
-        )}
+          <PlanHeaderActions
+            aiEnabled={aiEnabled}
+            status={status}
+            onRegenerate={onRegenerate}
+            onConfigureKey={onConfigureKey}
+          />
+        </div>
         {status === "loading" && (
           <div className="plan__h-status">Claude is reading the diff…</div>
         )}
@@ -98,20 +109,94 @@ export function ReviewPlanView({
         changeset={changeset}
         onNavigate={onNavigate}
         onFilterToCommit={onFilterToCommit}
+        hideStaticFiles={hideStaticMap}
       />
-      <MapSection
-        map={plan.map}
-        entryPoints={plan.entryPoints}
-        onJumpToEntry={onJumpToEntry}
-        onNavigate={onNavigate}
-        showDiagram={showDiagram}
-        onToggleDiagram={() => setShowDiagram((value) => !value)}
-        diagram={diagram}
-        includeMarkdown={includeMarkdown}
-        onToggleMarkdown={() => setIncludeMarkdown((value) => !value)}
-      />
+      {hideStaticMap && status === "ready" && plan.entryPoints.length > 0 && (
+        <EntryPointsSection
+          map={plan.map}
+          entryPoints={plan.entryPoints}
+          onJumpToEntry={onJumpToEntry}
+          onNavigate={onNavigate}
+        />
+      )}
+      {hideStaticMap ? (
+        status === "ready" && (
+          <CollapsedMapSection
+            map={plan.map}
+            entryPoints={plan.entryPoints}
+            onNavigate={onNavigate}
+            showDiagram={showDiagram}
+            onToggleDiagram={() => setShowDiagram((value) => !value)}
+            diagram={diagram}
+            includeMarkdown={includeMarkdown}
+            onToggleMarkdown={() => setIncludeMarkdown((value) => !value)}
+          />
+        )
+      ) : (
+        <MapSection
+          map={plan.map}
+          entryPoints={plan.entryPoints}
+          onJumpToEntry={onJumpToEntry}
+          onNavigate={onNavigate}
+          showDiagram={showDiagram}
+          onToggleDiagram={() => setShowDiagram((value) => !value)}
+          diagram={diagram}
+          includeMarkdown={includeMarkdown}
+          onToggleMarkdown={() => setIncludeMarkdown((value) => !value)}
+        />
+      )}
     </section>
   );
+}
+
+function PlanHeaderActions({
+  aiEnabled,
+  status,
+  onRegenerate,
+  onConfigureKey,
+}: {
+  aiEnabled?: boolean;
+  status?: Props["status"];
+  onRegenerate?: () => void;
+  onConfigureKey?: () => void;
+}) {
+  if (aiEnabled) {
+    const canRegenerate =
+      (status === "ready" || status === "fallback") && !!onRegenerate;
+    return (
+      <div className="plan__h-meta">
+        <span
+          className="plan__chip plan__chip--ai"
+          title="Diffs are sent to Claude when you open a review"
+        >
+          Auto-sending diff to Claude
+        </span>
+        {canRegenerate && (
+          <button
+            type="button"
+            className="plan__h-btn"
+            onClick={onRegenerate}
+          >
+            regenerate
+          </button>
+        )}
+      </div>
+    );
+  }
+  if (status === "idle" && onConfigureKey) {
+    return (
+      <div className="plan__h-meta">
+        <button
+          type="button"
+          className="plan__h-link"
+          onClick={onConfigureKey}
+        >
+          configure api key to enable AI plan
+        </button>
+      </div>
+    );
+  }
+  return null;
 }
 
 function IntentSection({
@@ -119,11 +204,16 @@ function IntentSection({
   changeset,
   onNavigate,
   onFilterToCommit,
+  hideStaticFiles,
 }: {
   intent: Claim[];
   changeset?: ChangeSet;
   onNavigate?: (ev: EvidenceRef) => void;
   onFilterToCommit?: (sha: string) => void;
+  /** Suppress the structure-derived file list nested inside the PR body.
+   *  When AI is enabled the same list reappears under "all files" at the
+   *  bottom of the overlay, so showing it twice would just be noise. */
+  hideStaticFiles?: boolean;
 }) {
   const hasClaims = intent.length > 0;
   // `prSource.body` is the author-written PR description. Keep it visible
@@ -168,7 +258,7 @@ function IntentSection({
               imageAssets={changeset?.imageAssets}
             />
           </div>
-          {changeset && !hasCommits && (
+          {changeset && !hasCommits && !hideStaticFiles && (
             <DescriptionFiles changeset={changeset} onNavigate={onNavigate} />
           )}
         </section>
@@ -183,7 +273,7 @@ function IntentSection({
               imageAssets={changeset?.imageAssets}
             />
           </div>
-          {changeset && !hasCommits && (
+          {changeset && !hasCommits && !hideStaticFiles && (
             <DescriptionFiles changeset={changeset} onNavigate={onNavigate} />
           )}
         </section>
@@ -386,6 +476,113 @@ function ClaimRow({
         ))}
       </span>
     </li>
+  );
+}
+
+function EntryPointsSection({
+  map,
+  entryPoints,
+  onJumpToEntry,
+  onNavigate,
+}: {
+  map: StructureMap;
+  entryPoints: EntryPoint[];
+  onJumpToEntry?: (entry: EntryPoint) => void;
+  onNavigate?: (ev: EvidenceRef) => void;
+}) {
+  const ranked = entryPoints.filter((e) => e.reason.evidence.length > 0);
+  if (ranked.length === 0) return null;
+  return (
+    <section className="plan__sec">
+      <div className="plan__sec-h">Where to start</div>
+      <ol className="plan__files plan__files--priority">
+        {ranked.map((entry, i) => {
+          const file = map.files.find((x) => x.fileId === entry.fileId);
+          return (
+            <EntryFileRow
+              key={entry.fileId}
+              rank={i + 1}
+              entry={entry}
+              file={file}
+              defines={file ? symbolsDefinedIn(map, file.path) : []}
+              onJumpToEntry={onJumpToEntry}
+              onNavigate={onNavigate}
+            />
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
+function CollapsedMapSection({
+  map,
+  entryPoints,
+  onNavigate,
+  showDiagram,
+  onToggleDiagram,
+  diagram,
+  includeMarkdown,
+  onToggleMarkdown,
+}: {
+  map: StructureMap;
+  entryPoints: EntryPoint[];
+  onNavigate?: (ev: EvidenceRef) => void;
+  showDiagram: boolean;
+  onToggleDiagram: () => void;
+  diagram: ReturnType<typeof buildPlanDiagram> | null;
+  includeMarkdown: boolean;
+  onToggleMarkdown: () => void;
+}) {
+  // The "all files" disclosure shows the rest of the static map below the AI
+  // entry points. Ranked entries are already promoted above, so list only the
+  // remainder here to avoid duplicates.
+  const entryFileIds = new Set(
+    entryPoints
+      .filter((e) => e.reason.evidence.length > 0)
+      .map((e) => e.fileId),
+  );
+  const otherFiles = map.files.filter((f) => !entryFileIds.has(f.fileId));
+  if (otherFiles.length === 0 && !diagram) return null;
+  return (
+    <section className="plan__sec">
+      <details className="plan__allfiles">
+        <summary className="plan__allfiles-summary">
+          all files ({map.files.length})
+        </summary>
+        <div className="plan__allfiles-body">
+          <div className="plan__sec-head plan__sec-head--inline">
+            <button
+              type="button"
+              className="plan__sec-btn"
+              onClick={onToggleDiagram}
+            >
+              {showDiagram ? "hide diagram" : "generate diagram"}
+            </button>
+          </div>
+          {otherFiles.length > 0 && (
+            <ul className="plan__files">
+              {otherFiles.map((f) => (
+                <FileRow
+                  key={f.fileId}
+                  file={f}
+                  defines={symbolsDefinedIn(map, f.path)}
+                  onNavigate={onNavigate}
+                />
+              ))}
+            </ul>
+          )}
+          {diagram && (
+            <PlanDiagramView
+              diagram={diagram}
+              includeMarkdown={includeMarkdown}
+              onToggleMarkdown={onToggleMarkdown}
+              onNavigate={onNavigate}
+            />
+          )}
+        </div>
+      </details>
+    </section>
   );
 }
 

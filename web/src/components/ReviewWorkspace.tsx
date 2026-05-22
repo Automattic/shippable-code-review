@@ -24,6 +24,7 @@ import {
 } from "../definitionNav";
 import { maybeSuggest } from "../guide";
 import { usePlan } from "../usePlan";
+import { PlanProvider, useSetActivePlanCs } from "../PlanProvider";
 import { Sidebar } from "./Sidebar";
 import { DiffView } from "./DiffView";
 import { StatusBar } from "./StatusBar";
@@ -203,7 +204,19 @@ interface Props {
   liveReloadBar?: ReactNode;
 }
 
-export function ReviewWorkspace({
+export function ReviewWorkspace(props: Props) {
+  // The plan cache and auto-fire coordinator must wrap the workspace because
+  // both the overlay and the file sidebar consume it. Mounted here rather
+  // than higher up so the cache resets when the workspace itself unmounts
+  // (e.g. switching back to the load picker).
+  return (
+    <PlanProvider>
+      <ReviewWorkspaceInner {...props} />
+    </PlanProvider>
+  );
+}
+
+function ReviewWorkspaceInner({
   state,
   dispatch,
   rawDispatch,
@@ -495,7 +508,37 @@ export function ReviewWorkspace({
     status: planStatus,
     error: planError,
     generate: generatePlan,
+    regenerate: regeneratePlan,
   } = usePlan(cs);
+  const setActivePlanCs = useSetActivePlanCs();
+  // Auto-fire: as soon as a ChangeSet is in view and an Anthropic credential
+  // is configured, ask the cache to load the AI plan. The trigger is
+  // idempotent — if this CS is already cached (any status), it is a no-op.
+  // We do NOT wait for the overlay to be open, so the sidebar can use the
+  // plan even when the overlay is dismissed.
+  useEffect(() => {
+    if (!hasAnthropicCredential) return;
+    generatePlan();
+  }, [cs, hasAnthropicCredential, generatePlan]);
+  // Auto-retry on fallback: when the user opens the plan overlay and the
+  // current CS sits in a fallback state, silently retry. We watch a
+  // false→true transition on showPlan rather than firing on every render
+  // so a user staring at the fallback view does not get a re-fire storm.
+  const prevShowPlanRef = useRef(false);
+  useEffect(() => {
+    const opened = showPlan && !prevShowPlanRef.current;
+    prevShowPlanRef.current = showPlan;
+    if (opened && hasAnthropicCredential && planStatus === "fallback") {
+      regeneratePlan();
+    }
+  }, [showPlan, hasAnthropicCredential, planStatus, regeneratePlan]);
+  // Tell the provider which CS the user is actively viewing so it can abort
+  // a Regenerate request that is no longer relevant.
+  useEffect(() => {
+    setActivePlanCs(cs);
+    return () => setActivePlanCs(null);
+  }, [cs, setActivePlanCs]);
+  const [showRegenConfirm, setShowRegenConfirm] = useState(false);
   useEffect(() => {
     if (planQuestions.length === 0) return;
     dispatch({ type: "STORE_QUESTIONS", changesetId: cs.id, questions: planQuestions });
@@ -2078,7 +2121,9 @@ export function ReviewWorkspace({
               changeset={cs}
               status={planStatus}
               error={planError}
-              onGenerateAi={generatePlan}
+              aiEnabled={hasAnthropicCredential}
+              onRegenerate={() => setShowRegenConfirm(true)}
+              onConfigureKey={() => setShowSettings(true)}
               onJumpToEntry={(entry) => {
                 const f = cs.files.find((ff) => ff.id === entry.fileId);
                 if (!f) return;
@@ -2127,6 +2172,18 @@ export function ReviewWorkspace({
             />
           </div>
         </div>
+      )}
+      {showRegenConfirm && (
+        <ConfirmModal
+          title="regenerate plan"
+          message="Send the diff to Claude again? This uses API tokens."
+          confirmLabel="send"
+          onConfirm={() => {
+            regeneratePlan();
+            setShowRegenConfirm(false);
+          }}
+          onCancel={() => setShowRegenConfirm(false)}
+        />
       )}
       <CodeRunner
         currentFilePath={file.path}

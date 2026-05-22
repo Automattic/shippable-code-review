@@ -600,7 +600,7 @@ function App() {
                 ? "HTTP 502 - upstream plan generation failed"
                 : undefined
             }
-            onGenerateAi={() => {}}
+            onConfigureKey={() => {}}
           />
         </div>
       </div>

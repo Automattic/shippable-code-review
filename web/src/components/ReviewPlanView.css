@@ -33,28 +33,65 @@
 .plan__h-status--err {
   color: var(--warn, #b8860b);
 }
-.plan__h-action {
-  margin-top: 8px;
+.plan__h-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.plan__h-titles {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.plan__h-meta {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  padding-top: 2px;
 }
 .plan__h-btn {
   font-family: var(--font-mono);
-  font-size: 12px;
-  padding: 4px 10px;
+  font-size: 11px;
+  padding: 3px 9px;
   border: 1px solid var(--border);
   background: var(--bg-2);
   color: var(--fg);
   border-radius: 3px;
   cursor: pointer;
+  text-transform: lowercase;
 }
 .plan__h-btn:hover {
   background: var(--bg-1);
+  border-color: var(--border-active);
 }
-.plan__h-hint {
+.plan__h-link {
+  font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--fg-mute);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.plan__h-link:hover {
+  color: var(--fg);
+}
+.plan__chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-3);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.plan__chip--ai {
+  border-color: var(--border-active, var(--border));
+  color: var(--fg-dim);
 }
 .plan__sec {
   padding: 14px 20px;
@@ -385,4 +422,42 @@
 .plan__map-empty {
   margin-bottom: 10px;
   font-size: 12px;
+}
+
+/* "all files" disclosure surfaced under the AI plan */
+.plan__allfiles {
+  margin: 0;
+}
+.plan__allfiles > summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-mute);
+  user-select: none;
+}
+.plan__allfiles > summary::-webkit-details-marker {
+  display: none;
+}
+.plan__allfiles > summary::before {
+  content: "▸";
+  font-size: 9px;
+  width: 10px;
+  display: inline-block;
+}
+.plan__allfiles[open] > summary::before {
+  content: "▾";
+}
+.plan__allfiles > summary:hover {
+  color: var(--fg-dim);
+}
+.plan__allfiles-body {
+  margin-top: 10px;
+}
+.plan__sec-head--inline {
+  justify-content: flex-end;
 }

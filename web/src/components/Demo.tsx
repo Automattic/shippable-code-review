@@ -1332,7 +1332,11 @@ function WorkspaceStage({
   const plan = useMemo(() => planReview(cs), [cs]);
   const planStatus = "ready" as const;
   const planError: string | undefined = undefined;
-  const generatePlan = () => {};
+  // Demo simulates an already-generated AI plan; no actual fetch happens.
+  // Wiring the props as no-ops keeps the layout matching production (chip,
+  // regenerate button) without firing network calls.
+  const handleRegeneratePlan = () => {};
+  const handleConfigureKey = () => {};
 
   // Inline-runner request — populated when the frame seeds an inline runner,
   // and re-populated by the `e` keybinding (see RUN_SELECTION below).
@@ -1905,7 +1909,9 @@ function WorkspaceStage({
               changeset={cs}
               status={planStatus}
               error={planError}
-              onGenerateAi={generatePlan}
+              aiEnabled
+              onRegenerate={handleRegeneratePlan}
+              onConfigureKey={handleConfigureKey}
               onJumpToEntry={(entry) => {
                 const f = cs.files.find((ff) => ff.id === entry.fileId);
                 if (!f) return;
