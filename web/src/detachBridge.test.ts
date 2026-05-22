@@ -50,7 +50,7 @@ function makeSnapshot(wide: boolean, runs: PromptRunView[]): SidebarSnapshot {
       changesetId: "cs-test",
       readLines: {},
       reviewedFiles: new Set(),
-      quiz: { questions: {}, answers: {}, active: null, lastQuizAt: null, asked: [] },
+      quiz: { questions: {}, answers: {}, active: null, asked: [] },
       interactions,
     }),
     runs,
@@ -67,7 +67,7 @@ describe("detach bridge — sidebar snapshot stability", () => {
       changesetId: "cs-test",
       readLines: {},
       reviewedFiles: new Set(),
-      quiz: { questions: {}, answers: {}, active: null, lastQuizAt: null, asked: [] },
+      quiz: { questions: {}, answers: {}, active: null, asked: [] },
       interactions,
     });
     const b = buildSidebarViewModel({
@@ -76,7 +76,7 @@ describe("detach bridge — sidebar snapshot stability", () => {
       changesetId: "cs-test",
       readLines: {},
       reviewedFiles: new Set(),
-      quiz: { questions: {}, answers: {}, active: null, lastQuizAt: null, asked: [] },
+      quiz: { questions: {}, answers: {}, active: null, asked: [] },
       interactions,
     });
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));

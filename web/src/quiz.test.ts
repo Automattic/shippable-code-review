@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { eligibleQuestionsForFile, pickRandomQuestion } from "./quiz";
+import {
+  eligibleQuestionsForFile,
+  pickNextForFile,
+  pickNextForChangeset,
+} from "./quiz";
 import type { ChangeSet, Question, QuestionTarget } from "./types";
 
 function q(id: string, target: QuestionTarget): Question {
@@ -64,15 +68,50 @@ describe("eligibleQuestionsForFile", () => {
   });
 });
 
-describe("pickRandomQuestion", () => {
-  it("picks deterministically given an rng", () => {
-    const qs = [q("q-1", { kind: "changeset" }), q("q-2", { kind: "changeset" }), q("q-3", { kind: "changeset" })];
-    expect(pickRandomQuestion(qs, () => 0)?.id).toBe("q-1");
-    expect(pickRandomQuestion(qs, () => 0.5)?.id).toBe("q-2");
-    expect(pickRandomQuestion(qs, () => 0.99)?.id).toBe("q-3");
+describe("pickNextForFile", () => {
+  it("returns the head of the eligible queue in emission order", () => {
+    const all = [
+      q("q-file", { kind: "file", path: "a.ts" }),
+      q("q-hunk", { kind: "hunk", hunkId: "h-a-1" }),
+    ];
+    expect(pickNextForFile(all, cs, fileA.id, [])?.id).toBe("q-file");
   });
 
-  it("returns null when given an empty array", () => {
-    expect(pickRandomQuestion([], Math.random)).toBeNull();
+  it("skips asked questions", () => {
+    const all = [
+      q("q-file", { kind: "file", path: "a.ts" }),
+      q("q-hunk", { kind: "hunk", hunkId: "h-a-1" }),
+    ];
+    expect(pickNextForFile(all, cs, fileA.id, ["q-file"])?.id).toBe("q-hunk");
+  });
+
+  it("returns null when nothing eligible remains", () => {
+    const all = [q("q-cs", { kind: "changeset" })];
+    expect(pickNextForFile(all, cs, fileA.id, [])).toBeNull();
+  });
+});
+
+describe("pickNextForChangeset", () => {
+  it("prefers the changeset-level question first", () => {
+    const all = [
+      q("q-file", { kind: "file", path: "a.ts" }),
+      q("q-cs", { kind: "changeset" }),
+      q("q-hunk", { kind: "hunk", hunkId: "h-a-1" }),
+    ];
+    expect(pickNextForChangeset(all, [])?.id).toBe("q-cs");
+  });
+
+  it("falls back to the first remaining non-changeset question", () => {
+    const all = [
+      q("q-cs", { kind: "changeset" }),
+      q("q-file", { kind: "file", path: "a.ts" }),
+      q("q-hunk", { kind: "hunk", hunkId: "h-a-1" }),
+    ];
+    expect(pickNextForChangeset(all, ["q-cs"])?.id).toBe("q-file");
+  });
+
+  it("returns null when everything is asked", () => {
+    const all = [q("q-cs", { kind: "changeset" })];
+    expect(pickNextForChangeset(all, ["q-cs"])).toBeNull();
   });
 });

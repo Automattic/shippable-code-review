@@ -22,6 +22,10 @@ export function QuizPanel({ changesetId, quiz, onSubmit, onDismiss, onSelfEval }
     : null;
   const activeAnswer = active ? quiz.answers[active.id] ?? null : null;
   const showActive = !!active && !(activeAnswer && activeAnswer.selfEval);
+  const inSequence = !!quiz.active && quiz.active.mode === "sequence";
+  const sequencePosition = inSequence
+    ? `Question ${answered + 1} of ${questions.length}`
+    : null;
 
   const viewing = viewingId ? questions.find((q) => q.id === viewingId) ?? null : null;
   const viewingAnswer = viewing ? quiz.answers[viewing.id] ?? null : null;
@@ -52,9 +56,14 @@ export function QuizPanel({ changesetId, quiz, onSubmit, onDismiss, onSelfEval }
       </header>
 
       {showActive && active && (
-        activeAnswer
-          ? <Reveal q={active} answer={activeAnswer} onSelfEval={onSelfEval} />
-          : <Active q={active} onSubmit={onSubmit} onDismiss={onDismiss} />
+        <>
+          {sequencePosition && (
+            <div className="quiz-panel__sequence">{sequencePosition}</div>
+          )}
+          {activeAnswer
+            ? <Reveal q={active} answer={activeAnswer} onSelfEval={onSelfEval} />
+            : <Active q={active} onSubmit={onSubmit} onDismiss={onDismiss} />}
+        </>
       )}
 
       {!showActive && expanded && !viewing && (

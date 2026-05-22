@@ -51,7 +51,7 @@ describe("persist v5 — snapshot shape only contains progress fields", () => {
     const state = initialState([cs]);
     const snap = buildSnapshot(state, { "some:key": "draft text" });
 
-    expect(snap.v).toBe(6);
+    expect(snap.v).toBe(7);
     expect(snap.cursor).toEqual(state.cursor);
     expect(snap.readLines).toBeDefined();
     expect(snap.reviewedFiles).toBeDefined();
@@ -196,14 +196,14 @@ describe("persist v5 — empty / unusable changeset boot path", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        v: 6,
+        v: 7,
         cursor: { changesetId: "wt-clean", fileId: "x", hunkId: "y", lineIdx: 0 },
         readLines: {},
         reviewedFiles: [],
         reviewedChangesets: {},
         dismissedGuides: [],
         drafts: {},
-        quiz: { questions: {}, answers: {}, active: null, lastQuizAt: null, asked: [] },
+        quiz: { questions: {}, answers: {}, active: null, asked: [] },
       }),
     );
 
@@ -221,14 +221,14 @@ describe("persist v5 — empty / unusable changeset boot path", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        v: 6,
+        v: 7,
         cursor: { changesetId: "cs1", fileId: "cs1/f1", hunkId: "missing", lineIdx: 0 },
         readLines: {},
         reviewedFiles: [],
         reviewedChangesets: {},
         dismissedGuides: [],
         drafts: {},
-        quiz: { questions: {}, answers: {}, active: null, lastQuizAt: null, asked: [] },
+        quiz: { questions: {}, answers: {}, active: null, asked: [] },
       }),
     );
 
@@ -237,7 +237,7 @@ describe("persist v5 — empty / unusable changeset boot path", () => {
   });
 });
 
-describe("v:6 quiz persistence", () => {
+describe("v:7 quiz persistence", () => {
   it("round-trips the quiz slice", () => {
     const cs: ChangeSet = {
       id: "cs-1", title: "x", description: "", branch: "f", base: "main", author: "u",
@@ -261,12 +261,11 @@ describe("v:6 quiz persistence", () => {
           "q-1": { answer: "my take", submittedAt: 123, selfEval: "got_it" },
         },
         active: null,
-        lastQuizAt: 123,
         asked: ["q-1"],
       },
     };
     const snap = buildSnapshot(stateWithQuiz, {});
-    expect(snap.v).toBe(6);
+    expect(snap.v).toBe(7);
     const wire = JSON.parse(JSON.stringify(snap));
     localStorage.setItem("shippable:review:v1", JSON.stringify(wire));
     const hydrated = loadSession([cs]);
@@ -275,11 +274,12 @@ describe("v:6 quiz persistence", () => {
     localStorage.clear();
   });
 
-  it("boots empty when snapshot is v:5", () => {
+  it("boots empty when snapshot is v:6", () => {
     localStorage.setItem(
       "shippable:review:v1",
-      JSON.stringify({ v: 5, cursor: {}, readLines: {}, reviewedFiles: [],
-        reviewedChangesets: {}, dismissedGuides: [], drafts: {} }),
+      JSON.stringify({ v: 6, cursor: {}, readLines: {}, reviewedFiles: [],
+        reviewedChangesets: {}, dismissedGuides: [], drafts: {},
+        quiz: { questions: {}, answers: {}, active: null, lastQuizAt: null, asked: [] } }),
     );
     const hydrated = loadSession([]);
     expect(hydrated.state).toBeNull();
@@ -287,13 +287,13 @@ describe("v:6 quiz persistence", () => {
   });
 
   it("rejects a snapshot with a malformed quiz blob", () => {
-    // A v:6 snapshot is otherwise valid but quiz is missing inner fields.
+    // A v:7 snapshot is otherwise valid but quiz is missing inner fields.
     // The reducer would crash on first read of quiz.questions / quiz.asked,
     // so isPersistedSnapshot must reject before we hand it back.
     localStorage.setItem(
       "shippable:review:v1",
       JSON.stringify({
-        v: 6, cursor: {}, readLines: {}, reviewedFiles: [],
+        v: 7, cursor: {}, readLines: {}, reviewedFiles: [],
         reviewedChangesets: {}, dismissedGuides: [], drafts: {}, quiz: {},
       }),
     );

@@ -26,11 +26,30 @@ export function eligibleQuestionsForFile(
   });
 }
 
-export function pickRandomQuestion(
-  questions: Question[],
-  rng: () => number,
+/** Head of the eligible queue for a file mark. Order follows the server's
+ *  emission order — we don't re-sort. */
+export function pickNextForFile(
+  all: Question[],
+  cs: ChangeSet,
+  fileId: string,
+  asked: string[],
 ): Question | null {
-  if (questions.length === 0) return null;
-  const idx = Math.min(questions.length - 1, Math.floor(rng() * questions.length));
-  return questions[idx];
+  const eligible = eligibleQuestionsForFile(all, cs, fileId, asked);
+  return eligible[0] ?? null;
+}
+
+/** Next question for the Shift+S sequence. Picks the first unanswered
+ *  question, preferring changeset-level targets, then anything else.
+ *  `asked` already filters surfaced questions. */
+export function pickNextForChangeset(
+  all: Question[],
+  asked: string[],
+): Question | null {
+  const askedSet = new Set(asked);
+  const unanswered = all.filter((q) => !askedSet.has(q.id));
+  return (
+    unanswered.find((q) => q.target.kind === "changeset") ??
+    unanswered[0] ??
+    null
+  );
 }

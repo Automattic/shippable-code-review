@@ -28,7 +28,7 @@ import {
 import { findAnchorInFile, hashAnchorWindow } from "./anchor";
 import { enrichWithFileContent } from "./expandContext";
 import { newReviewerInteractionId } from "./interactions";
-import { eligibleQuestionsForFile } from "./quiz";
+import { pickNextForFile, pickNextForChangeset } from "./quiz";
 
 /**
  * Wire shape returned by `GET /api/agent/replies` — one envelope serves
@@ -85,14 +85,13 @@ export const EMPTY_CURSOR: Cursor = {
   lineIdx: 0,
 };
 
-export const QUIZ_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
-export const QUIZ_DICE_THRESHOLD = 1 / 3;        // 1-in-3
+/** Comprehension-quiz constants — see docs/plans/comprehension-quiz.md.
+ *  Surfacing is deterministic now; no dice, no cooldown. */
 
-const EMPTY_QUIZ: QuizState = {
+export const EMPTY_QUIZ: QuizState = {
   questions: {},
   answers: {},
   active: null,
-  lastQuizAt: null,
   asked: [],
 };
 
@@ -300,14 +299,9 @@ export type Action =
       prDetached: DetachedInteraction[];
     }
   | { type: "STORE_QUESTIONS"; changesetId: string; questions: Question[] }
-  | {
-      type: "MAYBE_TRIGGER_QUIZ";
-      changesetId: string;
-      fileId: string;
-      now: number;
-      roll: number;
-    }
-  | { type: "DISMISS_QUIZ"; now: number }
+  | { type: "TRIGGER_QUIZ_FOR_FILE"; changesetId: string; fileId: string }
+  | { type: "TRIGGER_QUIZ_FOR_CHANGESET"; changesetId: string }
+  | { type: "DISMISS_QUIZ" }
   | { type: "SUBMIT_QUIZ_ANSWER"; questionId: string; answer: string; now: number }
   | { type: "SET_QUIZ_SELF_EVAL"; questionId: string; selfEval: QuizSelfEval }
   | { type: "CLEAR_QUIZ_ACTIVE" };
@@ -666,40 +660,52 @@ export function reducer(state: ReviewState, action: Action): ReviewState {
         },
       };
     }
-    case "MAYBE_TRIGGER_QUIZ": {
+    case "TRIGGER_QUIZ_FOR_FILE": {
       if (state.quiz.active) return state; // one at a time
       const questions = state.quiz.questions[action.changesetId];
       if (!questions || questions.length === 0) return state;
-      if (
-        state.quiz.lastQuizAt !== null &&
-        action.now - state.quiz.lastQuizAt < QUIZ_COOLDOWN_MS
-      ) {
-        return state;
-      }
       const cs = state.changesets.find((c) => c.id === action.changesetId);
       if (!cs) return state;
-      const eligible = eligibleQuestionsForFile(
-        questions, cs, action.fileId, state.quiz.asked,
-      );
-      if (eligible.length === 0) return state;
-      if (action.roll >= QUIZ_DICE_THRESHOLD) return state;
-      const idx = Math.min(
-        eligible.length - 1,
-        Math.floor((action.roll / QUIZ_DICE_THRESHOLD) * eligible.length),
-      );
+      const next = pickNextForFile(questions, cs, action.fileId, state.quiz.asked);
+      if (!next) return state;
       return {
         ...state,
-        quiz: { ...state.quiz, active: { questionId: eligible[idx].id } },
+        quiz: { ...state.quiz, active: { questionId: next.id, mode: "single" } },
+      };
+    }
+    case "TRIGGER_QUIZ_FOR_CHANGESET": {
+      if (state.quiz.active) return state;
+      const questions = state.quiz.questions[action.changesetId];
+      if (!questions || questions.length === 0) return state;
+      const next = pickNextForChangeset(questions, state.quiz.asked);
+      if (!next) return state;
+      return {
+        ...state,
+        quiz: { ...state.quiz, active: { questionId: next.id, mode: "sequence" } },
       };
     }
     case "DISMISS_QUIZ": {
       if (!state.quiz.active) return state;
-      const askedNext = state.quiz.asked.includes(state.quiz.active.questionId)
+      const active = state.quiz.active;
+      const askedNext = state.quiz.asked.includes(active.questionId)
         ? state.quiz.asked
-        : [...state.quiz.asked, state.quiz.active.questionId];
+        : [...state.quiz.asked, active.questionId];
+      if (active.mode === "sequence") {
+        const csId = state.cursor.changesetId;
+        const questions = state.quiz.questions[csId] ?? [];
+        const next = pickNextForChangeset(questions, askedNext);
+        return {
+          ...state,
+          quiz: {
+            ...state.quiz,
+            asked: askedNext,
+            active: next ? { questionId: next.id, mode: "sequence" } : null,
+          },
+        };
+      }
       return {
         ...state,
-        quiz: { ...state.quiz, active: null, lastQuizAt: action.now, asked: askedNext },
+        quiz: { ...state.quiz, active: null, asked: askedNext },
       };
     }
     case "SUBMIT_QUIZ_ANSWER": {
@@ -718,7 +724,6 @@ export function reducer(state: ReviewState, action: Action): ReviewState {
               selfEval: null,
             },
           },
-          lastQuizAt: action.now,
           asked: askedNext,
         },
       };

@@ -142,35 +142,25 @@ import {
   persistHideNonActiveComments,
 } from "../commentVisibility";
 
-// Test seam: assignable from tests / DevTools to force the dice roll.
-// Read on every call (not at module load) so manual debugging via
-// `window.__shippableQuizRng = () => 0` works without a reload.
-type QuizRng = () => number;
-function quizRng(): number {
-  if (typeof window !== "undefined") {
-    const hook = (window as unknown as { __shippableQuizRng?: QuizRng })
-      .__shippableQuizRng;
-    if (hook) return hook();
-  }
-  return Math.random();
-}
-
-function dispatchToggleFileReviewedWithQuiz(
+function dispatchToggleFileReviewed(
   dispatch: Dispatch<Action>,
   changesetId: string,
   fileId: string,
   wasReviewed: boolean,
 ) {
   dispatch({ type: "TOGGLE_FILE_REVIEWED", fileId });
-  // Only fire on the off → on transition.
-  if (wasReviewed) return;
-  dispatch({
-    type: "MAYBE_TRIGGER_QUIZ",
-    changesetId,
-    fileId,
-    now: Date.now(),
-    roll: quizRng(),
-  });
+  if (wasReviewed) return; // only on off → on
+  dispatch({ type: "TRIGGER_QUIZ_FOR_FILE", changesetId, fileId });
+}
+
+function dispatchToggleChangesetReviewedWithQuiz(
+  dispatch: Dispatch<Action>,
+  changesetId: string,
+  wasReviewed: boolean,
+) {
+  dispatch({ type: "TOGGLE_CHANGESET_REVIEWED", changesetId });
+  if (wasReviewed) return; // only on off → on
+  dispatch({ type: "TRIGGER_QUIZ_FOR_CHANGESET", changesetId });
 }
 
 interface Props {
@@ -741,7 +731,7 @@ function ReviewWorkspaceInner({
         if (!state.reviewedFiles.has(fileId)) {
           reportStat("file-reviewed");
         }
-        dispatchToggleFileReviewedWithQuiz(
+        dispatchToggleFileReviewed(
           dispatch,
           state.cursor.changesetId,
           fileId,
@@ -753,20 +743,15 @@ function ReviewWorkspaceInner({
         // Count only the transition into "reviewed" — re-marking after an
         // un-review is the same review, and the no-op token-null case (paste
         // / upload) is not a completion at all.
-        const cs = state.changesets.find(
-          (c) => c.id === state.cursor.changesetId,
-        );
-        if (
-          cs &&
-          getChangesetReviewToken(cs) !== null &&
-          !isChangesetSignedOff(cs, state.reviewedChangesets)
-        ) {
+        const csId = state.cursor.changesetId;
+        const csForToken = state.changesets.find((c) => c.id === csId);
+        const token = csForToken ? getChangesetReviewToken(csForToken) : null;
+        const tokens = state.reviewedChangesets[csId] ?? [];
+        const wasReviewed = token !== null && tokens.includes(token);
+        if (token !== null && !wasReviewed) {
           reportStat("review-completed");
         }
-        dispatch({
-          type: "TOGGLE_CHANGESET_REVIEWED",
-          changesetId: state.cursor.changesetId,
-        });
+        dispatchToggleChangesetReviewedWithQuiz(dispatch, csId, wasReviewed);
         break;
       }
       case "START_REPLY":
@@ -941,7 +926,7 @@ function ReviewWorkspaceInner({
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape" && state.quiz.active) {
-        dispatch({ type: "DISMISS_QUIZ", now: Date.now() });
+        dispatch({ type: "DISMISS_QUIZ" });
         e.preventDefault();
         return;
       }
@@ -1938,8 +1923,7 @@ function ReviewWorkspaceInner({
             }
             onQuizSubmit={(id, answer) =>
               dispatch({ type: "SUBMIT_QUIZ_ANSWER", questionId: id, answer, now: Date.now() })}
-            onQuizDismiss={() =>
-              dispatch({ type: "DISMISS_QUIZ", now: Date.now() })}
+            onQuizDismiss={() => dispatch({ type: "DISMISS_QUIZ" })}
             onQuizSelfEval={(id, e) =>
               dispatch({ type: "SET_QUIZ_SELF_EVAL", questionId: id, selfEval: e })}
           />

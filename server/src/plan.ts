@@ -113,18 +113,33 @@ To keep the diff under token limits, files that are auto-generated (e.g. \`packa
 
 ## Comprehension questions
 
-In addition to intent and entryPoints, return **3 to 8 comprehension questions** that test whether a reviewer understands this change. They are not graded — the reviewer compares their answer to yours and self-evaluates. Write \`claudeAnswer\` the way a reviewer would, not the way a doc would.
+In addition to intent and entryPoints, return **2 to 10 comprehension questions** that test whether a reviewer understands this change. They are not graded — the reviewer compares their answer to yours and self-evaluates. Write \`claudeAnswer\` the way a reviewer would, not the way a doc would.
 
-Distribute across scope:
-- Roughly **one** changeset-level Q1 ("what does this PR do?"). Target: \`{ kind: "changeset" }\`.
-- **Most** as file-level Q1s. Target: \`{ kind: "file", path: <path from StructureMap.files> }\`.
-- **One or two** as hunk- or symbol-level Q2s. Target: \`{ kind: "hunk", hunkId: <id> }\` or \`{ kind: "symbol", name, definedIn }\`.
+### Count rubric
 
-Question types (set \`type\` accordingly):
+Pick the count using a **cognitive-load heuristic**, not a line-count rule.
+
+- **Bias up** when the diff introduces new public APIs, new abstractions, cross-module flow, or touches risky surfaces (auth, persistence, IPC, parsing user input, schema changes).
+- **Bias down** for repetitive or mechanical diffs: rename swept across many call sites, config bumps, lockfile-only changes, snapshot-test regeneration, formatter sweeps.
+- **LOC is a tiebreaker only.** A 50-LOC auth change can warrant 5 questions; a 500-LOC sweep-rename can warrant 2.
+
+**Hard cap:** total questions ≤ \`(number of files in StructureMap.files) + 1\`. Never exceed this.
+
+**Floor:** always emit at least **one changeset-level Q1** and **one file-level Q1**, so that a quiz lands whether the reviewer marks the changeset or only marks files.
+
+### Distribution
+
+- Exactly **one** changeset-level Q1. Target: \`{ kind: "changeset" }\`.
+- The rest as file-level Q1s, one per file, drawing from \`StructureMap.files\`. Target: \`{ kind: "file", path: <path> }\`.
+- **0–2** hunk- or symbol-level Q2s on the richest files (those with new abstractions or risky behavior). Target: \`{ kind: "hunk", hunkId: <id> }\` or \`{ kind: "symbol", name, definedIn }\`.
+
+### Types
+
 - \`"q1"\`: short-prose "what does this do?" — fits changeset, file, or symbol targets.
 - \`"q2"\`: "will this break if we send it X?" — fits hunk or symbol targets where there's a concrete input value and an expected behavior derivable from the diff. **Include the concrete input value in the prompt** (e.g., "What happens if loadPrefs is called when localStorage has the string \"undefined\"?").
 
-For every question:
+### Every question
+
 - \`id\`: a short stable string unique within the response (e.g., \`"q-cs"\`, \`"q-file-storage"\`, \`"q-hunk-1"\`).
 - \`target\` MUST resolve in the StructureMap (the same validator that drops bad claim evidence drops bad question targets).
 - \`prompt\`: ONE sentence. End with a question mark.

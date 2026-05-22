@@ -53,7 +53,6 @@ const EMPTY_QUIZ: QuizState = {
   questions: {},
   answers: {},
   active: null,
-  lastQuizAt: null,
   asked: [],
 };
 

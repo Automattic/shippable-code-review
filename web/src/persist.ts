@@ -59,17 +59,19 @@ export function setLiveReloadEnabled(
   }
 }
 
-// Head schema version is 6. Snapshots whose `v` isn't exactly 6 are rejected
+// Head schema version is 7. Snapshots whose `v` isn't exactly 7 are rejected
 // at load and the store boots empty. The prototype has no users to migrate.
 // v3 → v4: interactions and detachedInteractions removed (moved to SQLite).
 // v4 → v5: reviewedChangesets added (revision-scoped changeset sign-off,
 // see docs/concepts/review-state.md § Review tokens).
 // v5 → v6: quiz slice added (comprehension questions + answers + cooldown,
 // see docs/plans/comprehension-quiz.md).
+// v6 → v7: quiz dice + cooldown removed; `lastQuizAt` gone, `active.mode`
+// added. Deterministic surfacing on sign-off events.
 
 /** What we actually serialize — Sets become arrays, ephemeral fields drop. */
 interface PersistedSnapshot {
-  v: 6;
+  v: 7;
   cursor: Cursor;
   /** Set<number> → number[] per hunk id. */
   readLines: Record<string, number[]>;
@@ -114,7 +116,7 @@ export function buildSnapshot(
     reviewedChangesets[csId] = [...tokens];
   }
   return {
-    v: 6,
+    v: 7,
     cursor: state.cursor,
     readLines,
     reviewedFiles: Array.from(state.reviewedFiles).sort(),
@@ -272,7 +274,7 @@ function isPersistedSnapshot(x: unknown): x is PersistedSnapshot {
   if (!x || typeof x !== "object") return false;
   const o = x as Record<string, unknown>;
   if (
-    o.v !== 6 ||
+    o.v !== 7 ||
     typeof o.cursor !== "object" ||
     typeof o.readLines !== "object" ||
     !Array.isArray(o.reviewedFiles) ||
@@ -291,11 +293,15 @@ function isPersistedSnapshot(x: unknown): x is PersistedSnapshot {
   if (
     !q.questions || typeof q.questions !== "object" ||
     !q.answers || typeof q.answers !== "object" ||
-    (q.active !== null && (typeof q.active !== "object" || typeof (q.active as Record<string, unknown>).questionId !== "string")) ||
-    (q.lastQuizAt !== null && typeof q.lastQuizAt !== "number") ||
     !Array.isArray(q.asked)
   ) {
     return false;
+  }
+  if (q.active !== null) {
+    if (typeof q.active !== "object") return false;
+    const a = q.active as Record<string, unknown>;
+    if (typeof a.questionId !== "string") return false;
+    if (a.mode !== "single" && a.mode !== "sequence") return false;
   }
   for (const id of q.asked) if (typeof id !== "string") return false;
   return true;
