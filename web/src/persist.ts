@@ -287,6 +287,17 @@ function isPersistedSnapshot(x: unknown): x is PersistedSnapshot {
     if (!Array.isArray(tokens)) return false;
     for (const t of tokens) if (typeof t !== "string") return false;
   }
+  const q = o.quiz as Record<string, unknown>;
+  if (
+    !q.questions || typeof q.questions !== "object" ||
+    !q.answers || typeof q.answers !== "object" ||
+    (q.active !== null && (typeof q.active !== "object" || typeof (q.active as Record<string, unknown>).questionId !== "string")) ||
+    (q.lastQuizAt !== null && typeof q.lastQuizAt !== "number") ||
+    !Array.isArray(q.asked)
+  ) {
+    return false;
+  }
+  for (const id of q.asked) if (typeof id !== "string") return false;
   return true;
 }
 

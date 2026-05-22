@@ -285,4 +285,20 @@ describe("v:6 quiz persistence", () => {
     expect(hydrated.state).toBeNull();
     localStorage.clear();
   });
+
+  it("rejects a snapshot with a malformed quiz blob", () => {
+    // A v:6 snapshot is otherwise valid but quiz is missing inner fields.
+    // The reducer would crash on first read of quiz.questions / quiz.asked,
+    // so isPersistedSnapshot must reject before we hand it back.
+    localStorage.setItem(
+      "shippable:review:v1",
+      JSON.stringify({
+        v: 6, cursor: {}, readLines: {}, reviewedFiles: [],
+        reviewedChangesets: {}, dismissedGuides: [], drafts: {}, quiz: {},
+      }),
+    );
+    const hydrated = loadSession([]);
+    expect(hydrated.state).toBeNull();
+    localStorage.clear();
+  });
 });
