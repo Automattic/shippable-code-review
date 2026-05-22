@@ -1,20 +1,27 @@
-// Multi-client MCP registration. We support five "targets" — clients that
-// each have their own config file and a slot for declaring an MCP server.
-// Four are JSON-shaped with a top-level `mcpServers` map (Claude Code, Claude
-// Desktop, Cursor, Windsurf); Codex CLI uses TOML with `[mcp_servers.<name>]`
-// tables. Detection is best-effort: we look for the config dir or file.
-//
-// Writes preserve everything we don't touch — including unrelated fields
-// inside our own `shippable` entry. If the user added `args`, `env`, or
-// custom fields to the entry, we update only `command` and leave the rest.
-// JSON preserves order via `serde_json` with `preserve_order`; TOML keeps
-// comments and key ordering via `toml_edit`.
-//
-// JSON vs TOML shape: fresh entries we create are minimal — `{ command }`
-// is enough for every client we target. JSON omits `type` because all four
-// JSON clients (Claude Code, Claude Desktop, Cursor, Windsurf) treat stdio
-// as the default; Codex's TOML schema is `#[serde(untagged)]` with no
-// `type` field at all (variant is discriminated by `command` vs `url`).
+//! Multi-client MCP registration on Unix hosts. macOS is the only platform
+//! we ship and test today; other Unix-likes (Linux, BSDs) would mostly
+//! work but the per-client config-file locations are macOS-shaped.
+//! Windows is deliberately out of scope until we add a target-specific
+//! sibling — different config directories, no shared mode-preservation
+//! primitive, no `PermissionsExt`.
+//!
+//! Five "targets" — clients that each have their own config file and a
+//! slot for declaring an MCP server. Four are JSON-shaped with a top-level
+//! `mcpServers` map (Claude, Claude Desktop, Cursor, Windsurf); Codex CLI
+//! uses TOML with `[mcp_servers.<name>]` tables. Detection is best-effort:
+//! we look for the config dir or file.
+//!
+//! Writes preserve everything we don't touch — including unrelated fields
+//! inside our own `shippable` entry. If the user added `args`, `env`, or
+//! custom fields to the entry, we update only `command` and leave the rest.
+//! JSON preserves order via `serde_json` with `preserve_order`; TOML keeps
+//! comments and key ordering via `toml_edit`.
+//!
+//! JSON vs TOML shape: fresh entries we create are minimal — `{ command }`
+//! is enough for every client we target. JSON omits `type` because all four
+//! JSON clients (Claude, Claude Desktop, Cursor, Windsurf) treat stdio as
+//! the default; Codex's TOML schema is `#[serde(untagged)]` with no `type`
+//! field at all (variant is discriminated by `command` vs `url`).
 
 use std::fs;
 use std::io::Write;
@@ -44,8 +51,13 @@ struct Spec {
 
 const SPECS: &[Spec] = &[
     Spec {
+        // Registration writes to `~/.claude.json`, which is specifically
+        // Claude Code's config file — Claude Desktop has its own
+        // (handled below). Detection is looser (any `.claude/` dir
+        // counts); registering on a machine that doesn't actually have
+        // Claude Code installed is harmless.
         id: "claude-code",
-        display_name: "Claude Code",
+        display_name: "Claude",
         relative_path: ".claude.json",
         detection_hint_dir: Some(".claude"),
         format: Format::Json,
@@ -199,12 +211,49 @@ pub fn sibling_mcp_binary() -> Result<PathBuf, String> {
     Ok(candidate)
 }
 
+/// Follows symlinks to the underlying real path so we can rewrite the
+/// target rather than replace the link. Handles three cases:
+/// - File exists (possibly through a symlink): full `canonicalize`.
+/// - File doesn't exist but parent dir does (possibly symlinked): join the
+///   canonical parent with the original file name.
+/// - Neither exists: return the path as-is; `create_dir_all` will follow
+///   whatever symlinks materialize during creation.
+fn resolve_path_following_symlinks(path: &Path) -> PathBuf {
+    if let Ok(real) = fs::canonicalize(path) {
+        return real;
+    }
+    if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+        if let Ok(real_parent) = fs::canonicalize(parent) {
+            return real_parent.join(name);
+        }
+    }
+    path.to_path_buf()
+}
+
 fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
+    // Resolve symlinks before touching anything. If `path` is a symlink
+    // into a dotfiles repo (chezmoi / stow / etc.), `fs::rename` over it
+    // would replace the link with a regular file — the dotfiles repo
+    // would silently stop being the source of truth. By operating on the
+    // canonical path we rewrite the file the link points at, leaving the
+    // link itself intact.
+    let resolved = resolve_path_following_symlinks(path);
+    let path = resolved.as_path();
+
     let dir = path
         .parent()
         .ok_or_else(|| format!("config path has no parent: {}", path.display()))?;
+    // Lock down newly-created config dirs to 0700. These dirs typically
+    // hold API tokens / credentials for the client. If the dir already
+    // exists, respect the user's chosen perms.
+    let dir_was_missing = !dir.exists();
     fs::create_dir_all(dir)
         .map_err(|e| format!("could not create directory {}: {e}", dir.display()))?;
+    if dir_was_missing {
+        // Best-effort: a failure to chmod doesn't justify aborting the
+        // whole write — but log it via the error path if we somehow can't.
+        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+    }
     // Preserve the original file's mode across the rename. `fs::File::create`
     // gives us 0644-after-umask; without this, a user's `chmod 600` config
     // would silently widen to world-readable when we rewrite it.
@@ -221,7 +270,13 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
             .map_err(|e| format!("could not create temp file {}: {e}", tmp.display()))?;
         f.write_all(contents.as_bytes())
             .map_err(|e| format!("could not write temp file {}: {e}", tmp.display()))?;
-        f.sync_all().ok();
+        // fsync the data before the rename — the rename is only atomic in
+        // the directory-entry sense; data durability requires sync. If
+        // sync fails (disk full, IO error), we must not promote the tmp.
+        f.sync_all().map_err(|e| {
+            let _ = fs::remove_file(&tmp);
+            format!("could not fsync temp file {}: {e}", tmp.display())
+        })?;
     }
     if let Some(mode) = original_mode {
         if let Err(e) = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode)) {
@@ -462,6 +517,68 @@ mod tests {
 
         assert!(path.exists());
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_atomic_preserves_symlink_to_real_file() {
+        // Simulates a dotfiles-symlink setup: ~/.claude.json -> ~/dotfiles/claude.json.
+        // After rewriting via the symlink, the link must still exist and
+        // point at the same target, and the target must have the new content.
+        let real = unique_tmp_path("dotfiles-real.json");
+        let link = unique_tmp_path("dotfiles-link.json");
+        fs::write(&real, "{\"old\":true}").unwrap();
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        write_atomic(&link, "{\"new\":true}").expect("write should succeed via the link");
+
+        // Link itself must still be a symlink.
+        let link_meta = fs::symlink_metadata(&link).unwrap();
+        assert!(
+            link_meta.file_type().is_symlink(),
+            "symlink should survive rewrite"
+        );
+        // It must still point at the same real file.
+        assert_eq!(fs::read_link(&link).unwrap(), real);
+        // And the real file got the new content.
+        assert_eq!(fs::read_to_string(&real).unwrap(), "{\"new\":true}");
+
+        let _ = fs::remove_file(&link);
+        let _ = fs::remove_file(&real);
+    }
+
+    #[test]
+    fn write_atomic_locks_down_newly_created_parent_dir() {
+        // First write into a path whose parent directory doesn't exist yet
+        // should leave that parent dir at 0o700.
+        let parent = unique_tmp_path("locked-parent");
+        let _ = fs::remove_dir_all(&parent);
+        let path = parent.join("config.json");
+
+        write_atomic(&path, "{}").expect("write_atomic should succeed");
+
+        let parent_mode = fs::metadata(&parent).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            parent_mode, 0o700,
+            "freshly-created config dir should be locked to 0700, was {parent_mode:o}"
+        );
+        let _ = fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn write_atomic_leaves_existing_parent_dir_perms_alone() {
+        // If the parent dir already exists, we must not change its perms —
+        // it might belong to another tool whose chosen mode we should respect.
+        let parent = unique_tmp_path("existing-parent");
+        fs::create_dir_all(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = parent.join("config.json");
+
+        write_atomic(&path, "{}").expect("write_atomic should succeed");
+
+        let parent_mode = fs::metadata(&parent).unwrap().permissions().mode() & 0o777;
+        assert_eq!(parent_mode, 0o755, "pre-existing dir perms should survive");
+        let _ = fs::remove_dir_all(&parent);
     }
 
     fn matches_added(o: &WriteOutcome) -> bool {
