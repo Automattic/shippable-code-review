@@ -9,6 +9,7 @@
  * See `docs/plans/worktree-live-reload.md` (slice c).
  */
 
+import { parseReplyKey } from "./types";
 import type { ChangeSet, DiffLine, Hunk, Interaction } from "./types";
 
 /** Inner-window radius. ±2 → 5 lines for the matching hash. */
@@ -127,39 +128,18 @@ export function buildReplyAnchor(
   key: string,
   cs: ChangeSet,
 ): ReplyAnchorFields {
-  const colon = key.indexOf(":");
-  if (colon < 0) return {};
-  const prefix = key.slice(0, colon);
-  const rest = key.slice(colon + 1);
-  let hunkId: string;
-  let lineIdx: number;
-  switch (prefix) {
-    case "note":
-    case "user": {
-      const last = rest.lastIndexOf(":");
-      if (last < 0) return {};
-      hunkId = rest.slice(0, last);
-      lineIdx = parseInt(rest.slice(last + 1), 10);
-      break;
-    }
-    case "block": {
-      const last = rest.lastIndexOf(":");
-      if (last < 0) return {};
-      hunkId = rest.slice(0, last);
-      const dash = rest.slice(last + 1).indexOf("-");
-      if (dash < 0) return {};
-      lineIdx = parseInt(rest.slice(last + 1, last + 1 + dash), 10);
-      break;
-    }
-    case "hunkSummary":
-    case "teammate":
-      hunkId = rest;
-      lineIdx = 0;
-      break;
-    default:
-      return {};
+  // parseReplyKey (types.ts) is the single source of truth for key parsing —
+  // it accounts for the trailing per-comment `:id` segment that user/block
+  // keys carry. The file-level kinds have no hunk to anchor against.
+  const parsed = parseReplyKey(key);
+  if (
+    parsed === null ||
+    parsed.kind === "userFile" ||
+    parsed.kind === "blockFile"
+  ) {
+    return {};
   }
-  if (!Number.isFinite(lineIdx)) return {};
+  const { hunkId, lineIdx } = parsed;
   for (const f of cs.files) {
     for (const h of f.hunks) {
       if (h.id !== hunkId) continue;

@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildReplyAnchor,
   captureAnchorContext,
   findAnchorInFile,
   hashAnchorWindow,
 } from "./anchor";
-import type { DiffLine, Hunk } from "./types";
+import {
+  blockCommentKey,
+  lineNoteReplyKey,
+  mintCommentId,
+  userCommentKey,
+} from "./types";
+import type { ChangeSet, DiffLine, Hunk } from "./types";
 
 function lines(...texts: string[]): DiffLine[] {
   return texts.map((text, i) => ({
@@ -24,6 +31,33 @@ function makeHunk(id: string, body: DiffLine[]): Hunk {
     newStart: 1,
     newCount: body.length,
     lines: body,
+  };
+}
+
+function makeChangeSet(hunkId: string, body: DiffLine[]): ChangeSet {
+  return {
+    id: "cs-1",
+    title: "t",
+    author: "a",
+    branch: "feature",
+    base: "main",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    description: "",
+    files: [
+      {
+        id: "f0",
+        path: "src/widget.ts",
+        language: "ts",
+        status: "modified",
+        hunks: [makeHunk(hunkId, body)],
+      },
+    ],
+    worktreeSource: {
+      worktreePath: "/tmp/wt",
+      commitSha: "abc1234",
+      branch: "feature",
+      dirty: false,
+    },
   };
 }
 
@@ -114,5 +148,35 @@ describe("findAnchorInFile", () => {
       hunkIdx: 1,
       lineIdx: 2,
     });
+  });
+});
+
+describe("buildReplyAnchor", () => {
+  const body = lines("a", "b", "anchor", "c", "d", "e", "f");
+  const cs = makeChangeSet("h1", body);
+
+  it("resolves the anchor for a per-comment line key (userCommentKey)", () => {
+    const key = userCommentKey("h1", 2, mintCommentId());
+    const anchor = buildReplyAnchor(key, cs);
+    expect(anchor.anchorPath).toBe("src/widget.ts");
+    expect(anchor.anchorLineNo).toBe(3);
+  });
+
+  it("resolves the anchor for a per-comment block key (blockCommentKey)", () => {
+    const key = blockCommentKey("h1", 1, 3, mintCommentId());
+    const anchor = buildReplyAnchor(key, cs);
+    expect(anchor.anchorPath).toBe("src/widget.ts");
+    expect(anchor.anchorLineNo).toBe(2);
+  });
+
+  it("still resolves a legacy note reply key", () => {
+    const anchor = buildReplyAnchor(lineNoteReplyKey("h1", 2), cs);
+    expect(anchor.anchorPath).toBe("src/widget.ts");
+    expect(anchor.anchorLineNo).toBe(3);
+  });
+
+  it("returns an empty object when the hunk is absent from the changeset", () => {
+    const anchor = buildReplyAnchor(userCommentKey("missing", 2, mintCommentId()), cs);
+    expect(anchor).toEqual({});
   });
 });
