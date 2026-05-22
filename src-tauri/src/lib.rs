@@ -94,6 +94,45 @@ struct WindowRegistry {
     by_label: HashMap<String, RegistryEntry>,
 }
 
+/// What the run-loop should do in response to a window being destroyed.
+/// Computed under the registry lock; consumed without it so we don't hold
+/// the mutex across `app.emit` / window destruction.
+#[derive(Debug, PartialEq, Eq)]
+enum DestroyAction {
+    /// A review window died; its detached children need to follow.
+    CascadeClose(Vec<String>),
+    /// A detached child died; tell its parent's bridge so it can refresh
+    /// the dock button.
+    NotifyParent(String),
+    /// Nothing to do (unknown label or detached child without a parent).
+    Nothing,
+}
+
+impl WindowRegistry {
+    /// Atomically remove an entry and decide what cleanup the run-loop
+    /// should perform.
+    fn on_window_destroyed(&mut self, label: &str) -> DestroyAction {
+        let Some(entry) = self.by_label.remove(label) else {
+            return DestroyAction::Nothing;
+        };
+        match entry.kind {
+            WindowKind::Review => {
+                let children: Vec<String> = self
+                    .by_label
+                    .iter()
+                    .filter(|(_, e)| e.parent.as_deref() == Some(label))
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                DestroyAction::CascadeClose(children)
+            }
+            WindowKind::Sidebar | WindowKind::Inspector => match entry.parent {
+                Some(p) => DestroyAction::NotifyParent(p),
+                None => DestroyAction::Nothing,
+            },
+        }
+    }
+}
+
 struct WindowRegistryState {
     inner: Mutex<WindowRegistry>,
 }
@@ -140,15 +179,28 @@ fn open_detached_window(
     };
     let child_label = format!("detached-{parent_label}-{}", kind_enum.as_str());
 
-    // Idempotent open. The registry is authoritative; only spawn when the
-    // slot is empty. This mirrors the duplicate-focus path in multiWindow.ts.
-    let already_open = state
-        .inner
-        .lock()
-        .unwrap()
-        .by_label
-        .contains_key(&child_label);
-    if already_open {
+    // Atomic check-or-reserve: one lock pass decides whether we focus an
+    // existing child or take ownership of the slot. Two concurrent opens
+    // of the same parent+kind can't both pass the check-then-insert
+    // without this — the second would silently overwrite the first.
+    let reserved = {
+        let mut reg = state.inner.lock().unwrap();
+        if reg.by_label.contains_key(&child_label) {
+            false
+        } else {
+            reg.by_label.insert(
+                child_label.clone(),
+                RegistryEntry {
+                    changeset_id: None,
+                    parent: Some(parent_label.clone()),
+                    kind: kind_enum,
+                },
+            );
+            true
+        }
+    };
+
+    if !reserved {
         if let Some(existing) = app.get_webview_window(&child_label) {
             if existing.is_minimized().unwrap_or(false) {
                 let _ = existing.unminimize();
@@ -186,17 +238,6 @@ fn open_detached_window(
     );
     let url = WebviewUrl::App(std::path::PathBuf::from(url_path));
 
-    // Reserve the slot before building so the JS side sees a coherent
-    // registry from the moment the child loads. Roll back on build failure.
-    state.inner.lock().unwrap().by_label.insert(
-        child_label.clone(),
-        RegistryEntry {
-            changeset_id: None,
-            parent: Some(parent_label.clone()),
-            kind: kind_enum,
-        },
-    );
-
     let builder = WebviewWindowBuilder::new(&app, &child_label, url)
         .title(title)
         .inner_size(width, height)
@@ -205,6 +246,8 @@ fn open_detached_window(
         .resizable(true);
 
     if let Err(e) = builder.build() {
+        // Build failed — roll back the slot we reserved so a retry can
+        // succeed and so duplicate-focus doesn't latch onto a ghost.
         state.inner.lock().unwrap().by_label.remove(&child_label);
         return Err(e.to_string());
     }
@@ -250,22 +293,16 @@ fn set_window_changeset(
 ) {
     let label = window.label().to_string();
     let mut reg = state.inner.lock().unwrap();
-    match reg.by_label.get_mut(&label) {
-        Some(entry) => entry.changeset_id = changeset_id,
-        None => {
-            // Defensive: if the window somehow reports before its seed
-            // landed (shouldn't happen in practice — open_window_impl and
-            // the main-window setup both insert up-front), insert a Review
-            // entry rather than dropping the value silently.
-            reg.by_label.insert(
-                label,
-                RegistryEntry {
-                    changeset_id,
-                    parent: None,
-                    kind: WindowKind::Review,
-                },
-            );
-        }
+    if let Some(entry) = reg.by_label.get_mut(&label) {
+        entry.changeset_id = changeset_id;
+    } else {
+        // Every window has its entry inserted up-front (main at setup,
+        // others in open_window_impl / open_detached_window). Reaching
+        // this branch means an upstream invariant broke — log it rather
+        // than silently fabricating a Review entry that would
+        // misclassify the window in list_window_changesets /
+        // list_detached_children.
+        log::warn!("set_window_changeset: no registry entry for label {label}");
     }
 }
 
@@ -615,50 +652,150 @@ pub fn run() {
             event: WindowEvent::Destroyed,
             ..
         } => {
-            // Drop the entry first so subsequent registry queries are
-            // consistent. Capture parent + kind out of the removed entry
-            // so we can drive cascade-close (when a Review dies) and the
-            // children-changed signal (when a detached child dies) without
-            // holding the lock across `.close()` calls.
-            let mut to_cascade_close: Vec<String> = Vec::new();
-            let mut child_parent: Option<String> = None;
-            if let Some(state) = app_handle.try_state::<WindowRegistryState>() {
-                let mut reg = state.inner.lock().unwrap();
-                let removed = reg.by_label.remove(&label);
-                if let Some(entry) = removed {
-                    match entry.kind {
-                        WindowKind::Review => {
-                            for (child_label, child_entry) in reg.by_label.iter() {
-                                if child_entry.parent.as_deref() == Some(label.as_str()) {
-                                    to_cascade_close.push(child_label.clone());
-                                }
-                            }
-                        }
-                        WindowKind::Sidebar | WindowKind::Inspector => {
-                            child_parent = entry.parent;
+            // Compute the cleanup action under the registry lock, then
+            // drop the lock before destroying / emitting — otherwise we'd
+            // hold the mutex across re-entrant work.
+            let action = app_handle
+                .try_state::<WindowRegistryState>()
+                .map(|state| state.inner.lock().unwrap().on_window_destroyed(&label))
+                .unwrap_or(DestroyAction::Nothing);
+            match action {
+                DestroyAction::CascadeClose(children) => {
+                    // Use destroy() to mirror reattach_detached_window —
+                    // it's synchronous from the OS perspective, so by the
+                    // time the loop completes the children are gone from
+                    // `app.webview_windows()` and the empty-check below
+                    // fires correctly. close() was racy: a child blocking
+                    // in a beforeunload-like listener could leave us with
+                    // an empty parent set but live children.
+                    for child_label in &children {
+                        if let Some(win) = app_handle.get_webview_window(child_label) {
+                            let _ = win.destroy();
                         }
                     }
                 }
-            }
-            for child_label in &to_cascade_close {
-                if let Some(win) = app_handle.get_webview_window(child_label) {
-                    let _ = win.close();
+                DestroyAction::NotifyParent(parent) => {
+                    let _ =
+                        app_handle.emit(&format!("shippable:detach-children-changed:{parent}"), ());
                 }
+                DestroyAction::Nothing => {}
             }
-            if let Some(parent) = child_parent {
-                let _ = app_handle.emit(&format!("shippable:detach-children-changed:{parent}"), ());
-            }
-            // Quit when the last window closes. Tauri 2 keeps the macOS app
-            // alive by default; for a per-window reviewer that just means
-            // an invisible orphan process holding the sidecar. Cascade-
-            // initiated child closes are still in flight here (`.close()`
-            // is async), so `webview_windows()` is non-empty and we don't
-            // quit prematurely — the children's own Destroyed events tip
-            // the count to zero at the right moment.
+            // Quit when the last window closes. Tauri 2 keeps the macOS
+            // app alive by default; for a per-window reviewer that just
+            // means an invisible orphan process holding the sidecar.
             if app_handle.webview_windows().is_empty() {
                 app_handle.exit(0);
             }
         }
         _ => {}
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_encode_passes_unreserved_through() {
+        assert_eq!(url_encode("abc-XYZ_0.9~"), "abc-XYZ_0.9~");
+    }
+
+    #[test]
+    fn url_encode_percent_encodes_special_characters() {
+        assert_eq!(url_encode("a b"), "a%20b");
+        assert_eq!(url_encode("a/b"), "a%2Fb");
+        assert_eq!(url_encode("a&b=c"), "a%26b%3Dc");
+        assert_eq!(url_encode("%"), "%25");
+    }
+
+    #[test]
+    fn url_encode_handles_multibyte_utf8() {
+        // "—" is U+2014 EM DASH, encoded as 0xE2 0x80 0x94 in UTF-8.
+        assert_eq!(url_encode("—"), "%E2%80%94");
+    }
+
+    fn review_entry() -> RegistryEntry {
+        RegistryEntry::review()
+    }
+
+    fn detached_entry(parent: &str, kind: WindowKind) -> RegistryEntry {
+        RegistryEntry {
+            changeset_id: None,
+            parent: Some(parent.to_string()),
+            kind,
+        }
+    }
+
+    #[test]
+    fn on_window_destroyed_cascades_children_of_a_review_window() {
+        let mut reg = WindowRegistry::default();
+        reg.by_label.insert("window-1".into(), review_entry());
+        reg.by_label
+            .insert("detached-window-1-sidebar".into(), detached_entry("window-1", WindowKind::Sidebar));
+        reg.by_label
+            .insert("detached-window-1-inspector".into(), detached_entry("window-1", WindowKind::Inspector));
+        // Sibling review window's children must NOT be swept.
+        reg.by_label.insert("window-2".into(), review_entry());
+        reg.by_label
+            .insert("detached-window-2-sidebar".into(), detached_entry("window-2", WindowKind::Sidebar));
+
+        let action = reg.on_window_destroyed("window-1");
+
+        let DestroyAction::CascadeClose(mut children) = action else {
+            panic!("expected CascadeClose, got {action:?}");
+        };
+        children.sort();
+        assert_eq!(
+            children,
+            vec![
+                "detached-window-1-inspector".to_string(),
+                "detached-window-1-sidebar".to_string(),
+            ]
+        );
+        // Parent itself was dropped from the registry.
+        assert!(!reg.by_label.contains_key("window-1"));
+        // Sibling tree is untouched.
+        assert!(reg.by_label.contains_key("window-2"));
+        assert!(reg.by_label.contains_key("detached-window-2-sidebar"));
+    }
+
+    #[test]
+    fn on_window_destroyed_notifies_parent_when_a_detached_child_dies() {
+        let mut reg = WindowRegistry::default();
+        reg.by_label.insert("window-1".into(), review_entry());
+        reg.by_label
+            .insert("detached-window-1-sidebar".into(), detached_entry("window-1", WindowKind::Sidebar));
+
+        let action = reg.on_window_destroyed("detached-window-1-sidebar");
+
+        assert_eq!(action, DestroyAction::NotifyParent("window-1".to_string()));
+        // Parent survives.
+        assert!(reg.by_label.contains_key("window-1"));
+    }
+
+    #[test]
+    fn on_window_destroyed_returns_nothing_for_unknown_label() {
+        let mut reg = WindowRegistry::default();
+        reg.by_label.insert("window-1".into(), review_entry());
+
+        let action = reg.on_window_destroyed("ghost-window");
+
+        assert_eq!(action, DestroyAction::Nothing);
+        // Registry is undisturbed.
+        assert!(reg.by_label.contains_key("window-1"));
+    }
+
+    #[test]
+    fn on_window_destroyed_returns_nothing_for_review_with_no_children() {
+        let mut reg = WindowRegistry::default();
+        reg.by_label.insert("window-1".into(), review_entry());
+
+        let action = reg.on_window_destroyed("window-1");
+
+        // No children, but it's still CascadeClose with an empty list —
+        // the action expresses "this was a review window, do the review
+        // cleanup". The run-loop's match handles the empty case naturally.
+        assert_eq!(action, DestroyAction::CascadeClose(vec![]));
+        assert!(!reg.by_label.contains_key("window-1"));
+    }
 }
