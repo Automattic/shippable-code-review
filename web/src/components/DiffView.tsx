@@ -384,7 +384,23 @@ export function DiffView({
   const inlineRegionRef = useCallback((el: HTMLDivElement | null) => {
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = (inlineRegionObserver.current ??= new ResizeObserver(() => {
-      cursorRef.current?.scrollIntoView({ block: "nearest" });
+      const cursor = cursorRef.current;
+      if (!cursor) return;
+      // Keep an on-screen cursor visible through a resize, but don't chase a
+      // cursor the user has scrolled away from: deleting, expanding, or
+      // replying to a distant thread must not yank the viewport back. A
+      // resize can only displace a visible cursor by the region's own
+      // growth — always under one viewport — so anything farther than that
+      // means the user deliberately navigated elsewhere.
+      const sc = findScrollContainer(cursor);
+      const view =
+        sc instanceof HTMLElement
+          ? sc.getBoundingClientRect()
+          : { top: 0, bottom: window.innerHeight };
+      const r = cursor.getBoundingClientRect();
+      const vh = view.bottom - view.top;
+      if (r.bottom < view.top - vh || r.top > view.bottom + vh) return;
+      cursor.scrollIntoView({ block: "nearest" });
     }));
     ro.observe(el);
     return () => ro.unobserve(el);
