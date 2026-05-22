@@ -360,9 +360,13 @@ export function reducer(state: ReviewState, action: Action): ReviewState {
     }
     case "LOAD_CHANGESET": {
       const cs = action.changeset;
-      const file = cs.files[0];
-      const hunk = file?.hunks[0];
-      if (!file || !hunk) return state;
+      // Seat the cursor on the first file that actually has hunks. Binary
+      // adds, pure renames, etc. produce hunkless entries that are kept in
+      // the file list but can't anchor a cursor — `cs.files[0]` is the
+      // wrong default when one of those happens to come first.
+      const seatFile = cs.files.find((f) => f.hunks.length > 0);
+      const seatHunk = seatFile?.hunks[0];
+      if (!seatFile || !seatHunk) return state;
       const existingIdx = state.changesets.findIndex((c) => c.id === cs.id);
       const nextList =
         existingIdx >= 0
@@ -371,8 +375,8 @@ export function reducer(state: ReviewState, action: Action): ReviewState {
 
       // When reloading a changeset that the cursor is already on, preserve
       // the cursor position if the target file and hunk still exist in the
-      // new diff. Falls back to line 0 of file 0 if the file or hunk has
-      // disappeared (e.g., file removed in a PR update).
+      // new diff. Falls back to the first hunk-bearing file if the file or
+      // hunk has disappeared (e.g., file removed in a PR update).
       let nextCursor: Cursor;
       if (existingIdx >= 0 && state.cursor.changesetId === cs.id) {
         const curFile = cs.files.find((f) => f.id === state.cursor.fileId);
@@ -386,10 +390,10 @@ export function reducer(state: ReviewState, action: Action): ReviewState {
             lineIdx: Math.min(state.cursor.lineIdx, Math.max(0, maxLine)),
           };
         } else {
-          nextCursor = { changesetId: cs.id, fileId: file.id, hunkId: hunk.id, lineIdx: 0 };
+          nextCursor = { changesetId: cs.id, fileId: seatFile.id, hunkId: seatHunk.id, lineIdx: 0 };
         }
       } else {
-        nextCursor = { changesetId: cs.id, fileId: file.id, hunkId: hunk.id, lineIdx: 0 };
+        nextCursor = { changesetId: cs.id, fileId: seatFile.id, hunkId: seatHunk.id, lineIdx: 0 };
       }
 
       return {

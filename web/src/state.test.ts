@@ -650,10 +650,26 @@ describe("LOAD_CHANGESET", () => {
     expect(s).toBe(s0);
   });
 
-  it("returns the same state if the loaded changeset's first file has no hunks", () => {
+  it("returns the same state if no file in the loaded changeset has any hunks", () => {
     const noHunks = makeChangeset("nh", [makeFile("nh/f", [])]);
     const s = reducer(s0, { type: "LOAD_CHANGESET", changeset: noHunks });
     expect(s).toBe(s0);
+  });
+
+  it("skips a hunkless first file (e.g. binary add) and seats the cursor on the first file with hunks", () => {
+    // Binary adds, pure renames, etc. land in cs.files with hunks: [].
+    // The cursor has to anchor on a real hunk, so the reducer should advance
+    // state and put the cursor on the next file that has one.
+    const withBinaryFirst = makeChangeset("bin", [
+      makeFile("bin/image.png", []),
+      makeFile("bin/text.ts", [makeHunk("bin/text.ts#h1", 2)]),
+    ]);
+    const s = reducer(s0, { type: "LOAD_CHANGESET", changeset: withBinaryFirst });
+    expect(s.changesets.map((c) => c.id)).toEqual(["cs1", "bin"]);
+    expect(s.cursor.changesetId).toBe("bin");
+    expect(s.cursor.fileId).toBe("bin/text.ts");
+    expect(s.cursor.hunkId).toBe("bin/text.ts#h1");
+    expect(s.cursor.lineIdx).toBe(0);
   });
 
   // ── Cursor preservation on same-id reload (C2) ─────────────────────────
