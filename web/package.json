@@ -22,8 +22,8 @@
     "tauri:build": "cd ../src-tauri && cargo tauri build"
   },
   "dependencies": {
-    "@php-wasm/web": "3.1.28",
-    "@php-wasm/web-8-3": "3.1.28",
+    "@php-wasm/web": "^3.1.28",
+    "@php-wasm/web-8-3": "^3.1.28",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "esbuild-wasm": "^0.28.0",
@@ -58,11 +58,5 @@
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.11",
     "vitest": "^4.1.5"
-  },
-  "overrides": {
-    "ajv": "^8.18.0",
-    "eslint": {
-      "ajv": "^6.14.0"
-    }
   }
 }
