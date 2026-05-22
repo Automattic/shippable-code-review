@@ -39,6 +39,7 @@ interface RenderOpts {
   watching?: boolean;
   lastSuccessfulPollAt?: string | null;
   mcpStatus?: { installed: boolean; installCommand: string } | null;
+  onMcpSetUp?: () => void;
 }
 
 const DEFAULT_INSTALL_LINE =
@@ -58,6 +59,7 @@ function renderPanel(opts: RenderOpts = {}) {
       error={null}
       symbols={empty as unknown as Parameters<typeof AgentContextSection>[0]["symbols"]}
       mcpStatus={opts.mcpStatus === undefined ? defaultMcp : opts.mcpStatus}
+      onMcpSetUp={opts.onMcpSetUp}
       onJump={noop}
       delivered={opts.delivered ?? []}
       lastSuccessfulPollAt={opts.lastSuccessfulPollAt ?? null}
@@ -280,6 +282,27 @@ describe("AgentContextSection — MCP install affordance (slice 5)", () => {
     });
     expect(c2.querySelector(".ac__mcp--ok")).not.toBeNull();
     expect(c2.querySelector(".ac__mcp-dismiss")).toBeNull();
+  });
+
+  it("renders a 'Set up Shippable MCP →' button instead of the install chip when onMcpSetUp is wired", () => {
+    // In Tauri the panel hands off to the multi-client modal instead of
+    // surfacing a single inline `claude mcp add` line. Web has no such
+    // callback and falls back to the chip (covered by the tests above).
+    const setUpClicks: number[] = [];
+    const { container } = renderPanel({
+      mcpStatus: { installed: false, installCommand: LOCAL_BUILD_LINE },
+      onMcpSetUp: () => void setUpClicks.push(Date.now()),
+    });
+    const installRow = container.querySelector(".ac__mcp-row");
+    const button = installRow?.querySelector("button.ac__mcp-chip");
+    expect(button?.textContent).toContain("Set up Shippable MCP");
+    // The raw install command must NOT leak into the panel — the snippet
+    // lives in the modal now.
+    expect(container.querySelector(".ac__mcp")?.textContent).not.toContain(
+      LOCAL_BUILD_LINE,
+    );
+    fireEvent.click(button!);
+    expect(setUpClicks.length).toBe(1);
   });
 });
 

@@ -34,6 +34,13 @@ interface Props {
    * otherwise.
    */
   mcpStatus: { installed: boolean; installCommand: string } | null;
+  /**
+   * Tauri-only callback that opens the multi-client "Set up MCP…" modal.
+   * When defined, the install affordance renders a button instead of the
+   * inline `claude mcp add` chip — covers Claude Desktop, Cursor, Codex,
+   * Windsurf too. Undefined in web builds, where the inline chip stays.
+   */
+  onMcpSetUp?: () => void;
   /** Click on a symbol link → jump to its definition in the diff. */
   onJump: (c: Cursor) => void;
   /** Switch the active session — the parent re-fetches with the new pin. */
@@ -86,6 +93,7 @@ export function AgentContextSection({
   error,
   symbols,
   mcpStatus,
+  onMcpSetUp,
   onJump,
   delivered,
   lastSuccessfulPollAt,
@@ -119,7 +127,7 @@ export function AgentContextSection({
         </button>
       </div>
 
-      <McpInstallAffordance mcpStatus={mcpStatus} />
+      <McpInstallAffordance mcpStatus={mcpStatus} onSetUp={onMcpSetUp} />
 
       {/* Server-restart hint — single line, rendered once when a worktree
         * is loaded. Inspector only mounts this section in that case, so
@@ -552,8 +560,16 @@ const MAGIC_PHRASE_WATCH = "watch shippable";
 
 function McpInstallAffordance({
   mcpStatus,
+  onSetUp,
 }: {
   mcpStatus: { installed: boolean; installCommand: string } | null;
+  /**
+   * Tauri-only. When defined, the affordance shows a "Set up Shippable MCP →"
+   * button that opens the multi-client snippet modal. In web (where this is
+   * undefined) the affordance falls back to the inline `claude mcp add` chip
+   * — Claude Code is the only client we can guide from a browser.
+   */
+  onSetUp?: () => void;
 }) {
   // Read the dismiss flag synchronously on mount so the install section
   // doesn't briefly flash for users who already dismissed.
@@ -607,7 +623,18 @@ function McpInstallAffordance({
       </div>
       <div className="ac__mcp-row">
         <div className="ac__mcp-label">Install:</div>
-        <CopyChip text={mcpStatus.installCommand} />
+        {onSetUp ? (
+          <button
+            type="button"
+            className="ac__mcp-chip"
+            onClick={onSetUp}
+            title="Show copy-paste snippets for each MCP client"
+          >
+            Set up Shippable MCP →
+          </button>
+        ) : (
+          <CopyChip text={mcpStatus.installCommand} />
+        )}
       </div>
       <div className="ac__mcp-row">
         <div className="ac__mcp-label">Pull comments:</div>

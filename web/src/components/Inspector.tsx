@@ -38,6 +38,12 @@ export interface AgentContextProps {
    */
   mcpStatus: { installed: boolean; installCommand: string } | null;
   /**
+   * Tauri-only callback that opens the "Set up MCP…" modal. When provided,
+   * the panel renders a button instead of the single-line install chip
+   * (web builds leave it undefined; the inline chip stays).
+   */
+  onMcpSetUp?: () => void;
+  /**
    * Newest-first list of delivered comments for this worktree. Drives the
    * Delivered (N) details block at the bottom of the panel and (via the
    * pip seam threaded through to ReplyThread) the per-reply ✓ glyph.
@@ -289,6 +295,7 @@ export function Inspector({
           error={agentContext.error}
           symbols={symbols}
           mcpStatus={agentContext.mcpStatus}
+          onMcpSetUp={agentContext.onMcpSetUp}
           delivered={agentContext.delivered}
           lastSuccessfulPollAt={agentContext.lastSuccessfulPollAt}
           deliveredError={agentContext.deliveredError}

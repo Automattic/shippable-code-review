@@ -14,7 +14,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
     let register_mcp =
-        MenuItemBuilder::with_id("shippable:register-mcp", "Register MCP…").build(app)?;
+        MenuItemBuilder::with_id("shippable:register-mcp", "Set up MCP…").build(app)?;
     let find = MenuItemBuilder::with_id("shippable:find", "Find")
         .accelerator("CmdOrCtrl+F")
         .build(app)?;

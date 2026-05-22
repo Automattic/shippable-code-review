@@ -1,124 +1,74 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./LoadModal.css";
 
-export interface McpTarget {
+/**
+ * One client-install snippet. Shippable no longer writes to user configs;
+ * the modal hands the snippet to the user, who pastes it themselves.
+ * `kind` discriminates command-line (Claude Code CLI) from JSON/TOML
+ * file-paste blocks (Claude Desktop, Codex, Cursor, Windsurf).
+ */
+export type McpSnippet = {
   id: string;
   display_name: string;
   config_path: string;
   detected: boolean;
   current_command: string | null;
-}
+} & (
+  | { kind: "command"; value: string }
+  | { kind: "json"; value: string }
+  | { kind: "toml"; value: string }
+);
 
 interface Props {
-  targets: McpTarget[];
-  binaryPath: string;
-  onConfirm: (ids: string[]) => void;
-  onCancel: () => void;
+  snippets: McpSnippet[];
+  onClose: () => void;
 }
 
-export function RegisterMcpModal({
-  targets,
-  binaryPath,
-  onConfirm,
-  onCancel,
-}: Props) {
-  const initialSelection = useMemo(
-    () => new Set(targets.filter((t) => t.detected).map((t) => t.id)),
-    [targets],
-  );
-  const [selected, setSelected] = useState<Set<string>>(initialSelection);
-  const confirmRef = useRef<HTMLButtonElement>(null);
+export function RegisterMcpModal({ snippets, onClose }: Props) {
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    confirmRef.current?.focus();
+    closeRef.current?.focus();
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape") onClose();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
-  function toggle(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
+  }, [onClose]);
 
   const content = (
-    <div className="modal" onClick={onCancel}>
-      <div className="modal__box" onClick={(e) => e.stopPropagation()}>
+    <div className="modal" onClick={onClose}>
+      <div
+        className="modal__box"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: 640 }}
+      >
         <header className="modal__h">
-          <span className="modal__h-label">Register Shippable MCP</span>
-          <button type="button" className="modal__close" onClick={onCancel}>
+          <span className="modal__h-label">Set up Shippable MCP</span>
+          <button type="button" className="modal__close" onClick={onClose}>
             × close
           </button>
         </header>
         <section className="modal__sec">
           <p className="modal__hint">
-            Pick which clients to register with. Detected clients are
-            pre-checked; unchecked ones will be left alone.
+            Copy the snippet for each client you use, paste it where indicated,
+            and restart that client. Shippable doesn't modify your configs —
+            you own the change.
           </p>
           <ul style={{ listStyle: "none", padding: 0, margin: "8px 0" }}>
-            {targets.map((t) => {
-              const isSelected = selected.has(t.id);
-              const sameBinary =
-                binaryPath !== "" && t.current_command === binaryPath;
-              const status = !t.detected
-                ? "not detected"
-                : t.current_command == null
-                  ? "will add new entry"
-                  : sameBinary
-                    ? "already registered"
-                    : "will replace existing entry";
-              return (
-                <li key={t.id} style={{ padding: "4px 0" }}>
-                  <label
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      alignItems: "flex-start",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => toggle(t.id)}
-                      style={{ marginTop: 2 }}
-                    />
-                    <span style={{ flex: 1 }}>
-                      <span style={{ display: "block" }}>{t.display_name}</span>
-                      <span
-                        className="modal__hint"
-                        style={{ display: "block", margin: 0 }}
-                      >
-                        {t.config_path} — {status}
-                      </span>
-                    </span>
-                  </label>
-                </li>
-              );
-            })}
+            {snippets.map((s) => (
+              <SnippetRow key={s.id} snippet={s} />
+            ))}
           </ul>
-          <p className="modal__hint">
-            Binary: <code>{binaryPath || "(resolved at apply time)"}</code>
-          </p>
           <div className="modal__row modal__row--end">
-            <button type="button" className="modal__btn" onClick={onCancel}>
-              cancel
-            </button>
             <button
               type="button"
-              ref={confirmRef}
+              ref={closeRef}
               className="modal__btn modal__btn--primary"
-              onClick={() => onConfirm(Array.from(selected))}
-              disabled={selected.size === 0}
+              onClick={onClose}
             >
-              register ({selected.size})
+              done
             </button>
           </div>
         </section>
@@ -127,4 +77,94 @@ export function RegisterMcpModal({
   );
 
   return createPortal(content, document.body);
+}
+
+function SnippetRow({ snippet }: { snippet: McpSnippet }) {
+  const status = describeStatus(snippet);
+  const pasteHint =
+    snippet.kind === "command"
+      ? "Run in terminal:"
+      : `Paste into ${snippet.config_path} (inside the mcpServers ${
+          snippet.kind === "toml" ? "table" : "object"
+        }):`;
+
+  return (
+    <li
+      style={{
+        padding: "10px 0",
+        borderTop: "1px solid var(--rule, rgba(0,0,0,0.08))",
+      }}
+    >
+      <div
+        style={{ display: "flex", justifyContent: "space-between", gap: 8 }}
+      >
+        <strong>{snippet.display_name}</strong>
+        <span className="modal__hint" style={{ margin: 0 }}>
+          {status}
+        </span>
+      </div>
+      <div className="modal__hint" style={{ margin: "4px 0 6px" }}>
+        {pasteHint}
+      </div>
+      <CopyBlock text={snippet.value} multiline={snippet.kind !== "command"} />
+    </li>
+  );
+}
+
+function describeStatus(s: McpSnippet): string {
+  if (!s.detected) return "not detected";
+  if (s.current_command == null) return "detected — no entry yet";
+  return `currently points at ${s.current_command}`;
+}
+
+function CopyBlock({
+  text,
+  multiline,
+}: {
+  text: string;
+  multiline: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const id = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(id);
+  }, [copied]);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+    } catch {
+      // Clipboard denied — leave state alone so the user can select manually.
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
+      <pre
+        style={{
+          flex: 1,
+          margin: 0,
+          padding: "8px 10px",
+          background: "var(--code-bg, rgba(0,0,0,0.04))",
+          borderRadius: 4,
+          fontSize: 12,
+          whiteSpace: multiline ? "pre" : "pre-wrap",
+          overflowX: "auto",
+        }}
+      >
+        <code>{text}</code>
+      </pre>
+      <button
+        type="button"
+        className="modal__btn"
+        onClick={() => void copy()}
+        style={{ alignSelf: "flex-start" }}
+        title="click to copy"
+      >
+        {copied ? "copied ✓" : "copy"}
+      </button>
+    </div>
+  );
 }

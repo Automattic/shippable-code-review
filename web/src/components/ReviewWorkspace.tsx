@@ -193,6 +193,8 @@ interface Props {
    *  free of worktree/live-reload concerns. Null when no worktree changeset
    *  is loaded. */
   liveReloadBar?: ReactNode;
+  /** Opens the "Set up MCP…" modal — only wired in Tauri builds. */
+  onMcpSetUp?: () => void;
 }
 
 export function ReviewWorkspace(props: Props) {
@@ -218,6 +220,7 @@ function ReviewWorkspaceInner({
   onLoadChangeset,
   currentSource,
   liveReloadBar,
+  onMcpSetUp,
 }: Props) {
   const credentials = useCredentials();
   const hasAnthropicCredential = credentials.list.some(
@@ -2088,6 +2091,7 @@ function ReviewWorkspaceInner({
                     ...inspectorAgentContext,
                     onPickSession: (fp) => setPinnedSession(fp),
                     onRefresh: () => setAgentRefreshTick((t) => t + 1),
+                    onMcpSetUp,
                   }
                 : undefined
             }

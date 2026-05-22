@@ -110,6 +110,38 @@ pub struct DiscoverResult {
     pub binary_path: Option<String>,
 }
 
+/// One copy-pasteable install snippet per client. The UI renders these
+/// verbatim — Shippable no longer writes to user configs itself. `kind`
+/// drives the rendering hint (command line vs. JSON/TOML block + path).
+#[derive(Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum SnippetBody {
+    /// A shell command the user pastes into a terminal (Claude Code CLI).
+    Command { value: String },
+    /// A JSON fragment the user pastes into `config_path`.
+    /// `value` is a self-contained `"shippable": { ... }` entry — callers
+    /// merge it into their `mcpServers` map.
+    Json { value: String },
+    /// A TOML fragment for Codex CLI's `~/.codex/config.toml`.
+    Toml { value: String },
+}
+
+#[derive(Serialize, Clone)]
+pub struct TargetSnippet {
+    pub id: String,
+    pub display_name: String,
+    /// Where the snippet goes — `claude` for the command form, a config
+    /// file path for JSON/TOML. Rendered as plain text next to the chip.
+    pub config_path: String,
+    pub detected: bool,
+    /// What `command` field is currently set on the user's `shippable` entry,
+    /// if any. Drives the "already set up" / "currently points elsewhere"
+    /// hint next to the chip.
+    pub current_command: Option<String>,
+    #[serde(flatten)]
+    pub body: SnippetBody,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum OutcomeStatus {
@@ -457,6 +489,73 @@ pub fn discover_mcp_targets() -> DiscoverResult {
     }
 }
 
+/// Tilde-home form of `~/...` paths — what we show in the UI. Users paste
+/// these straight into their editor; expansion happens at read time by the
+/// client. Falls back to the absolute form if `$HOME` isn't a prefix.
+fn tildify(path: &Path) -> String {
+    let abs = path.to_string_lossy().into_owned();
+    let Ok(h) = home() else { return abs };
+    let home_s = h.to_string_lossy().into_owned();
+    abs.strip_prefix(&home_s)
+        .map(|rest| format!("~{rest}"))
+        .unwrap_or(abs)
+}
+
+/// Placeholder rendered when there's no bundled sidecar next to the app
+/// (i.e. `tauri dev`). The user sees a clear marker that the path will be
+/// real in a packaged DMG build; copying the snippet still works as a
+/// template.
+const BINARY_PLACEHOLDER: &str = "<path-to-shippable-mcp-from-packaged-build>";
+
+fn build_snippet(spec: &Spec, binary: &str) -> TargetSnippet {
+    let path = config_path(spec).unwrap_or_default();
+    let body = match (spec.id, spec.format) {
+        ("claude-code", _) => SnippetBody::Command {
+            value: format!("claude mcp add shippable -- {binary}"),
+        },
+        (_, Format::Json) => SnippetBody::Json {
+            value: format!(
+                "\"shippable\": {{\n  \"command\": \"{binary}\"\n}}"
+            ),
+        },
+        (_, Format::Toml) => SnippetBody::Toml {
+            value: format!(
+                "[mcp_servers.shippable]\ncommand = \"{binary}\""
+            ),
+        },
+    };
+    let config_path = match spec.id {
+        // For the CLI command, the "path" we show is the CLI itself —
+        // users invoke it, they don't open a file.
+        "claude-code" => "claude (CLI)".to_string(),
+        _ => tildify(&path),
+    };
+    TargetSnippet {
+        id: spec.id.to_string(),
+        display_name: spec.display_name.to_string(),
+        config_path,
+        detected: detected(spec),
+        current_command: read_current_command(spec),
+        body,
+    }
+}
+
+#[tauri::command]
+pub fn mcp_install_snippets() -> Vec<TargetSnippet> {
+    let binary = sibling_mcp_binary()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| BINARY_PLACEHOLDER.to_string());
+    SPECS.iter().map(|spec| build_snippet(spec, &binary)).collect()
+}
+
+/// Auto-install replaced by copy-paste snippets in the UI (see
+/// `mcp_install_snippets`). The writer is left in tree for one release so
+/// any external caller fails loudly instead of silently disappearing;
+/// scheduled for deletion alongside `register_json` / `register_toml` /
+/// `write_atomic` in a follow-up commit.
+#[deprecated(
+    note = "auto-install removed; UI now shows copy-paste snippets via mcp_install_snippets"
+)]
 #[tauri::command]
 pub fn register_mcp_targets(ids: Vec<String>) -> Result<Vec<RegisterOutcome>, String> {
     let binary = sibling_mcp_binary()?;

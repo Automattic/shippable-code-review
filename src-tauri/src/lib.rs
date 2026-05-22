@@ -704,6 +704,8 @@ pub fn run() {
             keychain::keychain_set,
             keychain::keychain_remove,
             mcp_targets::discover_mcp_targets,
+            mcp_targets::mcp_install_snippets,
+            #[allow(deprecated)]
             mcp_targets::register_mcp_targets,
         ])
         .setup(|app| {

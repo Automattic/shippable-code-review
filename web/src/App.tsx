@@ -159,12 +159,11 @@ export default function App() {
   const [themeId, setThemeId] = useTheme();
   const { findOpen, closeFind } = useTauriMenu();
   const {
-    picker: mcpPicker,
-    notice: mcpNotice,
-    binaryPath: mcpBinaryPath,
-    confirm: confirmMcpRegister,
-    cancel: cancelMcpPicker,
-    dismissNotice: dismissMcpNotice,
+    snippets: mcpSnippets,
+    error: mcpError,
+    open: openMcpSetUp,
+    close: closeMcpSetUp,
+    dismissError: dismissMcpError,
   } = useRegisterMcp();
   const [boot] = useState<BootSeed>(() => resolveBoot());
   const [hydrated] = useState(() =>
@@ -455,20 +454,14 @@ export default function App() {
         />
         <FindBar open={findOpen} onClose={closeFind} />
         {toast && <Toast message={toast} onClose={dismissToast} />}
-        {mcpPicker && (
-          <RegisterMcpModal
-            targets={mcpPicker.targets}
-            binaryPath={mcpBinaryPath}
-            onConfirm={confirmMcpRegister}
-            onCancel={cancelMcpPicker}
-          />
+        {mcpSnippets && (
+          <RegisterMcpModal snippets={mcpSnippets} onClose={closeMcpSetUp} />
         )}
-        {mcpNotice && (
+        {mcpError && (
           <NoticeModal
-            title={mcpNotice.title}
-            message={mcpNotice.message}
-            details={mcpNotice.details}
-            onClose={dismissMcpNotice}
+            title={mcpError.title}
+            message={mcpError.message}
+            onClose={dismissMcpError}
           />
         )}
       </>
@@ -488,23 +481,18 @@ export default function App() {
         onLoadChangeset={handleLoadChangeset}
         currentSource={currentSource}
         liveReloadBar={liveReloadBar}
+        onMcpSetUp={openMcpSetUp}
       />
       <FindBar open={findOpen} onClose={closeFind} />
       {toast && <Toast message={toast} onClose={dismissToast} />}
-      {mcpPicker && (
-        <RegisterMcpModal
-          targets={mcpPicker.targets}
-          binaryPath={mcpBinaryPath}
-          onConfirm={confirmMcpRegister}
-          onCancel={cancelMcpPicker}
-        />
+      {mcpSnippets && (
+        <RegisterMcpModal snippets={mcpSnippets} onClose={closeMcpSetUp} />
       )}
-      {mcpNotice && (
+      {mcpError && (
         <NoticeModal
-          title={mcpNotice.title}
-          message={mcpNotice.message}
-          details={mcpNotice.details}
-          onClose={dismissMcpNotice}
+          title={mcpError.title}
+          message={mcpError.message}
+          onClose={dismissMcpError}
         />
       )}
     </>
