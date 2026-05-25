@@ -1,0 +1,39 @@
+.DS_Store
+*.log
+
+.claude/*.local.json
+
+# Playwright MCP browser profile + screenshot output dir.
+# Screenshots taken via browser_take_screenshot should be written under
+# screenshots/ (pass filename like "screenshots/foo.png") so the whole
+# directory is untracked.
+.playwright-mcp/
+/screenshots/
+
+# Project-level Claude Code MCP config — kept out for now; bring back if
+# we want the playwright MCP to be shared with collaborators.
+.mcp.json
+
+# Internal thinking / process docs. Not for public consumption; keep local.
+.meta/
+
+# Superpowers brainstorm scratch (mockups, state, server-info). Per-session.
+.superpowers/
+
+CLAUDE.local.md
+
+# Env files — no secrets today, but cheap insurance against future leaks.
+.env
+.env.local
+.env.*.local
+
+# Editor configs (web/.gitignore covers these inside web/, this catches root).
+.vscode/
+.idea/
+
+# In case a root package.json ever appears.
+node_modules/
+
+# Claude Code workspace metadata + worktrees. Local to each contributor;
+# `settings.local.json` may capture command allowlists worth not sharing.
+.claude/
