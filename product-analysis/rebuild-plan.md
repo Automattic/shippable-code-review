@@ -4,12 +4,37 @@
 `product-analysis/` feature outline into a concrete rebuild plan. It is a
 *living* decision log, not a finished spec.
 
+**Progress (last worked 2026-05-26):** locked #9 (Checks — was Q-A),
+#10 (Identity storage — was Q-B), #11 (Plan structure — was Q-C), and
+#12 (AI comment persistence — was Q-D), #13 (Progress write-through —
+was Q-E), and #14 (`threadKey` removal — was Q-F) this session, plus
+**Q-G Part 1** (added a `changeset` Anchor kind). #11 **revises #8**:
+plan bullets are a `Claim` type, NOT comments (#8 had said all AI output
+is comments). #12: AI notes are durable comments (only the `Plan`
+regenerates); `changesetId` on `Comment`+`Plan`; staleness is per-anchor
+(no generation tag). #13: progress is "save-the-answer" (derived, not
+event-sourced), with two write speeds — sign-off immediate,
+cursor/readLines ~1s debounced. #14: `threadKey` removed; threading by
+parent-pointer (`anchor.kind==="comment"`), safe because of #12. Earlier
+this session: three model edits — `hunk` folded into `block` (#8), roles
+merged to `human | ai` (#8), and `Author` is the single identity type (no
+`Participant`).
+
+**PAUSED at Q-G Part 2** (`ReanchorHint` shape) — recommendation on the
+table ("confirm all four fields"), awaiting a yes/trim answer. This is a
+clean handoff point: every lettered question Q-A…Q-F is locked, Q-G Part
+1 is locked, only Q-G Part 2 remains before the **Downstream agenda**.
+
 **How to resume (method):** we are using the `grill-me` skill —
 interview relentlessly, one question at a time, each with a recommended
 answer; walk every branch of the design tree resolving dependencies
 before moving on; explore the codebase to answer a question rather than
-asking when the code can tell us. Pick up at **Open questions** below,
-starting with the one marked ← NEXT.
+asking when the code can tell us. **Plain-language rule:** explain every
+question/option in plain terms first (analogies over jargon), precise
+version underneath — the human asked for this explicitly. Pick up at
+**Open questions** below at the one marked ← RESUME — currently **Q-G
+Part 2** (confirm the `ReanchorHint` shape; then move to the Downstream
+agenda).
 
 **Source material:**
 - `product-analysis/product.md` — the synthesis (feature inventory, tiers, §4 unification opportunities, §5 rebuild sequence).
@@ -87,9 +112,10 @@ near-term constraint. Acceptable for v1 *if the types don't assume
 disk*.
 
 ### 6. MCP agent peer scope
-Agents are **full peers for reading, comment-writers for writing**:
+Agents (MCP peers — `ai`-role authors, #8) are **full peers for
+reading, comment-writers for writing**:
 - **Read:** changeset, plan, review progress, sign-off.
-- **Write:** comments, replies, validation reports.
+- **Write:** comments and replies, each carrying the `checks` rubric (#9).
 - **Not in v1:** block assignment (no targeting), activity stream (no
   observation). These were removed when the data model unified (see #8);
   the anchor/intent enums stay *able* to grow into them later.
@@ -123,21 +149,31 @@ discriminated union over `kind`, we unify harder: **one `Comment`
 type**, with the variation pushed onto the **anchor** and the **intent**.
 
 ```ts
+type Role = "human" | "ai";       // merged: an MCP agent is an `ai` author; *which* ai = identity (#7), not role
+type Author = { id: string; role: Role; displayName: string };  // uniform; provenance (#7) stored separately, keyed by id
+
 type Anchor =
-  | { kind: "block";  path: string; lo: number; hi: number; reanchor: ReanchorHint } // line = lo===hi
-  | { kind: "hunk";   path: string; hunkId: string }
+  | { kind: "block";  path: string; lo: number; hi: number; reanchor: ReanchorHint } // line = lo===hi; a hunk is just a block
   | { kind: "symbol"; path?: string; name: string; symbolKind?: string }
   | { kind: "file";   path: string }
   | { kind: "comment"; commentId: string }   // anchoring to a comment = a reply
+  | { kind: "changeset" }                     // the whole change (Q-G Part 1); quiz changeset-Q, overall comments, old "description" evidence — no payload (changesetId is on Comment/Plan, #12)
 
 interface Comment {
   id: string;
+  changesetId: string;            // membership: which review (#12); stable across re-ingests
   createdAt: string;
-  author: Author;                 // identity — STORAGE STILL OPEN (Q-B)
-  anchor: Anchor;                 // block/hunk/symbol/file roots a thread; comment = reply
+  authorId: string;               // → Author.id; reference not embed (#10), expanded on read
+  anchor: Anchor;                 // block/symbol/file roots a thread; comment = reply
   intent: Intent;                 // comment | question | request | blocker | ack | accept | reject
   body: string;
-  validation?: ValidationReport;  // replaces `confidence`
+  checks?: Checks;                // replaces `confidence` — see #9 (absent = no rubric; when present, complete)
+}
+
+// AI plan bullet — its OWN type, NOT a Comment (#11). Read-only, not repliable.
+interface Claim {
+  text: string;
+  references: Anchor[];           // ≥1, mandatory (anti-LGTM); reuses Anchor + Reference renderer
 }
 ```
 
@@ -146,39 +182,249 @@ Consequences (all wins):
   "comment"`. This deletes the `target: line|block|reply` enum and the
   legacy Reply vocabulary §4.10 wanted gone — by construction.
 - **Nested replies for free** (a comment can anchor to a reply).
-- **Claims are AI-authored comments.** Plan claim / inline AI note =
-  `{ author.role:"ai", anchor:{symbol|hunk}, intent:"comment", body, validation }`.
-  No separate `claim` kind.
-- `Anchor` is the canonical pointer everywhere (§4.1): comments, plan
-  evidence, quiz `Question.target` (today `changeset|file|hunk|symbol`,
+- **`hunk` folded into `block`.** A hunk is just a `block` (line range)
+  — one code-range anchor kind, all reanchored on reload. Drops the
+  stable `hunkId`; a hunk reference survives via `reanchor`, not an id.
+  (Resolves Q-G's hunk question by construction.)
+- **Roles merged to `human | ai`.** An MCP agent and the built-in plan
+  generator are both `ai` authors; the human tells them apart by
+  **identity/provenance** (#7), not by role. `agent` and
+  `teammate` drop out of the enum (it stays able to grow back per #2).
+- **Inline AI notes are comments; plan bullets are `Claim`s (#11).** An
+  inline AI note has one home anchor → it's an AI-authored comment
+  `{ authorId, anchor:{symbol|block}, intent:"comment", body, checks }`
+  (role `ai`). A *plan bullet* is not a comment: it's a `Claim`
+  `{ text, references: Anchor[] }` living in the Plan (#11) — multi-pin
+  and not repliable. (Amends the original "all AI output is comments".)
+- `Anchor` is the canonical pointer everywhere (§4.1): comments, claim
+  `references`, quiz `Question.target` (today `changeset|file|hunk|symbol`,
   `web/src/quiz.ts`), diagram clicks, runner recipes. Promote
   `Reference.tsx` to the one renderer.
 
-### 9. ValidationReport — confidence becomes evidence (partial)
-`confidence: low|medium|high` → a rubric of yes/no checks the agent
-verified. Aligns with the product's evidence-is-mandatory principle.
+### 9. Checks — confidence becomes evidence (RESOLVED, was Q-A)
+`confidence: low|medium|high` → a **mandatory rubric** of yes/no checks
+the agent verified, each with a free-form comment. Aligns with the
+product's evidence-is-mandatory principle. No wrapper type: the field is
+`Comment.checks?: Checks` directly (a report-level wrapper bought nothing
+— verdict is `intent`, author is `author`, timestamp is `createdAt`).
 
 ```ts
-// agent blocker:
-validation: { checks: [
-  { label: "Reproduced",          result: "yes", note: "test in auth.test.ts" },
-  { label: "Tests run",           result: "yes" },
-  { label: "Tests pass after fix",result: "no"  },
-] }
+type CheckLabel =
+  | "Reproduced"          // confirmed the issue occurs
+  | "Tests run"           // ran the relevant tests
+  | "Tests pass"          // …and they pass (no = they fail — the blocker)
+  | "Traced the code"     // read the code path line-by-line (the honest check for non-runnable findings)
+  | "Second agent confirmed"; // a second/3rd-party agent reviewed AND agreed
+
+type CheckResult = { result: "yes" | "no"; note: string };  // note REQUIRED — free-form comment on every check
+type Checks      = Record<CheckLabel, CheckResult>;          // every label is a key ⇒ all rubrics answered by construction
+
+// agent blocker — didn't consult a second agent, so it says so:
+checks: {
+  "Reproduced":             { result: "yes", note: "auth.test.ts:42 throws on empty token" },
+  "Tests run":              { result: "yes", note: "npm test -- auth" },
+  "Tests pass":             { result: "no",  note: "3 failures after the change" },
+  "Traced the code":        { result: "yes", note: "validateToken → decode → null deref" },
+  "Second agent confirmed": { result: "no",  note: "no second agent consulted" },
+}
 ```
 Locked sub-decisions:
-- **Checks phrased as positive assertions** so `yes` is always the
-  verified/good state. Split ambiguous "Ran the tests" into "Tests run"
-  + "Tests pass."
-- **Optional `note` per check** (a one-liner / evidence pointer).
-- May appear on any comment; **expected on agent action-intents**
-  (blocker/request).
-- **Check-label source is OPEN** — see Q-A ← NEXT.
+- **Flat closed set**, not keyed by intent. Keying `intent × catalog`
+  bakes a mapping we have no evidence we need, and mis-fits design
+  blockers (no test reproduces a coupling smell). One closed enum.
+- **Mandatory full rubric.** The agent answers *every* label, every
+  time — it cannot omit the uncomfortable one. Modeled as
+  `Record<CheckLabel, CheckResult>` so "skipped a rubric" is
+  **unrepresentable** (you can't build a `Checks` missing `Tests pass`).
+  Completeness is the type's job; the server only checks *presence*.
+- **Not-done = `no`.** Didn't run the tests → `Tests run: no` /
+  `Tests pass: no`. The "Tests run" + "Tests pass" split disambiguates
+  "ran & failed" (`yes/no`) from "didn't run" (`no/no`) — which is why
+  there is **no `na`**: a third state is just the cop-out the mandatory
+  rubric exists to prevent.
+- **Binary `result`**, phrased as positive assertions so `yes` is always
+  the verified/good state (drove the Tests split + "Second agent
+  **confirmed**"). Each check carries a **required free-form `note`** —
+  the agent justifies every yes/no, including the no's.
+- **No hybrid / agent-added extras in v1.** The escape hatch
+  reintroduces free-form "Vibes: yes". Growing the enum is a one-line
+  change we own; add labels (`Build passes`, `Typecheck passes`) the
+  first time a real finding needs them, not speculatively.
+- **Scope:** required on `role:"ai"` + `intent ∈ {blocker, request}` —
+  the agent-posted findings that ask the human to act (an MCP agent is an
+  `ai` author, #7). Omitted elsewhere (incl. human authors and any
+  `comment`/`question`/`ack`/`accept`/`reject`), including the plan
+  generator's `ai` + `comment` output
+  (it carries an `anchor` for evidence but no test rubric — the plan
+  generator orients, it doesn't run tests).
+- **All checks are self-attested in v1** (no runner verifies them yet).
+  The win is a comparable, requirable, filterable vocabulary — *what the
+  agent reports it did* — not machine verification. Verification waits for
+  the (deferred) code-runner.
 
 Relationship to the **quiz** (human-side "validate you understood",
-anti-LGTM): kept **distinct** in v1 (quiz tests the human; validation
-reports the agent). Both reuse `Anchor`. Possible future unification;
+anti-LGTM): kept **distinct** in v1 (quiz tests the human; checks
+report the agent). Both reuse `Anchor`. Possible future unification;
 not now.
+
+### 10. Identity storage — reference, not embed (RESOLVED, was Q-B)
+`Comment` carries `authorId: string` → an `Author` record, never an
+embedded author copy. One source of identity; "same `id`, two different
+`displayName`s" is unrepresentable (the drift embedding would allow).
+The composite declared/observed provenance (#7) hangs off the `Author`,
+present only for the `ai` authors that have it — a human is just an
+absent provenance row.
+
+- **No join cost:** the load bundle ships `authors` next to `comments`
+  (#4), and live/SSE updates carry any newly-seen author, so a comment
+  is never rendered without its author in hand.
+- **Read wire is denormalized:** stored normalized (`authorId`), the
+  read API / MCP **expands `author` inline** so an agent's "get comments"
+  returns names with no second call.
+- Not the capabilities/availability registry (still deferred).
+
+### 11. Plan structure — `Claim` is its own type (RESOLVED, was Q-C)
+A plan bullet is a **`Claim`**, not a `Comment`. This **revises #8** ("all
+AI output is comments"): *inline* AI notes stay comments (one home
+anchor); *plan bullets* are their own read-only type.
+
+```ts
+interface Claim {
+  text: string;
+  references: Anchor[];       // ≥1, mandatory — the anti-LGTM rule; named `references`, not `evidence`
+}
+
+interface Plan {              // thin, per-changeset singleton; regenerate = overwrite in place
+  changesetId: string;        // membership (#12); the plan is for this review
+  headline: string;           // = verbatim cs.title (derived, never generated — plan.ts:378)
+  intent: Claim[];            // model output
+  map: StructureMap;          // deterministic changeset walk (derived — buildStructureMap)
+  entryPoints: EntryPoint[];  // ≤3; each { fileId, hunkId?, reason: Claim }
+}
+```
+Locked sub-decisions:
+- **Multi-reference retained.** A claim keeps `references: Anchor[]` (the
+  prototype's `Claim.evidence: EvidenceRef[]`, rendered as clickable chips
+  — `ReviewPlanView.tsx:489`). The single-anchor rule from #8 was a
+  *Comment* constraint and never bound claims — which dissolves the
+  original Q-C.1 A/B framing as the wrong question.
+- **Not repliable in v1.** Plan bullets are read-only orientation. The
+  three things a `Comment` has that a `Claim` lacks — author, intent,
+  threading — are exactly what we decline for plan bullets. ("Comment on
+  this claim" is a flagged future in `review-plan.md`; revisit later, it's
+  a small bridge.)
+- **The Plan is mostly derived.** `headline` verbatim title; `map` a
+  deterministic walk. Only `intent` + `entryPoints` (+ quiz questions) are
+  model output, so the stored Plan is thin. (Resolves Q-C.2 / Q-C.3.)
+- **Field named `references`, not `evidence`.** Aligns with the canonical
+  `Reference.tsx` renderer; an `Anchor` *is* a reference. The *principle*
+  stays "evidence-is-mandatory" — only the field carries the structural
+  name.
+
+Unification with comments (the "what's worth borrowing" branch):
+- **Share the pin, keep types apart.** `Claim.references` and
+  `Comment.anchor` both use the one `Anchor` + `Reference` renderer
+  (#8/§4.1). That's where the usefulness travels; no type merge.
+- **No references/evidence field on `Comment` yet.** Add
+  `evidence?: Anchor[]` to `Comment` only when a real AI *finding*
+  (blocker/request) needs a second pin beyond its home anchor — one-field
+  change, renderer ready. Not speculative (matches #9's "add when needed").
+- **`checks` (#9) and a claim's `references` are distinct cousins.**
+  `checks` = procedural backing ("what I verified"); `references` =
+  locational backing ("where this is true"). Keep both; don't collapse.
+
+### 12. AI comment persistence — durable comments, only the Plan regenerates (RESOLVED, was Q-D)
+The prototype recomputes AI annotations: its localStorage blob strips
+`authorRole !== "user"` and regenerates from ingest (`web/src/types.ts:584`).
+That was an artifact of AI notes never being first-class persisted
+comments. In the rebuild they **are** comments (#8), so:
+
+- **Inline AI notes are durable comments.** They persist server-side
+  like any comment (#4) — *comments don't recompute, they persist*.
+  Generated once by the annotation pipeline (just another `ai` author,
+  same shape as an MCP peer, distinguished by identity #7), then they
+  live as durable comments and **re-anchor on drift** like any comment.
+  A stale AI note is handled exactly like a stale human comment
+  (relocates, or detaches if its lines vanish).
+- **Only the Plan regenerates.** The `Plan` is a per-changeset singleton;
+  regenerate **overwrites it in place**. Claims aren't repliable (#11),
+  so replacing them loses no human work. Comments are never batch-superseded.
+- **No generation tag, no changeset rev.** Staleness lives entirely at
+  the **anchor** level — a `Comment`'s `anchor` *and* a `Claim`'s
+  `references` both re-anchor, so "stale" = "its pointer detached." No
+  monotonic counter, no content-version field anywhere.
+- **`changesetId` on `Comment` and `Plan`** (was the proposed
+  `changesetReference`, simplified to just the id). Pure membership:
+  which review a comment/plan belongs to; self-describing on the
+  agent read wire (#10). **Not** a version — drift is the anchor's job.
+- **Assumption (flag for ingest/persistence design):** a changeset's
+  `id` is **stable across re-ingests** (drift mutates content in place,
+  matching the prototype's `RELOAD_CHANGESET`). That's what lets
+  `changesetId`-as-membership survive drift while anchors re-anchor
+  within it.
+- **Deferred:** a *second* AI pass over a drifted diff would need dedup
+  ("already noted this"). v1 generates once; skip it.
+
+### 13. Progress write-through — save-the-answer, two write speeds (RESOLVED, was Q-E)
+Moving review *progress* (cursor, readLines, sign-off) server-side (#4)
+is genuinely new: the prototype's SQLite SDD migrated **interactions**
+only — *"`persist.ts` keeps only review progress"* — so progress is still
+the `shippable:review:v1` localStorage blob today. Two axes:
+
+- **Axis 1 — source of truth: derived state ("save the answer").** The
+  client computes state and writes the *result* through; the server keeps
+  the latest, overwriting. No event log. Matches the interactions SDD's
+  per-mutation upsert. An agent reads current state directly (the IDEA's
+  *"did they sign off X?"* is a state query, not a history query).
+  Event-sourcing — tempting for `readLines` (additive, commutative,
+  audit) — is **deferred**: v1 is single-user-local (no multi-window
+  merge yet, #4) and needs no audit. If it ever lands, `readLines` is the
+  natural first thing to event-source. Door open, unbuilt.
+- **Axis 2 — write frequency: two speeds.** `readLines` is
+  *"auto-populated on every cursor move"* (`types.ts:260`) and `cursor`
+  moves every `j`/`k`, so per-keystroke writes are needless chatter; but
+  sign-off is rare, deliberate, and must not be lost.
+  - **Sign-off (`reviewedFiles`, `reviewedChangesets`) → immediate**,
+    per-gesture write. Agent-readable the moment it happens; never lost.
+  - **cursor + readLines → coalesced ~1s debounce**, flushed on
+    `visibilitychange`/`beforeunload`. Lose ≤1s of walk position on a
+    crash — acceptable; no agent depends on the live cursor.
+- **v1 progress = `{ cursor, readLines, reviewedFiles, reviewedChangesets }`.**
+  No `dismissedGuides` — guide-suggestions are deferred to v1.5+ (#5),
+  so there are no dismissals to store.
+
+### 14. `threadKey` removed — threading by parent-pointer (RESOLVED, was Q-F)
+The prototype's prefixed `threadKey` (`note:`/`block:`/`user:`/`teammate:`/
+`hunkSummary:`/`userFile:`/`blockFile:`/`dt:`, parsed by `parseReplyKey`
+`types.ts:725`) did **six** jobs; all rehome, so it's removed:
+
+| `threadKey` job | Rehomed to |
+|---|---|
+| threading (same key = one thread, `App.tsx:317`) | parent-pointer: `anchor.kind === "comment"` → root |
+| encode location | structured `anchor` (block/symbol/file) — no string parsing |
+| encode kind/source (`note`=AI / `user` / `teammate`) | `author.role` + identity (#7/#8) + `anchor.kind` |
+| de-collision (`:id` suffix) | every comment's own `id` — separate comments, separate threads |
+| reply-anchor reconstruction (`buildReplyAnchor`) | a reply *is* `{kind:"comment", commentId}` — no reconstruction |
+| detached threads (`dt:` synthetic key) | derived: anchor failed to re-anchor; replies stay threaded by id |
+
+Deletes `parseReplyKey`, `buildReplyAnchor`, `lineNoteReplyKey`,
+`hunkSummaryReplyKey`, `teammateReplyKey`, `userCommentKey`,
+`blockCommentKey`, `userFileCommentKey`, `blockFileCommentKey`, `noteKey`,
+`mintCommentId` — and the `lastIndexOf` colon-gymnastics forced by
+colon-bearing PR hunkIds (`pr:host:owner:repo:N`).
+
+- **Safe *because of #12.*** The old key was location-derived so a
+  **recomputed** AI note (fresh id each reload) re-attached its reply by
+  landing on the same key. Durable notes (#12, stable ids) let replies
+  thread by id instead. #8 id-threading and #12 durability are mutually
+  load-bearing — remove `threadKey` only because notes are now durable.
+- **Behavior change (improvement, but named):** `note:<hunk>:<line>` and
+  `teammate:<hunk>` carry no id, so the prototype **merged** multiple AI
+  notes on a line / teammate comments on a hunk into one thread. The new
+  per-comment id means they **don't merge** — two findings = two threads.
+- **Deferred flag:** `guide:<id>` was also a threadKey (dismissed-guides-
+  as-ack, §4.2). Guides are v1.5+ (#5); when they return, a dismissal
+  needs a threading home (the guide needs an id to ack against).
 
 ---
 
@@ -186,75 +432,60 @@ not now.
 
 Each has a recommendation. Grill one at a time.
 
-### Q-A. ValidationReport check-label source ← NEXT
-Where do check labels come from? **Rec: fixed catalog keyed by intent**
-(blocker/bug → {Reproduced, Tests run, Tests pass}; request → {Tests
-run}; comment/question → none required). Comparable across comments,
-server can *require* them, consistent UI badges. Growth path: **hybrid**
-(catalog + optional agent-added extras). Reject free-form (lets an agent
-post "Vibes: yes" and skip the real checks — defeats the anti-theater
-point) and single-verdict (loses the evidence trail).
+### Q-G. Anchor details — PART 2 PAUSED HERE ← RESUME
+**Part 1 (changeset kind) — RESOLVED.** Added `{ kind: "changeset" }` to
+the `Anchor` union (see #8 model block). It's the canonical "whole change"
+pointer, with three real consumers: the quiz's mandatory changeset-level
+Q1 (the `/api/plan` prompt requires one; #8 says `Question.target` reuses
+`Anchor`), the old `EvidenceRef { kind: "description" }`, and
+changeset-level comments / sign-off notes. No payload — the containing
+`Comment`/`Plan` already carries `changesetId` (#12).
 
-### Q-B. Identity storage
-Participants table vs embed-per-comment vs derived-view vs hybrid.
-**Stakes dropped** now that assignment is gone (no `assigneeId` to
-resolve — identity is only for rendering the author badge + provenance).
-**Rec to reconsider:** embed a thin `author { role, id, displayName }`
-inline for cheap rendering + a lightweight `participants` row holding the
-full declared/observed provenance, looked up only when the human
-inspects "where from." Not the capabilities/availability registry (still
-deferred).
+**Part 2 (`ReanchorHint` shape) — PAUSED, awaiting confirm.**
+Confirm the per-line-pointer relocation hint. It lives **only on the
+`block` anchor** — `file`/`symbol`/`comment`/`changeset` have no line to
+lose (symbol re-finds by name; file by path).
 
-### Q-C. Plan structure — flat comments vs structured document
-Is the AI plan a flat list of AI-authored comments, or a structured
-**Plan document** (headline + intent claims + structure map + ≤3 entry
-points, per `product-analysis/review-plan.md`) that *references*
-comments? "Everything is a comment" pulls toward flat, but the plan's
-headline/structure-map/entry-points are document-level, not per-anchor.
-**Rec (tentative):** keep a thin `Plan` document for the
-headline/structure/entry-points, where each **intent claim is a
-comment** (AI-authored, anchored, with evidence + validation). The
-document is a curated ordering over claim-comments, not a parallel type.
-Needs grilling — thesis-central ("where do I start?").
+```ts
+type ReanchorHint = {
+  hash: string;                      // FNV-1a of the inner 5-line window
+  context: DiffLine[];               // 10-line snapshot
+  originSha?: string;                // commit minted-against (else cs.id)
+  originType: "committed" | "dirty";
+};
+```
 
-### Q-D. AI claim persistence — durable vs recomputed
-Prototype strips `authorRole !== "user"` on persist and regenerates from
-ingest (`web/src/types.ts:584`). With server-as-record, do AI
-comments/claims persist server-side, or recompute each load? **Rec:**
-persist them (server is the record; recompute is wasted tokens and loses
-reply threads hung off a claim), with a `generation`/`changesetRev` tag
-so a re-ingest can supersede stale AI comments.
+**Grounding (`web/src/anchor.ts`):** the relocation *search*
+(`findAnchorInFile`) uses **only `hash`** — it scans hunks for a 5-line
+window whose FNV-1a matches, biased toward the same position (`prefer`,
+*computed at search time* from the anchor's own `lo`/`hi` — NOT a stored
+field). `context` / `originSha` / `originType` exist **only** for the
+detached-card "origin caption" (`anchor.ts:147` falls `originSha` back to
+`cs.id` "so detached entries still have *something* to display").
 
-### Q-E. Write-through: derived state vs event-source
-Write "file X signed off" (derived) or "REVIEWED_LINES h12 10-15"
-(events the server folds)? **Rec:** derived-state write-through for v1 —
-simplest, and it's exactly what the agent wants to read. Event-sourcing
-buys audit history we don't need yet.
+**Recommendation: confirm all four.** Only `hash` does the re-finding;
+the other three power the "you got detached, here's where you were"
+caption — a v1 feature (part of comments+anchoring). **Drop** the
+speculative `prefer: "before"|"after"` the old `suggested-architecture.md`
+listed; the real `prefer` is a derived position, not stored.
+**Alternative on the table:** trim to just `hash` (leaner; loses the
+detached caption UX).
 
-### Q-F. Confirm `threadKey` removal
-Threading now derives from `anchor.kind === "comment"` chains. Confirm no
-dedup/grouping responsibility of the old prefixed `threadKey`
-(`note:`/`block:`/`user:`/`teammate:`) is left unhomed.
-
-### Q-G. Anchor details
-- Does `hunk` need a `reanchor` hint too (hunks shift on reload)?
-- Does `Anchor` need a `changeset` kind? (quiz has changeset-level
-  questions.)
-- `ReanchorHint` shape: `{ originSha?, originType: "committed"|"dirty",
-  hash (FNV-1a), context: DiffLine[] }` — confirm.
+**After Q-G:** every lettered question (Q-A…Q-G) is resolved. Work moves
+to the **Downstream agenda** below — none of it grilled yet.
 
 ---
 
 ## Downstream agenda (not yet grilled)
 
 - **Persistence schema** (SQLite tables for comments, progress,
-  sign-off, participants; the "one bundle per changeset" load endpoint).
+  sign-off, authors; the "one bundle per changeset" load endpoint).
 - **MCP tool surface** for the read-peer (get-changeset, get-plan,
   get-progress/sign-off) on top of today's three comment tools.
 - **Phasing / sequencing** — revisit §5's Phase 0→7 against this reduced,
   agent-centric scope. Phase 0 = the types above.
 - **UI surfaces** — diff-view modes, sidebar, keyboard map, inspector
-  (inline vs panel), the agent identity badge, the validation-report
+  (inline vs panel), the agent identity badge, the `checks` rubric
   rendering.
 - **Worktree directory picker** — server AppleScript (today, macOS-only)
   vs `tauri-plugin-dialog` (§group7). Cross-platform argues for Tauri;
@@ -263,7 +494,7 @@ dedup/grouping responsibility of the old prefixed `threadKey`
   even though only worktree ships (§4.5, §group7), so reload is one path.
 
 ## Carry across unchanged (the prototype got these right)
-Evidence-is-mandatory (plan refuses claim w/o evidence); the unified
+Evidence-is-mandatory (plan refuses an unanchored AI comment); the unified
 primitive (we're unifying *harder*); server-as-hard-dependency +
 `ServerHealthGate`; keyboard-first walk (`j`/`k`, `Shift+M`, `]`/`[`,
 `n`/`N`, gutter rail); theme token model; Tauri + sidecar + Keychain
