@@ -37,6 +37,17 @@ export type InteractionIntent = AskIntent | ResponseIntent;
 
 export type InteractionAuthorRole = "user" | "ai" | "agent";
 
+/**
+ * Where an interaction's body came from, and (by direct implication) whether
+ * the agent should treat the body as trusted feedback or as quoted data. The
+ * reviewer is the trust source: `"local"` means typed by the reviewer in
+ * this Shippable session; `"external"` is third-party content the reviewer
+ * imported (today only GitHub PR comments; future Slack / Linear sit under
+ * the same trust bucket). `renderInteraction` wraps `"external"` bodies in
+ * `<untrusted-quoted-content>`; specific provenance is carried by `htmlUrl`.
+ */
+export type CommentSource = "local" | "external";
+
 /** Agent's self-reported confidence in a top-level comment. */
 export type Confidence = "low" | "medium" | "high";
 
@@ -104,6 +115,13 @@ export interface Interaction {
   /** Parent interaction id — set on replies so the agent can locate the
    *  comment a reply responds to. Absent on top-level interactions. */
   parentId?: string;
+  /**
+   * Where the body came from. Always present; the agent reads it to decide
+   * whether to treat the body as trusted reviewer feedback (`"local"`) or
+   * as quoted data from a third-party origin (`"github"`). Anything other
+   * than `"local"` also gets the `<untrusted-quoted-content>` body wrapper.
+   */
+  source: CommentSource;
 }
 
 export interface DeliveredInteraction extends Interaction {
@@ -154,6 +172,21 @@ function wireHtmlUrl(payload: Record<string, unknown>): string | undefined {
   return typeof direct === "string" && direct.length > 0 ? direct : undefined;
 }
 
+/**
+ * Maps the stored `payload.external` shape to the wire `source` enum.
+ * Presence of `payload.external` is the storage convention for "imported
+ * from a third-party origin," so it always resolves to `"external"` —
+ * legacy rows with `external.source === "pr"` need no migration. If we
+ * ever want to distinguish origins (github vs slack), add a separate
+ * descriptive field; the trust enum stays binary.
+ */
+function wireSource(payload: Record<string, unknown>): CommentSource {
+  if (payload.external && typeof payload.external === "object") {
+    return "external";
+  }
+  return "local";
+}
+
 function toWire(row: StoredInteraction): Interaction {
   const wire: Interaction = {
     id: row.id,
@@ -165,6 +198,7 @@ function toWire(row: StoredInteraction): Interaction {
     body: row.body,
     commitSha: payloadString(row.payload, "originSha"),
     enqueuedAt: row.createdAt,
+    source: wireSource(row.payload),
   };
   const lines = wireLines(row.payload);
   if (lines !== undefined) wire.lines = lines;
@@ -487,6 +521,9 @@ function renderInteraction(c: Interaction): string {
   if (c.lines) {
     attrs.push(`lines="${escapeXmlAttr(c.lines)}"`);
   }
+  // `source` is always present on the wire — the agent reads it on every
+  // interaction to decide trust without falling back on attribute absence.
+  attrs.push(`source="${escapeXmlAttr(c.source)}"`);
   if (c.htmlUrl) {
     attrs.push(`htmlUrl="${escapeXmlAttr(c.htmlUrl)}"`);
   }
@@ -494,6 +531,15 @@ function renderInteraction(c: Interaction): string {
     attrs.push(`parentId="${escapeXmlAttr(c.parentId)}"`);
   }
   // Wrap body in CDATA so a reviewer can't break out of the <interaction>
-  // element by pasting `</interaction>` into their comment.
-  return `  <interaction ${attrs.join(" ")}><![CDATA[${sanitizeBody(c.body)}]]></interaction>`;
+  // element by pasting `</interaction>` into their comment. When the body
+  // didn't come from the local reviewer, add an inner <untrusted-quoted-content>
+  // element so the agent has a structural cue to treat it as quoted data,
+  // not instructions to execute. The element name is the cue; specific
+  // provenance (which external origin) is conveyed by `htmlUrl`.
+  const safeBody = sanitizeBody(c.body);
+  const bodyContent =
+    c.source === "local"
+      ? `<![CDATA[${safeBody}]]>`
+      : `<untrusted-quoted-content><![CDATA[${safeBody}]]></untrusted-quoted-content>`;
+  return `  <interaction ${attrs.join(" ")}>${bodyContent}</interaction>`;
 }
