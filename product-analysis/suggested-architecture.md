@@ -1,5 +1,13 @@
 # Suggested architecture — Shippable rebuild
 
+> **Status: Superseded by [`v1-architecture.md`](./v1-architecture.md)** (grill session 2026-05-25).
+> This document is preserved as the brainstorming-stage proposal. The finalized
+> v1 contract reflects decisions made during the entity-by-entity grill, including:
+> Claim/Assignment/Activity dropped; agent role folded into ai; hunk anchor
+> dropped; line/block collapsed to `block`; confidence enum replaced by a fixed
+> validation rubric; server SQLite as source of truth; vertical-slice migration
+> through worktree-only ingest first.
+
 A first-principles architecture for the rebuild, derived from the
 feature-by-feature deep dive in this folder. Opinionated and concrete:
 where the analysis surfaced a fork, this picks one direction and
