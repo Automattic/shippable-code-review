@@ -32,6 +32,23 @@ The finalized architecture for v1, derived from four grill sessions of
   Collected the MCP-only AI rationale, watch-vs-direct patterns, and
   degradation behaviour into a new §3b "AI integration model" so the
   load-bearing choice has one home instead of five scattered restatements.
+- **Session 6 (2026-05-26):** review-driven cleanup. Subagent audit of
+  the doc flagged eight open architectural decisions and a punch list of
+  wrong/contradictory citations. Locked: dropped `Anchor.prefer?` (§18);
+  Interaction `anchor` / `intent` / `authorId` / AI-only fields are
+  immutable post-insert, PATCH limited to human `body`/`updatedAt`,
+  parent-must-exist on response-intent inserts (cycles impossible by
+  construction); dropped `generation` field — `changesetId` FK is the
+  revision tag; locked human `userId` minting (client UUID v4 →
+  `localStorage shippable:userId:v1` → `X-Shippable-User-Id` header);
+  locked MCP auth header (`X-Shippable-Author-Id` returned by
+  `shippable_announce`); renamed `jobs` → `agent_queue`, added
+  `interaction` type and `channel_path` worktree scope; quiz ships in
+  v1 with questions riding on `shippable_post_plan`; rubric required on
+  every AI Interaction regardless of intent (closes §18). Defined
+  `StructureMap` and `fileId === path` inline. Dropped the
+  `parentInteractionId?` parameter; collapsed `shippable_get_interactions`
+  into `shippable_get_changeset`.
 
 Supersedes `suggested-architecture.md` and `rebuild-plan.md` (both
 preserved as working notes).
@@ -48,7 +65,7 @@ A position. Used by every feature that asks "where in the code?".
 
 ```ts
 type Anchor =
-  | { kind: "block";    file: string; lo: number; hi: number; origin: BlockOrigin; prefer?: "before" | "after" }
+  | { kind: "block";    file: string; lo: number; hi: number; origin: BlockOrigin }
   | { kind: "symbol";   file: string; symbol: string }
   | { kind: "file";     file: string }
   | { kind: "changeset" }                          // zero-data: applies to the whole ChangeSet
@@ -68,6 +85,11 @@ type BlockOrigin =
 - **`changeset` kind for ChangeSet-level claims** (e.g. "this changeset is
   mostly cosmetic"; quiz changeset-level questions). Zero-data; carries
   no file/range.
+- **`file: string` is the path within the ChangeSet** (matches
+  `diff_files.path`). The prototype's synthetic `fileId` collapses to
+  `path` in v1 — file rows are uniquely keyed by `(changeset_id, path)`
+  in storage and by `path` within a single ChangeSet's namespace.
+  `UIState.fileDisplayMode` keys by the same `path` string.
 - **`comment` anchors are how threading works.** A reply is an Interaction
   anchored to its parent. Reply-of-reply allowed. Cycles prevented by
   acyclic insert.
@@ -142,11 +164,6 @@ type Interaction = {
     sentinelId?: string;
   };
 
-  // generation tag: AI interactions are tied to a specific ChangeSet revision.
-  // On re-ingest (new ChangeSet via parent chain), prior-generation AI
-  // interactions stay on the old ChangeSet and surface as "from prior revision".
-  generation?: { ingestId: string; sha: string };
-
   createdAt: string;
   updatedAt: string;
 };
@@ -156,11 +173,21 @@ type Interaction = {
 
 - `intent ∈ AskIntent`  →  `anchor.kind !== "comment"` (asks root on code/changeset).
 - `intent ∈ ResponseIntent`  →  `anchor.kind === "comment"` (responses reply).
-- author's role is `"ai"` AND `intent ∈ {"blocker", "request"}` → full rubric required
+- `anchor.kind === "comment"`  →  the referenced `commentId` must exist
+  at insert time (parent-must-exist; rejects orphan replies).
+- author's role is `"ai"` → full rubric required, regardless of intent
   (every `CheckLabel` answered, each with `result` and a non-empty `note`).
-- author's role is `"ai"` AND `intent ∈ {"comment", "question"}` → no rubric required
-  (open question, §18: should we extend the rubric to AI comments/questions too?).
 - author's role is `"human"`  →  `rubric`, `rationale`, `suggestedFix` absent.
+  Humans can use any of the four `AskIntent`s (comment, question, request,
+  blocker); the intent vocabulary describes the *kind of ask*, not the
+  kind of author.
+- `Interaction.anchor`, `intent`, `references`, `authorId`, and all AI-only
+  fields are **immutable post-insert.** `PATCH /api/interactions/{id}`
+  can modify only `body` and `updatedAt`, and only for human-authored
+  rows. AI Interactions cannot be patched at all — the agent replies to
+  revise its position, doesn't edit history.
+- Anchor immutability + parent-must-exist means comment-chain cycles are
+  impossible by construction.
 - Interactions are inserted atomically — no streaming state. An AI review
   job posts each Interaction with a separate MCP write, and SSE delivers
   them one by one as they arrive (§7b).
@@ -173,15 +200,19 @@ type Interaction = {
   unified pointer.
 - **No `target`, no `parentId`.** Anchor is the sole positioning field.
 - **AuthorId references `authors`, not a free-text display name.** Identity
-  lives in one table (§13). Read-side denormalizes — `shippable_get_interactions`
-  expands `author: {id, role, displayName, declared?}` inline so MCP
-  callers don't need a second lookup.
-- **Rubric is a flat 5-label closed set, complete every time.** The type
-  is `Record<CheckLabel, CheckResult>` so a partial rubric is unrepresentable
+  lives in one table (§13). Read-side denormalizes — `shippable_get_changeset`
+  returns each Interaction with `author: {id, role, displayName, declared?}`
+  expanded inline so MCP callers don't need a second lookup.
+- **Rubric is a flat 5-label closed set, complete every time, required
+  on every AI Interaction regardless of intent.** The type is
+  `Record<CheckLabel, CheckResult>` so a partial rubric is unrepresentable
   by construction. The agent must face every label — including the
-  uncomfortable ones (`Second agent confirmed`) — on every blocker or
-  request. Not-done is encoded as `result: "no"` with a note explaining
-  why; there is no `na`.
+  uncomfortable ones (`Second agent confirmed`) — on every Interaction
+  it posts (comment, question, request, blocker, or any reply). Not-done
+  is encoded as `result: "no"` with a note explaining why; there is no
+  `na`. The earlier carve-out for AI {comment, question} is gone — the
+  rubric attaches to "an AI is on record about this", not to verdict
+  severity.
 - **`note` is required on every check, including `yes` ones.**
   "Tests run: yes" without context is empty; "Tests run: yes, `npm test
    -- auth/token.test.ts`" is evidence. Yes-with-no-note is rejected
@@ -199,10 +230,10 @@ type Interaction = {
   Interactions. The field is named `references` on both Interaction and
   Claim because the shape is structural ("Anchor[] that points at code");
   the *evidence* concept lives in the rubric, not in pointer lists.
-- **`generation` tag on AI rows.** Tracks which ingest revision the
-  Interaction was generated against. On re-ingest, old AI Interactions
-  stay on their original ChangeSet; the parent-chain link is the
-  navigation path between revisions.
+- **Revision tag = `changesetId`.** AI Interactions are tied to a specific
+  ChangeSet by their FK column; there is no separate `generation` field.
+  On re-ingest, old AI Interactions stay on their original ChangeSet and
+  surface as "from prior revision" via the parent chain in `changesets`.
 - **No Plan or Claim is an Interaction.** Plan claims are Plan-internal
   value types (§7); Interactions are reviewer events on positions.
 
@@ -329,9 +360,10 @@ There is no server-side Anthropic call and no streaming Interaction state.
 AI Interactions arrive one at a time via MCP; SSE delivers each to all
 connected clients as soon as it lands.
 
-AI Interactions carry `generation: { ingestId, sha }`. Re-ingest of the
-same source with a different sha produces a new ChangeSet; prior-
-generation AI Interactions stay on the old ChangeSet.
+AI Interactions are tied to a specific ChangeSet by their `changesetId`
+FK column. Re-ingest of the same source with a different sha produces a
+new ChangeSet; prior-revision AI Interactions stay on the old ChangeSet,
+and the "from prior revision" UI walks the parent chain in `changesets`.
 
 ### 2.3 Walk
 
@@ -365,7 +397,8 @@ The review state machine: cursor, read-line tracking, projections.
 │  • trusted_hosts         (server policy table)              │
 │  • authors               (unified identity — humans + AI)   │
 │  • plans                 (append-only; latest wins per cs)  │
-│  • jobs                  (plan/review queue; watch-claimed) │
+│  • agent_queue           (plan/review/interaction; channel- │
+│                           scoped; watch-claimed; §7b)       │
 │  • user_prompts          (per-user prompt overrides; §9b)   │
 │  • quizzes / quiz_responses                                 │
 ├─────────────────────────────────────────────────────────────┤
@@ -374,7 +407,7 @@ The review state machine: cursor, read-line tracking, projections.
 ├─────────────────────────────────────────────────────────────┤
 │  Client — in-app memory + localStorage (UI state only)      │
 │  • cursor per changeset      (per tab; not server-persisted)│
-│  • fileDisplayMode           (Record<fileId, "diff"|"source"│
+│  • fileDisplayMode           (Record<path, "diff"|"source"  │
 │                                |"preview">; type-enforced)  │
 │  • locally-generated userId                                 │
 │  • dismissals (e.g. hint tooltips)                          │
@@ -402,7 +435,7 @@ CREATE TABLE diff_files (
 );
 
 CREATE TABLE authors (
-  id             TEXT PRIMARY KEY,                   -- userId (humans) or sessionId (AI)
+  id             TEXT PRIMARY KEY,                   -- authorId — client-minted UUID (humans) or server-assigned UUID (AI)
   role           TEXT NOT NULL,                      -- 'human' | 'ai'
   display_name   TEXT NOT NULL,
   declared_json  TEXT,                               -- AI only: { handle, purpose, model }
@@ -422,7 +455,6 @@ CREATE TABLE interactions (
   rationale       TEXT,
   suggested_fix   TEXT,
   external_json   TEXT,                              -- pr | mcp provenance
-  generation_json TEXT,                              -- AI-only { ingestId, sha }
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
@@ -470,31 +502,31 @@ CREATE TABLE plans (
   changeset_id      TEXT NOT NULL REFERENCES changesets(id),
   source            TEXT NOT NULL,                   -- 'rule' | 'ai'
   headline          TEXT NOT NULL,
-  structure_json    TEXT NOT NULL,                   -- StructureMap
+  structure_json    TEXT NOT NULL,                   -- StructureMap (§7)
   claims_json       TEXT NOT NULL,                   -- Claim[] (inline; §7)
   entry_points_json TEXT NOT NULL,                   -- EntryPoint[] (≤3; §7)
-  generation_json   TEXT NOT NULL,                   -- { ingestId, sha }
   generated_by      TEXT REFERENCES authors(id),     -- AI author; null = rule
   created_at        TEXT NOT NULL
 );
 CREATE INDEX plans_by_changeset ON plans(changeset_id, created_at DESC);
 
-CREATE TABLE jobs (
+CREATE TABLE agent_queue (
   id              TEXT PRIMARY KEY,
+  type            TEXT NOT NULL,                     -- 'plan' | 'review' | 'interaction'
+  channel_path    TEXT NOT NULL,                     -- worktree path (v1); broader in v1.5 (PR/url/etc.)
   changeset_id    TEXT NOT NULL REFERENCES changesets(id),
-  type            TEXT NOT NULL,                     -- 'plan' | 'review'
   status          TEXT NOT NULL,                     -- 'pending' | 'in_progress' | 'done' | 'failed'
   requested_at    TEXT NOT NULL,
-  requested_by    TEXT REFERENCES authors(id),       -- null if 'user' (locally-generated userId) is the requester
+  requested_by    TEXT REFERENCES authors(id),       -- null if the local human is the requester
   claimed_at      TEXT,
   claimed_by      TEXT REFERENCES authors(id),       -- AI author once claimed
   completed_at    TEXT,
-  payload_json    TEXT,                              -- type-specific params (e.g. review scope)
+  payload_json    TEXT,                              -- type-specific: {interactionId} for type='interaction'; params for plan/review
   result_id       TEXT,                              -- FK to plans.id when type='plan'
   error_msg       TEXT
 );
-CREATE INDEX jobs_pending ON jobs(status, type, requested_at);
-CREATE INDEX jobs_by_changeset ON jobs(changeset_id, status);
+CREATE INDEX agent_queue_pending  ON agent_queue(channel_path, status, type, requested_at);
+CREATE INDEX agent_queue_by_cs    ON agent_queue(changeset_id, status);
 
 CREATE TABLE user_prompts (
   user_id      TEXT NOT NULL REFERENCES authors(id),
@@ -525,12 +557,15 @@ CREATE TABLE quiz_responses (
 
 ### 3.2 Identity, secrets
 
-- **Identity.** Every Interaction, plan, job, sign-off, read-line, pref,
-  and quiz response references `authors.id`. Humans get a row at first
-  POST (locally-generated `userId`, role `'human'`, no declared/observed).
-  AI agents get a row on first `shippable_announce` (server-assigned
-  `sessionId`, role `'ai'`, declared + observed populated). No accounts,
-  no auth in v1 — multi-user identity is deferred (§18).
+- **Identity.** Every Interaction, plan, agent_queue row, sign-off,
+  read-line, pref, user prompt, and quiz response references `authors.id`.
+  Humans mint their `authorId` client-side (UUID v4 in localStorage;
+  `X-Shippable-User-Id` header); the server upserts the row on first
+  sight (role `'human'`, no declared/observed). AI agents get a row on
+  first `shippable_announce` with a server-assigned UUID (role `'ai'`,
+  declared + observed populated; `X-Shippable-Author-Id` header on
+  every subsequent `/api/agent/*` call). No accounts, no auth in v1 —
+  multi-user identity is deferred (§18).
 - **Secrets.** Only GitHub tokens. Keychain in Tauri, server memory in
   dev. Server is the policy boundary; secrets never reach the client.
 - **No Anthropic key.** All AI work flows through MCP; agents hold
@@ -574,11 +609,12 @@ surfacing, degradation banners — derives from it.
 Two patterns, both via the MCP tool surface in §4.2:
 
 1. **Watch mode (auto-queued).** The agent calls
-   `shippable_wait_for_work` in a loop. Server-queued jobs (`plan`,
-   `review`) are atomically claimed; the agent computes, then calls
-   `shippable_post_plan` or `shippable_post_interaction` per finding.
-   This is the "AI is reviewing, comments appear as they land" UX
-   (§7b).
+   `shippable_wait_for_work` in a loop. Pending `agent_queue` rows
+   (`plan`, `review`, or `interaction` — see §7b) in the agent's
+   declared channels are atomically claimed; the agent computes, then
+   calls `shippable_post_plan` or `shippable_post_interaction` per
+   finding. This is the "AI is reviewing, comments appear as they
+   land" UX (§7b).
 2. **Direct prompting.** The user prompts their agent themselves
    ("review this changeset" / "explain hunk X"). The agent reads via
    `shippable_get_changeset`, writes via `shippable_post_interaction`.
@@ -650,9 +686,9 @@ MCP agent instead; operational steps belong in release notes, not here.
 - `GET  /api/prefs`                                → `Record<key, value>`
 - `PATCH /api/prefs`                               → `{ ok: true }`
 - `POST /api/credentials/github`                   → `{ ok: true }` (only kind in v1)
-- `POST /api/changesets/{id}/jobs`                 → `Job` (user-initiated request; §7b)
-- `GET  /api/jobs?changesetId=...&status=...`      → `Job[]`
-- `GET  /api/watchers/active`                      → `Watcher[]` (presence indicator; §7b)
+- `POST /api/changesets/{id}/agent-queue`          → `AgentQueueItem` (user-initiated request; §7b)
+- `GET  /api/agent-queue?changesetId=...&status=...` → `AgentQueueItem[]`
+- `GET  /api/watchers/active`                      → `Watcher[]` (presence indicator; new in v1; §7b)
 - `GET  /api/library/prompts`                      → `Prompt[]` (bundled / path / git; §9b)
 - `POST /api/library/sync`                         → `{ ok: true }` (re-resolve a git-sourced library)
 - `GET  /api/user-prompts`                         → `Prompt[]` (per-user overrides)
@@ -671,45 +707,55 @@ makes no LLM calls itself.
 
 **Write tools:**
 
-- `shippable_announce(identity)` — register the agent's declared identity
-  at session start. Server upserts an `authors` row with role `'ai'`,
-  fills `declared_json` and `observed_json`, returns `authorId` (the
-  session id used for subsequent calls).
-- `shippable_post_interaction({changesetId, anchor, intent, body,
-  rubric?, rationale?, suggestedFix?, references?, parentInteractionId?})`
-  — one Interaction per call. Atomic. Used for both review-job output and
-  reply-to-reviewer flows.
+- `shippable_announce({identity, channels: string[]})` — register the
+  agent's declared identity and declare the channels (worktree paths in
+  v1) it's watching. Server upserts an `authors` row with role `'ai'`,
+  fills `declared_json` and `observed_json`, and returns `authorId`. The
+  agent must include this id as the `X-Shippable-Author-Id` header on
+  every subsequent call.
+- `shippable_post_interaction({changesetId, anchor, intent, body, rubric,
+  rationale?, suggestedFix?, references?})` — one Interaction per call.
+  Atomic. Replies use `anchor: { kind: "comment", commentId }` — there
+  is no separate `parentInteractionId`. `rubric` is required (universal
+  for AI authors). Used for both review-row output and reply-to-reviewer
+  flows.
 - `shippable_post_plan({changesetId, headline, structure, claims[],
-  entryPoints[], generation})` — atomic Plan insert. Appends a new row;
+  entryPoints[], questions?})` — atomic Plan insert. Appends a new row;
   latest wins (§7). The caller's `authorId` (from `shippable_announce`)
-  becomes the plan's `generated_by`.
+  becomes the plan's `generated_by`. The optional `questions` array
+  carries an AI quiz alongside the plan (§12); a rule-based quiz floor
+  is generated at ingest regardless.
 
 **Wait tool (long-poll, watch mode):**
 
-- `shippable_wait_for_work({timeout, types: ['interactions','plan','review']})`
-  — blocks until work is available or the timeout fires. Returns one of:
-  - `{type: 'interactions', interactions: [...]}` — unread reviewer
-    Interactions for the agent to address.
-  - `{type: 'plan', job: Job}` — pending plan job, claimed by this caller
-    atomically.
-  - `{type: 'review', job: Job}` — pending review job, claimed.
+- `shippable_wait_for_work({timeout, types: ['interaction','plan','review']})`
+  — blocks until a pending row exists in one of the caller's announced
+  channels, or the timeout fires. Returns the claimed
+  `AgentQueueItem`; for `type: 'interaction'` the Interaction itself is
+  inlined in the payload so the agent doesn't need a second fetch.
 
-  Single-consumer claim semantics: the first watcher to receive a job
-  owns it. Long-poll calls implicitly stamp presence (the `watchPolls`/
-  `WATCH_TTL_MS` pattern at `server/src/agent-queue.ts:421`).
+  Single-consumer claim: first watcher in a channel wins. Long-poll calls
+  implicitly stamp presence per `(authorId, channelPath)`; watchers
+  older than `WATCH_TTL_MS` are considered offline.
 
 **Read tools:**
 
-- `shippable_get_changeset(id)`       → `ChangeSet` + file content
+- `shippable_get_changeset(id)`       → `ChangeSet` + file content + all `Interaction[]` (authors expanded)
 - `shippable_get_plan(id)`            → latest visible `Plan` (full document; §7)
 - `shippable_get_progress(id)`        → coverage + sign-off projections
 - `shippable_get_sign_off(id)`        → `{ files: SignOff[], changeset: ChangesetSignOff | null }`
 - `shippable_get_settings()`          → auto-queue prefs the agent should respect
 
-All tools include the requesting agent's `authorId` in their request
-context; the server records reads/writes against it. The legacy
+Interactions are returned inline from `shippable_get_changeset` — there
+is no separate `shippable_get_interactions` tool. The legacy
 `shippable_check_review_comments` and `shippable_watch_review_comments`
-collapse into `shippable_wait_for_work` with `types: ['interactions']`.
+collapse into `shippable_wait_for_work` with `types: ['interaction']`.
+
+**Auth header.** Every request to `/api/agent/*` (the HTTP path the MCP
+subprocess uses) must carry `X-Shippable-Author-Id: <authorId>`. The
+server validates the header against `authors`; unknown id → 401. The
+MCP subprocess holds the id returned by `shippable_announce` and
+attaches it to every subsequent tool call.
 
 ### 4.3 SSE per-ChangeSet
 
@@ -720,8 +766,8 @@ collapse into `shippable_wait_for_work` with `types: ['interactions']`.
                               `PATCH /api/interactions/{id}`; no token streaming)
 - `interaction.deleted`     — `{ id }`
 - `plan.created`            — full Plan (latest visible row; clients always re-fetch / replace)
-- `job.created`             — full Job
-- `job.updated`             — full Job (status transitions)
+- `agent_queue.created`     — full `AgentQueueItem`
+- `agent_queue.updated`     — full `AgentQueueItem` (status transitions)
 - `sign_off.changed`        — `{ userId, file, signedAt | null }` (file-level)
 - `changeset_sign_off.changed` — `{ userId, signedAt | null }` (changeset-level)
 - `capability.changed`      — `{ key, available, reason? }`
@@ -832,9 +878,24 @@ type Plan = {
   structure: StructureMap;
   claims: Claim[];                                  // ordered intent claims (array order = ordinal)
   entryPoints: EntryPoint[];                        // ≤3
-  generation: { ingestId: string; sha: string };
   generatedBy?: string;                             // → authors.id; null when source='rule'
   createdAt: string;
+};
+
+type StructureMap = {
+  files: {
+    path: string;                                   // file = changeset-scoped path
+    status: "added" | "modified" | "deleted" | "renamed";
+    added: number;
+    removed: number;
+    isTest: boolean;
+  }[];
+  symbols: {
+    name: string;
+    definedIn: string;                              // path within the ChangeSet
+    referencedIn: string[];                         // paths within the ChangeSet
+    exported: boolean;                              // exported symbols stay in the map even when unused locally
+  }[];
 };
 ```
 
@@ -854,11 +915,12 @@ presented, not interacted with. Disagreement lives as a normal Interaction
 anchored to code, not as commentary on a Claim.
 
 **Claim.references is non-empty.** UI refuses to render a Claim with no
-references; server validates at write time. Preserves the prototype's
-`docs/architecture.md:41` evidence-mandatory invariant. (Field is named
-`references` to match Interaction's `references` — the structural shape
-is "Anchor[] pointing at code." Evidence-of-verification lives in the
-rubric, not in pointer lists.)
+references; server validates at write time. This is the
+evidence-mandatory invariant: every Claim must point at code that
+substantiates it; an unbacked Claim is unrenderable by construction.
+(The field is named `references` to match Interaction's `references` —
+the structural shape is "Anchor[] pointing at code." Evidence-of-
+verification lives in the rubric, not in pointer lists.)
 
 **EntryPoint is flat, not a composed Claim.** Same underlying shape as a
 Claim (text + Anchor[]), but distinct type. Claims and EntryPoints are
@@ -879,21 +941,22 @@ ORDER BY created_at DESC LIMIT 1;
 
 1. **Ingest writes the rule plan** synchronously (`source='rule'`,
    `generatedBy=null`). It is the floor; always available.
-2. **Auto-queue AI plan** if a watcher is present and the user's
-   `autoQueuePlan` setting is on (default on). A `jobs` row is inserted
-   with `type='plan'`; a watching agent claims it via
+2. **Auto-queue AI plan** if a watcher is present in the channel and the
+   user's `autoQueuePlan` setting is on (default on). An `agent_queue`
+   row is inserted with `type='plan'`; a watching agent claims it via
    `shippable_wait_for_work`. On success the agent calls
    `shippable_post_plan` (atomic), which inserts a new `plans` row with
-   `source='ai'` and updates the job to `done` with `result_id = plans.id`.
-3. **Failure (`status='failed'` on the job)** leaves the previous visible
-   plan in place (rule, or a prior successful AI plan). The UI shows the
-   previous plan with an inline "AI plan generation failed — retry?"
-   affordance above it.
+   `source='ai'` and updates the queue row to `done` with
+   `result_id = plans.id`.
+3. **Failure (`status='failed'` on the queue row)** leaves the previous
+   visible plan in place (rule, or a prior successful AI plan). The UI
+   shows the previous plan with an inline "AI plan generation failed —
+   retry?" affordance above it.
 4. **Regenerate** is agent-initiated. The user goes back to their agent
    ("review this again"); the agent reposts via `shippable_post_plan`. A
    new row appears; latest wins. The Shippable UI offers a "regenerate"
-   button that creates a `jobs` row of `type='plan'` for a watching agent
-   to claim — same path as auto-queue, just user-triggered.
+   button that creates an `agent_queue` row of `type='plan'` for a
+   watching agent to claim — same path as auto-queue, just user-triggered.
 
 **No streaming.** MCP is request/response; the agent buffers its full plan
 and posts atomically. SSE emits a single `plan.created` event when the
@@ -906,74 +969,105 @@ original ChangeSet; they don't carry forward.
 
 ---
 
-## 7b. Jobs and watch mode
+## 7b. Agent queue and watch mode
 
-The job queue is how Shippable asks external agents to do work. Plans and
-AI reviews are the two job types in v1.
+`agent_queue` is the unified inbox between Shippable and external MCP
+agents. Three row types: `plan`, `review`, `interaction`. The agent sees
+everything via one tool (`shippable_wait_for_work`); the server holds
+delivery state in one table.
 
 ```ts
-type JobType   = "plan" | "review";
-type JobStatus = "pending" | "in_progress" | "done" | "failed";
+type AgentQueueType   = "plan" | "review" | "interaction";
+type AgentQueueStatus = "pending" | "in_progress" | "done" | "failed";
 
-type Job = {
+type AgentQueueItem = {
   id: string;
+  type: AgentQueueType;
+  channelPath: string;                              // worktree path (v1)
   changesetId: string;
-  type: JobType;
-  status: JobStatus;
+  status: AgentQueueStatus;
   requestedAt: string;
-  requestedBy: string | null;                       // authors.id (AI requester) or null = local user
+  requestedBy: string | null;                       // authors.id (AI requester) or null = local human
   claimedAt?: string;
   claimedBy?: string;                               // authors.id once claimed
   completedAt?: string;
-  payload?: unknown;                                // type-specific
+  payload?: PlanPayload | ReviewPayload | InteractionPayload;
   resultId?: string;                                // FK to plans.id when type='plan'
   errorMsg?: string;
 };
+
+type PlanPayload        = { regenerate?: boolean };
+type ReviewPayload      = { scope?: { files?: string[] } };
+type InteractionPayload = { interactionId: string };
 ```
+
+**Channels.** Every row carries a `channel_path` (the worktree path in
+v1). Agents declare which channels they're watching via
+`shippable_announce({identity, channels: string[]})`; `wait_for_work`
+returns only rows whose `channel_path` matches the caller's declared
+set. Two watchers on different worktrees never see each other's work;
+two on the same worktree race on first-claim. The channel concept
+generalises to PR / url / etc. in v1.5.
 
 **Producers:**
 
-- **Auto-queue.** On ingest, the server inserts a `plan` job if a watcher
-  is present and `prefs[user:autoQueuePlan] = 'on'` (default on). After a
-  plan completes, the UI prompts the user "want an AI review too?"; on
-  yes, a `review` job is inserted. `prefs[user:autoQueueReview]` defaults
-  to `'off'`.
-- **User-initiated.** "Regenerate plan" and "Run AI review now" buttons in
-  the UI insert `jobs` rows directly via `POST /api/changesets/{id}/jobs`.
+- **Auto-queue plan + review.** On ingest, the server inserts a `plan`
+  row if `prefs[user:autoQueuePlan] = 'on'` (default on). After a plan
+  completes, the UI prompts "want an AI review too?"; on yes, a `review`
+  row is inserted. `prefs[user:autoQueueReview]` defaults to `'off'`.
+- **Auto-enqueue interaction.** When a human-authored Interaction is
+  inserted on a ChangeSet whose channel has at least one watcher, the
+  server inserts an `interaction` row with `payload = {interactionId}`.
+  No intent filter — the agent gets the full firehose of human Interactions
+  (questions, requests, blockers, comments, replies). Insertions by AI
+  authors do not auto-enqueue (they *are* the agent's work).
+- **User-initiated.** "Regenerate plan" and "Run AI review now" buttons
+  insert rows directly via `POST /api/changesets/{id}/agent-queue`.
 
-**Consumers — watch mode.** Agents in watch mode call
-`shippable_wait_for_work` in a loop. When a job is pending, the server
-atomically transitions the row to `in_progress` and assigns `claimedBy =
-caller.authorId`, returning the job to that caller only. Single-consumer
-claim — the first watcher wins. Multiple watchers = redundancy, not
-parallelism.
+**Consumers — watch mode.** Agents call `shippable_wait_for_work({timeout,
+types, channels?})` in a loop. When a row is pending in a watched channel,
+the server atomically claims it and returns it to the caller. Single-
+consumer claim — first watcher wins. Multiple watchers on the same
+channel = redundancy, not parallelism.
+
+**Lifecycle per type:**
+
+- `plan` and `review`: `pending → in_progress` on claim → `done | failed`
+  on agent transition. The agent reports completion explicitly.
+- `interaction`: `pending → done` on claim. Claim is the ack. The agent
+  doesn't need to mark anything afterwards. If the agent wants to reply,
+  it inserts a new Interaction (which won't auto-enqueue because the
+  author is AI).
 
 **Presence.** Long-poll calls to `shippable_wait_for_work` stamp a
-last-seen timestamp per agent (the existing `watchPolls` map at
-`server/src/agent-queue.ts:421`, extended to carry the `authorId` from
-`shippable_announce`). Watchers older than `WATCH_TTL_MS` are considered
-offline. The UI subscribes to `/api/watchers/active` for the "Agent is
-watching" indicator (already wired in `AgentContextSection.tsx:140`).
+last-seen timestamp per `(authorId, channelPath)`. Watchers older than
+`WATCH_TTL_MS` are considered offline. The UI subscribes to
+`GET /api/watchers/active` for the "Agent is watching" indicator —
+**new endpoint in v1**, not previously wired in the prototype.
 
-**No watcher = setup banner.** If no watcher is present, the UI shows the
-rule plan with a visible "Connect an agent for AI plans and reviews"
-banner — a discovery affordance, not an error state. The capability
-`ai.mcp` is `false`; AI features hide themselves cleanly.
+**No watcher = setup banner.** If no watcher is present in a worktree's
+channel, the UI shows the rule plan with a visible "Connect an agent for
+AI plans and reviews" banner — a discovery affordance, not an error
+state. The capability `ai.mcp` is `false` for that channel; AI features
+hide themselves cleanly.
 
-**Stuck row recovery.** On boot, the server sweeps `jobs WHERE
+**Stuck row recovery.** On boot, the server sweeps `agent_queue WHERE
 status='in_progress'` and marks them `'failed'` with `errorMsg='server
-restarted while job was in flight'`. Local dev/desktop restarts often;
-this gives clean recovery without periodic janitor logic.
+restarted while in flight'`. Local dev/desktop restarts often; this
+gives clean recovery without periodic janitor logic.
 
-**Review jobs produce Interactions.** A watcher that claims a `review` job
-calls `shippable_post_interaction` once per finding. The UI sees
-Interactions arrive incrementally via SSE — the "AI is reviewing, you can
-see comments as they appear" UX. When the agent is done, it transitions
-the job to `done`.
+**Review jobs produce Interactions.** A watcher that claims a `review`
+row calls `shippable_post_interaction` once per finding. The UI sees
+Interactions arrive incrementally via SSE — the "AI is reviewing, you
+can see comments as they appear" UX. When the agent is done, it
+transitions the row to `done`.
 
-**Plan jobs produce a Plan.** A watcher posts a single `Plan` via
-`shippable_post_plan`; the server inserts the row and marks the job `done`
-with `resultId` pointing at it.
+**Plan jobs produce a Plan (and optionally a Quiz).** A watcher posts a
+single `Plan` via `shippable_post_plan`; the server inserts the row,
+marks the queue item `done` with `resultId` pointing at it. The same
+`shippable_post_plan` call carries `questions?: Question[]` for the
+optional AI-generated quiz (§12); the rule-based quiz floor is
+generated synchronously at ingest regardless.
 
 ---
 
@@ -1130,8 +1224,16 @@ type Quiz = {
 };
 ```
 
-- Capability-gated via `quiz.enabled`.
-- AI generates the quiz alongside the plan; same generation tag.
+- Capability-gated via `quiz.enabled` (lit in v1).
+- **Rule-based floor at ingest.** A deterministic question generator runs
+  alongside the rule plan and emits at least one changeset-level and one
+  file-level question, so a quiz always exists even with no watcher
+  connected.
+- **AI-generated questions ride alongside the AI plan.** Agents post
+  questions via `shippable_post_plan({..., questions?: Question[]})` —
+  one call delivers both Plan and Quiz. No separate
+  `shippable_post_quiz` tool; the coupling is real (the agent already
+  has the ChangeSet loaded when producing the plan).
 - Responses persist in `quiz_responses`. MCP-readable so an agent can ask
   "has the human passed comprehension on this changeset?"
 
@@ -1144,7 +1246,7 @@ resolves through it.
 
 ```ts
 type Author = {
-  id: string;                                        // userId (human) or sessionId (AI)
+  id: string;                                        // authorId — UUID, generated client-side for humans, server-assigned for AI
   role: "human" | "ai";
   displayName: string;
   declared?: {                                       // AI only
@@ -1163,14 +1265,22 @@ type Author = {
 };
 ```
 
-**Humans** get a row at first POST: `{id: locally-generated userId, role:
-'human', displayName: 'You', declared: undefined, observed: undefined}`.
+**Humans** mint their `authorId` client-side (UUID v4) on first load and
+store it in `localStorage` under `shippable:userId:v1`. The id is sent
+on every API request as `X-Shippable-User-Id: <authorId>`; the server
+upserts the `authors` row on first sight (`{role: 'human', displayName:
+'You', declared: undefined, observed: undefined}`). localStorage is one
+of the few keys we intentionally keep client-side — `prefs` is keyed by
+`authorId`, so it can't bootstrap itself.
 
-**AI agents** get a row on first `shippable_announce`: server assigns the
-session id, fills `declared` from the MCP payload and `observed` from
-the MCP transport context (`worktreePath` derived from MCP env / parent
-process; `harness` inferred from process tree; `osUser`/`host` from the
-server's view of the localhost connection).
+**AI agents** mint their identity via `shippable_announce({identity,
+channels})` at session start; the server assigns the `authorId`,
+fills `declared` from the MCP payload and `observed` from the transport
+context (`worktreePath` derived from MCP env / parent process; `harness`
+inferred from process tree; `osUser`/`host` from the server's view of
+the localhost connection). The agent sends the assigned id as
+`X-Shippable-Author-Id: <authorId>` on every subsequent
+`/api/agent/*` HTTP call.
 
 **Badge UI** (human-facing) combines fields so mismatches are visible:
 
@@ -1187,14 +1297,14 @@ auth.
 
 - `interactions.author_id` — who wrote a comment / finding / reply.
 - `plans.generated_by` — which agent produced a Plan (null for rule-based).
-- `jobs.requested_by` — which agent (or local user) requested the job.
-- `jobs.claimed_by` — which watcher claimed the job.
+- `agent_queue.requested_by` — who requested the row (null = local human).
+- `agent_queue.claimed_by` — which watcher claimed the row.
 - `read_lines.user_id` / `sign_offs.user_id` / `reviewed_changesets.user_id` /
-  `prefs.user_id` / `quiz_responses.user_id` — every per-user state row
-  FK's to `authors.id`.
+  `prefs.user_id` / `user_prompts.user_id` / `quiz_responses.user_id` —
+  every per-user state row FKs to `authors.id`.
 
 Read APIs and MCP read tools **denormalize the author inline** —
-`shippable_get_interactions` returns each Interaction with its `author`
+`shippable_get_changeset` returns each Interaction with its `author`
 expanded as `{id, role, displayName, declared?}`, so agents never need a
 second call to resolve who said what.
 
@@ -1215,7 +1325,7 @@ second call to resolve who said what.
 ```ts
 type UIState = {
   cursor: { changesetId: string; file: string; line: number } | null;
-  fileDisplayMode: Record<string, "diff" | "source" | "preview">;  // keyed by fileId
+  fileDisplayMode: Record<string, "diff" | "source" | "preview">;  // keyed by path within ChangeSet
   draft: { /* in-progress text per anchor */ };
   dismissals: Record<string, true>;
   // ... modal/picker state
@@ -1235,11 +1345,11 @@ load, refresh, SSE-pushed update — funnels through one reducer:
 
 ```ts
 type ApplyExternalUpdate =
-  | { kind: "changeset.loaded";          changeset: ChangeSet; interactions: Interaction[]; plan?: Plan; jobs?: Job[] }
+  | { kind: "changeset.loaded";          changeset: ChangeSet; interactions: Interaction[]; plan?: Plan; agentQueue?: AgentQueueItem[] }
   | { kind: "interaction.upsert";        interaction: Interaction }
   | { kind: "interaction.delete";        id: string }
   | { kind: "plan.created";              plan: Plan }
-  | { kind: "job.upsert";                job: Job }
+  | { kind: "agent_queue.upsert";        item: AgentQueueItem }
   | { kind: "sign_off.changed";          userId: string; file: string; signedAt: string | null }
   | { kind: "changeset_sign_off.changed"; userId: string; signedAt: string | null }
   | { kind: "capability.changed";        key: CapabilityKey; cap: Capability };
@@ -1274,10 +1384,15 @@ without escalation.
 - **References-mandatory on Claims:** `Claim.references` is non-empty; UI
   refuses to render a Claim with none (§7). Server validates at write
   time.
-- **Rubric-mandatory on AI {blocker, request}:** the rubric is a complete
+- **Rubric-mandatory on every AI Interaction:** the rubric is a complete
   `Record<CheckLabel, CheckResult>` — partial rubrics are unrepresentable
-  by construction. Every check carries a non-empty `note`, including the
-  yes ones.
+  by construction. Required regardless of intent (comment, question,
+  request, blocker, or any reply). Every check carries a non-empty
+  `note`, including the yes ones.
+- **Interaction anchors are immutable post-insert:** combined with
+  parent-must-exist for response-intent inserts, comment-chain cycles
+  are impossible by construction. PATCH affects only `body` / `updatedAt`,
+  and only on human-authored rows.
 - **No server-side AI calls:** the server holds no Anthropic key and
   imports no LLM SDK. AI work happens exclusively through MCP agents
   (§4.2). Reintroducing a server-side LLM path requires explicit
@@ -1292,9 +1407,9 @@ without escalation.
 - **Cursor never persists server-side:** cursor is client-only (in-app
   memory + per-tab localStorage for resume). Re-introducing server-side
   cursor requires explicit re-architecture.
-- **File display mode is type-enforced:** `Record<fileId, "diff" |
-  "source" | "preview">`. Parallel Sets with reducer-enforced exclusion
-  do not return.
+- **File display mode is type-enforced:** `Record<path, "diff" |
+  "source" | "preview">` keyed by ChangeSet-scoped path. Parallel Sets
+  with reducer-enforced exclusion do not return.
 
 ---
 
@@ -1304,6 +1419,14 @@ Recorded so future archaeology doesn't resurrect them:
 
 | Dropped                                  | Replaced by                              |
 |------------------------------------------|------------------------------------------|
+| `Anchor.prefer?: "before" \| "after"`    | Renderer falls back to diff-context default; revisit if needed (§18) |
+| `Interaction.generation` / `Plan.generation` field; `generation_json` columns | `changesetId` FK is the revision tag |
+| `shippable_post_interaction({…, parentInteractionId?})` parameter | Replies via `anchor: { kind: "comment", commentId }` |
+| Mutable Interaction anchors / intent / authorId / AI-only fields | Immutable post-insert; PATCH limited to `body` + `updatedAt` on human-authored rows |
+| Separate `jobs` table | `agent_queue` table with three types (`plan`/`review`/`interaction`) and `channel_path` scope (§7b) |
+| `interactions.agent_queue_status` + `interactions.worktree_path` (prototype) | Delivery state lives entirely on `agent_queue` rows |
+| Synthetic `fileId` everywhere               | `path` is the file key within a ChangeSet; storage PK is `(changeset_id, path)` |
+| Separate `shippable_get_interactions` MCP tool | `shippable_get_changeset` returns Interactions inline (authors expanded) |
 | `Interaction.runRecipe` field + `RunRecipe` type | Runner decoupled from data model; free-form scratchpad (§9) |
 | `run_recipe_json` column on `interactions` | Removed                                 |
 | Server-side Anthropic call inside `server/src/plan.ts` | AI plan moves to MCP — agent posts via `shippable_post_plan` after claiming a `plan` job; rule plan still generated inline at ingest (§7b). The Zod schemas survive as wire-validation. |
@@ -1320,12 +1443,12 @@ Recorded so future archaeology doesn't resurrect them:
 | Free-text `author` + parallel `authorRole` column | `author_id` FK to unified `authors` table |
 | Separate `agent_identities` table        | Folded into `authors` (humans + AI)      |
 | `confidence: low\|medium\|high`          | Flat 5-label rubric                      |
-| Universal rubric (every AI interaction)  | Scoped to AI {blocker, request}; §18 open question about extending |
+| Rubric scoped to AI {blocker, request} only | Universal — rubric required on every AI Interaction regardless of intent (§1.2, §15) |
 | Server-side cursor                       | Client-only (in-app memory + localStorage) |
 | Server-side `cursor` POST endpoint       | None — cursor never leaves the client    |
 | 4 ingest endpoints (pr/paste/file/url)   | Type-level union only in v1; PR follow-up in v1.5 |
 | Strangler-fig phased PRs to `main`       | One-shot refactor on a branch; zero back-compat with prototype data |
-| Two-Set file display state (`fullExpandedFiles` + `previewedFiles` + reducer mutex) | `Record<fileId, "diff" | "source" | "preview">` |
+| Two-Set file display state (`fullExpandedFiles` + `previewedFiles` + reducer mutex) | `Record<path, "diff" | "source" | "preview">` |
 | Single-tier sign-off (file only)         | Two-tier: file + changeset, independent  |
 | Merging Claim into Interaction           | Claim + EntryPoint as Plan-internal types (§7) |
 | `Plan.claimIds` (FK to Interactions)     | `Plan.claims: Claim[]` inline            |
@@ -1375,12 +1498,13 @@ whole sequence completes.
 
 2. **Server SQLite schema** — `changesets`, `diff_files`, `authors`
    (unified — humans + AI), `interactions`, `read_lines`, `sign_offs`,
-   `reviewed_changesets`, `prefs`, `trusted_hosts`, `plans`, `jobs`,
-   `user_prompts`, `quizzes`, `quiz_responses`. SSE per-ChangeSet wired.
+   `reviewed_changesets`, `prefs`, `trusted_hosts`, `plans`,
+   `agent_queue`, `user_prompts`, `quizzes`, `quiz_responses`. SSE
+   per-ChangeSet wired.
 
 3. **Reducer + client state** — one `APPLY_EXTERNAL_UPDATE` reducer for
    ingest/refresh/SSE. UI state holds cursor (in-app memory + localStorage),
-   `fileDisplayMode` as `Record<fileId, mode>`, drafts, dismissals.
+   `fileDisplayMode` as `Record<path, mode>`, drafts, dismissals.
 
 4. **REST + SSE + MCP wire** — REST surface from §4.1; SSE events from
    §4.3; MCP tools from §4.2 (`shippable_announce`,
@@ -1391,16 +1515,20 @@ whole sequence completes.
    PR/paste/file/url remain in the `Provenance` union at the type level
    but their endpoints don't land.
 
-6. **Plan + Jobs + auto-queue prefs** — rule plan generated synchronously
-   at ingest; AI plan via `jobs` queue claimed by a watching MCP agent;
-   AI review via `review` jobs. `prefs[user:autoQueuePlan]='on'` and
+6. **Plan + agent_queue + auto-queue prefs** — rule plan + rule quiz
+   floor generated synchronously at ingest; AI plan + quiz via
+   `agent_queue` claimed by a watching MCP agent; AI review via `review`
+   queue items; reviewer Interactions auto-enqueued as `interaction`
+   queue items. `prefs[user:autoQueuePlan]='on'` and
    `prefs[user:autoQueueReview]='off'` defaults. Server holds no
    Anthropic key.
 
 7. **Authors + identity surfacing** — `authors` is the unified store;
    composite declared+observed badge UI; declared+observed handshake on
    `shippable_announce`; `generated_by` on plans, `requested_by`/
-   `claimed_by` on jobs.
+   `claimed_by` on `agent_queue` rows. Human `userId` minted client-side
+   (UUID v4 in localStorage); `X-Shippable-User-Id` / `X-Shippable-Author-Id`
+   headers on all `/api/*` and `/api/agent/*` calls respectively.
 
 8. **Capability system** — server detects environment, ChangeSet
    provenance narrows, reactive context, reasons on unavailable.
@@ -1412,9 +1540,10 @@ whole sequence completes.
 10. **TUI invariant guard** — ESLint rule + test ensuring the core stays
     React-free.
 
-11. **Polish** — refresh-link flow, error states, prefs UI,
-    `tauri-plugin-dialog` directory picker (AppleScript fallback in
-    browser-dev macOS).
+11. **Polish** — refresh-link flow, error states, prefs UI, adoption of
+    `tauri-plugin-dialog` for the directory picker (the prototype doesn't
+    use it yet; v1 wires it for the worktree picker, with an AppleScript
+    fallback in browser-dev macOS).
 
 The branch merges to `main` once items 1–10 are complete and item 11 has
 reached its bar. Item ordering is dependency-driven; later items rely on
@@ -1437,10 +1566,10 @@ Deferred past v1:
   union retained for forward-compatibility.
 - **Full-file-view + preview mode.** `fileDisplayMode` Record already has
   the slots; the UI / capability work lands later.
-- **Rubric scope.** Today's rubric is required on AI {blocker, request}
-  only. Open question: should it extend to AI comments/questions
-  (smaller subset of labels)? Revisit after v1 lands enough findings to
-  see whether the omission bites.
+- **Renderer hint for vanished anchors.** Dropped the `prefer?: "before"
+  | "after"` field on `block` anchors in session 5 — underspecified, no
+  use sites. Renderer defaults are sufficient today. Revisit if the
+  vanished-block UX needs a writer-side hint.
 - **Multi-user identity.** Replace local userId with real auth. The
   prefs/read-lines/coverage/sign-off shapes are already scoped-by-userId;
   migration is mostly auth-side.
