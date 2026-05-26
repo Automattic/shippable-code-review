@@ -32,6 +32,38 @@ The finalized architecture for v1, derived from four grill sessions of
   Collected the MCP-only AI rationale, watch-vs-direct patterns, and
   degradation behaviour into a new §3b "AI integration model" so the
   load-bearing choice has one home instead of five scattered restatements.
+- **Session 7 (2026-05-26):** post-review-2 cleanup. Renamed Anchor
+  discriminator field `kind` → `type` (matches `BlockOrigin.type`) and
+  value `"comment"` → `"interaction"` with `commentId` → `interactionId`
+  (vocabulary now matches the entity). Dropped `Interaction.external`
+  and the `external_json` column from v1 (PR-ingest reintroduces in
+  v1.5; carrying it as dead surface added no value). Human `displayName`
+  stores a real name — "You" is render-time UI when
+  `author.id === currentUserId`. Quiz is presentational only —
+  `acceptableAnswers` is the AI's answer revealed for self-evaluation;
+  no correctness check. Read-lines do not carry forward across
+  ChangeSet refresh (overkill to re-anchor passive attention-tracking).
+  Documented `Plan.headline` as single-line plain text derived from
+  `cs.title`, and codified server-side truncation of `entryPoints` to
+  the first 3. **MCP surface collapsed from nine tools to three:**
+  `shippable_wait_for_work` (the spine, with `channels` + optional
+  `identity` params), `shippable_post_interaction`,
+  `shippable_post_plan`. Dropped `shippable_announce` (identity is
+  implicit via `X-Shippable-Author-Id` header + upsert; declared
+  identity rides on `wait_for_work`), `shippable_get_changeset`
+  (agent reads diff from worktree directly; existing interactions /
+  plan / parent chain inline in `wait_for_work` payload), and the
+  `get_plan` / `get_progress` / `get_sign_off` / `get_settings` reads.
+  Diff bytes never cross the MCP boundary — worktree on disk, agent
+  has filesystem access. Library prompts route through a new
+  `agent_queue.type = 'prompt'` row (server resolves `promptBody` at
+  enqueue time; agent never reads the library directly). Direct
+  prompting via MCP dropped — every AI write into Shippable goes
+  through watch mode. Attributed AI UUID minting to the **MCP
+  subprocess** (`mcp-server/`), not the LLM peer: the bridge generates
+  the UUID on startup, caches it in memory, attaches the
+  `X-Shippable-Author-Id` header to every HTTP call; the LLM never
+  sees the header. Persisted-across-restart identity deferred (§18).
 - **Session 6 (2026-05-26):** review-driven cleanup. Subagent audit of
   the doc flagged eight open architectural decisions and a punch list of
   wrong/contradictory citations. Locked: dropped `Anchor.prefer?` (§18);
@@ -65,11 +97,11 @@ A position. Used by every feature that asks "where in the code?".
 
 ```ts
 type Anchor =
-  | { kind: "block";    file: string; lo: number; hi: number; origin: BlockOrigin }
-  | { kind: "symbol";   file: string; symbol: string }
-  | { kind: "file";     file: string }
-  | { kind: "changeset" }                          // zero-data: applies to the whole ChangeSet
-  | { kind: "comment";  commentId: string };      // anchors to another Interaction (= reply)
+  | { type: "block";       file: string; lo: number; hi: number; origin: BlockOrigin }
+  | { type: "symbol";      file: string; symbol: string }
+  | { type: "file";        file: string }
+  | { type: "changeset" }                          // zero-data: applies to the whole ChangeSet
+  | { type: "interaction"; interactionId: string };// anchors to another Interaction (reply chain)
 
 type BlockOrigin =
   | { type: "committed"; sha: string }            // git re-derives the window from sha on demand
@@ -78,11 +110,11 @@ type BlockOrigin =
 
 **Key decisions:**
 
-- **No `hunk` kind.** Hunks are an artifact of how diffs are parsed; once
+- **No `hunk` type.** Hunks are an artifact of how diffs are parsed; once
   parsed, ranges are sufficient.
 - **No `line` vs `block` distinction.** A single-line position is `block`
   with `lo === hi`.
-- **`changeset` kind for ChangeSet-level claims** (e.g. "this changeset is
+- **`changeset` type for ChangeSet-level claims** (e.g. "this changeset is
   mostly cosmetic"; quiz changeset-level questions). Zero-data; carries
   no file/range.
 - **`file: string` is the path within the ChangeSet** (matches
@@ -90,7 +122,7 @@ type BlockOrigin =
   `path` in v1 — file rows are uniquely keyed by `(changeset_id, path)`
   in storage and by `path` within a single ChangeSet's namespace.
   `UIState.fileDisplayMode` keys by the same `path` string.
-- **`comment` anchors are how threading works.** A reply is an Interaction
+- **`interaction` anchors are how threading works.** A reply is an Interaction
   anchored to its parent. Reply-of-reply allowed. Cycles prevented by
   acyclic insert.
 - **`symbol` resolves lazily.** Anchor stores symbol name + file; the
@@ -116,15 +148,16 @@ type BlockOrigin =
   Anchors detach with a "lost commit" caption; accepted as audit-trail
   decay rather than data loss for live review.
 
-**Comment chain resolution.** `resolveRootAnchor(anchor)` walks the
-comment chain until it hits a code-or-changeset anchor. Terminates because
-asks must root on non-comment anchors (write-time rule).
+**Reply chain resolution.** `resolveRootAnchor(anchor)` walks the
+`interaction`-anchor chain until it hits a code-or-changeset anchor.
+Terminates because asks must root on non-`interaction` anchors (write-time
+rule).
 
 ### 1.2 Interaction
 
 The unified signal. One shape for every reviewer event — human comment,
-AI finding (from a review job, §7b), external PR comment, MCP agent post,
-reply, ack/reject.
+AI finding (from a review job, §7b), MCP agent post, reply, ack/reject.
+(External PR comments are deferred to v1.5+; see §1.3 and §18.)
 
 ```ts
 type AskIntent      = "comment" | "question" | "request" | "blocker";
@@ -158,12 +191,6 @@ type Interaction = {
   rationale?: string;
   suggestedFix?: string;
 
-  external?: {
-    source: "pr" | "mcp";
-    htmlUrl?: string;
-    sentinelId?: string;
-  };
-
   createdAt: string;
   updatedAt: string;
 };
@@ -171,9 +198,9 @@ type Interaction = {
 
 **Write-time validation rules:**
 
-- `intent ∈ AskIntent`  →  `anchor.kind !== "comment"` (asks root on code/changeset).
-- `intent ∈ ResponseIntent`  →  `anchor.kind === "comment"` (responses reply).
-- `anchor.kind === "comment"`  →  the referenced `commentId` must exist
+- `intent ∈ AskIntent`  →  `anchor.type !== "interaction"` (asks root on code/changeset).
+- `intent ∈ ResponseIntent`  →  `anchor.type === "interaction"` (responses reply).
+- `anchor.type === "interaction"`  →  the referenced `interactionId` must exist
   at insert time (parent-must-exist; rejects orphan replies).
 - author's role is `"ai"` → full rubric required, regardless of intent
   (every `CheckLabel` answered, each with `result` and a non-empty `note`).
@@ -194,15 +221,16 @@ type Interaction = {
 
 **Key decisions:**
 
-- **No `threadKey` field.** Threading derives from `anchor.kind === "comment"`
+- **No `threadKey` field.** Threading derives from `anchor.type === "interaction"`
   chains. The prototype's prefixed keys (`note:`, `block:`, `user:`,
   `teammate:`, `hunkSummary:`) were a workaround; the anchor is the
   unified pointer.
 - **No `target`, no `parentId`.** Anchor is the sole positioning field.
 - **AuthorId references `authors`, not a free-text display name.** Identity
-  lives in one table (§13). Read-side denormalizes — `shippable_get_changeset`
-  returns each Interaction with `author: {id, role, displayName, declared?}`
-  expanded inline so MCP callers don't need a second lookup.
+  lives in one table (§13). Read-side denormalizes — every Interaction
+  surfaced over the wire (REST, SSE, MCP queue payload) carries its
+  `author: {id, role, displayName, declared?}` expanded inline so
+  callers don't need a second lookup.
 - **Rubric is a flat 5-label closed set, complete every time, required
   on every AI Interaction regardless of intent.** The type is
   `Record<CheckLabel, CheckResult>` so a partial rubric is unrepresentable
@@ -274,8 +302,10 @@ type Provenance =
   Re-anchoring migrates interactions forward. Audit trail preserved.
 - **Provenance-derived id with content-hash fallback** for paste/file/
   url-without-sha.
-- **PR comments materialised at ingest** as immutable read-only Interactions
-  with `external.source: "pr"`. (Live in v1.5+ — see §1.4 / §2.1.)
+- **No `external` field in v1.** PR ingest in v1.5+ reintroduces an
+  `external` discriminated variant on Interaction (provenance for mirrored
+  PR comments + an `htmlUrl` back to the original). The field is omitted
+  from v1 entirely rather than carried as dead surface; see §18.
 - **Metadata lives on the provenance variant**, not a flat `meta` bag.
 - **Union keeps all 5 variants in v1** even though only `worktree` ingest
   ships. The type stays open so v1.5 can add PR ingest without a
@@ -330,10 +360,11 @@ Turns an external source into a ChangeSet. Server-side, end to end.
 - **Worktree is the only ingest endpoint that ships in v1.** Client posts
   a workdir; server reads git state, builds a ChangeSet, returns the id.
   PR/paste/file/url remain in the `Provenance` union at the type level
-  but their endpoints don't land — first follow-up is PR ingest in v1.5,
-  built so the MCP-watcher pattern works against PR-loaded ChangeSets
-  (server holds the diff, agent reads via `shippable_get_changeset`,
-  no local clone assumed).
+  but their endpoints don't land — first follow-up is PR ingest in
+  v1.5. v1's MCP integration assumes the agent has filesystem access to
+  the worktree; reintroducing non-disk provenances will need a separate
+  channel for shipping diff content to the agent, designed when that
+  work lands.
 - **Live reload watches the worktree.** A file-system watcher (the
   prototype's `useWorktreeLiveReload` + server-side fs notifier) detects
   changes under the workdir and surfaces a "refresh available" affordance
@@ -375,6 +406,13 @@ The review state machine: cursor, read-line tracking, projections.
   in v1.
 - **Read-lines batch+debounce on the client; POST every 1–2s.** Server
   stores compact merged ranges keyed by `(userId, changesetId, file)`.
+- **Read-lines do not carry forward across ChangeSet refresh.** They're
+  scoped by `changesetId`; the child ChangeSet starts empty. Per-range
+  re-anchoring would need the same anchor-hash machinery Interactions use
+  (§1.1), which is overkill for what is effectively passive
+  attention-tracking. Re-reading after a revision is part of reviewing
+  the new revision — consistent with sign-off's "explicit re-sign" rule
+  (§6).
 - **Sign-off writes immediate, per-gesture.** Two tiers — file-level and
   changeset-level (§6).
 - **No persisted drafts.** Submit-or-lose.
@@ -435,7 +473,7 @@ CREATE TABLE diff_files (
 );
 
 CREATE TABLE authors (
-  id             TEXT PRIMARY KEY,                   -- authorId — client-minted UUID (humans) or server-assigned UUID (AI)
+  id             TEXT PRIMARY KEY,                   -- authorId — client-minted UUID (humans) or MCP-subprocess-minted UUID (AI)
   role           TEXT NOT NULL,                      -- 'human' | 'ai'
   display_name   TEXT NOT NULL,
   declared_json  TEXT,                               -- AI only: { handle, purpose, model }
@@ -454,7 +492,6 @@ CREATE TABLE interactions (
   rubric_json     TEXT,                              -- Record<CheckLabel, CheckResult> or NULL
   rationale       TEXT,
   suggested_fix   TEXT,
-  external_json   TEXT,                              -- pr | mcp provenance
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
@@ -512,12 +549,12 @@ CREATE INDEX plans_by_changeset ON plans(changeset_id, created_at DESC);
 
 CREATE TABLE agent_queue (
   id              TEXT PRIMARY KEY,
-  type            TEXT NOT NULL,                     -- 'plan' | 'review' | 'interaction'
+  type            TEXT NOT NULL,                     -- 'plan' | 'review' | 'interaction' | 'prompt'
   channel_path    TEXT NOT NULL,                     -- worktree path (v1); broader in v1.5 (PR/url/etc.)
   changeset_id    TEXT NOT NULL REFERENCES changesets(id),
   status          TEXT NOT NULL,                     -- 'pending' | 'in_progress' | 'done' | 'failed'
   requested_at    TEXT NOT NULL,
-  requested_by    TEXT REFERENCES authors(id),       -- null if the local human is the requester
+  requested_by    TEXT NOT NULL REFERENCES authors(id),  -- always set to the requester's author_id (human for user-initiated/auto-queue-from-human-action; AI for future agent-to-agent enqueue)
   claimed_at      TEXT,
   claimed_by      TEXT REFERENCES authors(id),       -- AI author once claimed
   completed_at    TEXT,
@@ -561,10 +598,18 @@ CREATE TABLE quiz_responses (
   read-line, pref, user prompt, and quiz response references `authors.id`.
   Humans mint their `authorId` client-side (UUID v4 in localStorage;
   `X-Shippable-User-Id` header); the server upserts the row on first
-  sight (role `'human'`, no declared/observed). AI agents get a row on
-  first `shippable_announce` with a server-assigned UUID (role `'ai'`,
-  declared + observed populated; `X-Shippable-Author-Id` header on
-  every subsequent `/api/agent/*` call). No accounts, no auth in v1 —
+  sight (role `'human'`, no declared/observed). For AI, the **MCP
+  subprocess** (`mcp-server/`, the stdio bridge between the LLM and the
+  Node server) mints a UUID v4 on startup and attaches it as
+  `X-Shippable-Author-Id` to every HTTP call it makes; the LLM peer
+  never sees the header. The Node server upserts a row (role `'ai'`)
+  on first sight. Declared identity (handle, purpose, model) arrives
+  via the optional `identity` parameter on
+  `shippable_wait_for_work` — no separate handshake. Observed identity
+  (worktree, harness, osUser, host) is filled from connection context
+  and refreshed on every call. The subprocess holds its UUID in memory
+  only — restarts mint a new id and a new `authors` row; persistence
+  is deferred (§18). No accounts, no auth in v1 —
   multi-user identity is deferred (§18).
 - **Secrets.** Only GitHub tokens. Keychain in Tauri, server memory in
   dev. Server is the policy boundary; secrets never reach the client.
@@ -606,19 +651,29 @@ surfacing, degradation banners — derives from it.
 
 ### How agents drive AI work
 
-Two patterns, both via the MCP tool surface in §4.2:
+**Watch mode only.** The agent calls `shippable_wait_for_work` in a
+loop. Pending `agent_queue` rows (`plan`, `review`, `interaction`, or
+`prompt` — see §7b) in the agent's declared channels are atomically
+claimed; the call returns the queue item with server-unique context
+(existing interactions, plan, parent chain, prompt body) inlined. The
+agent reads the diff content directly from the worktree, computes, then
+calls `shippable_post_plan` or `shippable_post_interaction` per
+finding. This is the "AI is reviewing, comments appear as they land"
+UX (§7b).
 
-1. **Watch mode (auto-queued).** The agent calls
-   `shippable_wait_for_work` in a loop. Pending `agent_queue` rows
-   (`plan`, `review`, or `interaction` — see §7b) in the agent's
-   declared channels are atomically claimed; the agent computes, then
-   calls `shippable_post_plan` or `shippable_post_interaction` per
-   finding. This is the "AI is reviewing, comments appear as they
-   land" UX (§7b).
-2. **Direct prompting.** The user prompts their agent themselves
-   ("review this changeset" / "explain hunk X"). The agent reads via
-   `shippable_get_changeset`, writes via `shippable_post_interaction`.
-   No queue, no job. The library prompts (§9b) seed common asks.
+**No direct-prompt path through MCP.** The user can still prompt their
+agent freely in the agent's own UI — that's outside Shippable's
+surface. The way to get an agent's output *into* Shippable is to run a
+library prompt: the UI affordance enqueues a `prompt` row (§9b), the
+watcher claims it, the result posts back as Interactions (or a Plan,
+for plan-shaped prompts). Every write into Shippable goes through the
+queue.
+
+**MCP carries server-unique state only.** Diffs live on disk in the
+worktree; the agent reads them itself via its native filesystem tools.
+The MCP layer ferries what the server uniquely has — existing
+interactions, plans, queue context, prompt bodies — and accepts the
+agent's writes back. No diff bytes cross the MCP boundary in v1.
 
 ### Degradation: no agent connected
 
@@ -705,57 +760,64 @@ talking to the Node server on `127.0.0.1:{port}/api/agent/*`. MCP is the
 **sole** AI integration path — the server holds no Anthropic key and
 makes no LLM calls itself.
 
+Three tools. Watch mode is the only flow; the agent reads diff content
+from the worktree itself, so MCP carries only server-unique state
+(existing interactions, plan, queue context).
+
+**The spine — long-poll claim, watch mode:**
+
+- `shippable_wait_for_work({timeout, types, channels, identity?})` —
+  blocks until a pending `agent_queue` row matches one of the caller's
+  declared `channels` (worktree paths) and `types`, or the timeout
+  fires. Returns the claimed `AgentQueueItem` with type-specific
+  context inlined (see payload table below). Single-consumer claim:
+  first watcher in a channel wins. Long-poll calls implicitly stamp
+  presence per `(authorId, channelPath)`; watchers older than
+  `WATCH_TTL_MS` are considered offline.
+
+  `identity` is optional. When provided, the server upserts
+  `authors.declared_json` (handle, purpose, model) so the human-facing
+  badge can show rich identity (§13). Agents that skip it are
+  observed-only — badge shows just the worktree path and `firstSeenAt`.
+
+  Payload returned by `wait_for_work` (no diff content — agent reads
+  the worktree directly):
+
+  | Queue type    | Inlined payload                                                            |
+  |---------------|----------------------------------------------------------------------------|
+  | `plan`        | `{ regenerate?: boolean }`                                                 |
+  | `review`      | `{ scope?: { files?: string[] }, interactions: Interaction[], plan?: Plan }` |
+  | `interaction` | `{ interaction: Interaction, parentChain: Interaction[] }`                 |
+  | `prompt`      | `{ promptId, promptBody, args?: Record<string,unknown> }` (server-resolved; agent never reads the library directly — §9b) |
+
 **Write tools:**
 
-- `shippable_announce({identity, channels: string[]})` — register the
-  agent's declared identity and declare the channels (worktree paths in
-  v1) it's watching. Server upserts an `authors` row with role `'ai'`,
-  fills `declared_json` and `observed_json`, and returns `authorId`. The
-  agent must include this id as the `X-Shippable-Author-Id` header on
-  every subsequent call.
 - `shippable_post_interaction({changesetId, anchor, intent, body, rubric,
   rationale?, suggestedFix?, references?})` — one Interaction per call.
-  Atomic. Replies use `anchor: { kind: "comment", commentId }` — there
-  is no separate `parentInteractionId`. `rubric` is required (universal
-  for AI authors). Used for both review-row output and reply-to-reviewer
-  flows.
+  Atomic. Replies use `anchor: { type: "interaction", interactionId }` —
+  there is no separate `parentInteractionId`. `rubric` is required (universal
+  for AI authors). Used for review/prompt/reply output.
 - `shippable_post_plan({changesetId, headline, structure, claims[],
   entryPoints[], questions?})` — atomic Plan insert. Appends a new row;
-  latest wins (§7). The caller's `authorId` (from `shippable_announce`)
-  becomes the plan's `generated_by`. The optional `questions` array
-  carries an AI quiz alongside the plan (§12); a rule-based quiz floor
-  is generated at ingest regardless.
+  latest wins (§7). The caller's `authorId` (from the
+  `X-Shippable-Author-Id` header) becomes the plan's `generated_by`. The
+  optional `questions` array carries an AI quiz alongside the plan
+  (§12); a rule-based quiz floor is generated at ingest regardless.
+  **Write-time validation:** `claims[*].references` must be non-empty
+  per claim; `entryPoints` longer than 3 is truncated server-side to
+  the first 3 by array order (matches the prototype's `assemblePlan`
+  behavior).
 
-**Wait tool (long-poll, watch mode):**
-
-- `shippable_wait_for_work({timeout, types: ['interaction','plan','review']})`
-  — blocks until a pending row exists in one of the caller's announced
-  channels, or the timeout fires. Returns the claimed
-  `AgentQueueItem`; for `type: 'interaction'` the Interaction itself is
-  inlined in the payload so the agent doesn't need a second fetch.
-
-  Single-consumer claim: first watcher in a channel wins. Long-poll calls
-  implicitly stamp presence per `(authorId, channelPath)`; watchers
-  older than `WATCH_TTL_MS` are considered offline.
-
-**Read tools:**
-
-- `shippable_get_changeset(id)`       → `ChangeSet` + file content + all `Interaction[]` (authors expanded)
-- `shippable_get_plan(id)`            → latest visible `Plan` (full document; §7)
-- `shippable_get_progress(id)`        → coverage + sign-off projections
-- `shippable_get_sign_off(id)`        → `{ files: SignOff[], changeset: ChangesetSignOff | null }`
-- `shippable_get_settings()`          → auto-queue prefs the agent should respect
-
-Interactions are returned inline from `shippable_get_changeset` — there
-is no separate `shippable_get_interactions` tool. The legacy
-`shippable_check_review_comments` and `shippable_watch_review_comments`
-collapse into `shippable_wait_for_work` with `types: ['interaction']`.
-
-**Auth header.** Every request to `/api/agent/*` (the HTTP path the MCP
-subprocess uses) must carry `X-Shippable-Author-Id: <authorId>`. The
-server validates the header against `authors`; unknown id → 401. The
-MCP subprocess holds the id returned by `shippable_announce` and
-attaches it to every subsequent tool call.
+**Auth header.** Every request to `/api/agent/*` carries
+`X-Shippable-Author-Id: <uuid>`. The header is minted and attached by
+the **MCP subprocess** (`mcp-server/`) — a UUID v4 generated on
+startup, cached in memory for the subprocess lifetime. The LLM peer
+calling MCP tools never sees the header; identity is plumbing handled
+by the bridge. The Node server upserts an `authors` row (role
+`'ai'`) on first sight from that id and refreshes `observed_json` +
+`last_seen_at` on every call. No prior handshake — the first
+`wait_for_work` is both registration and the first poll. Subprocess
+restart = new UUID = new `authors` row; in-memory by design (§13).
 
 ### 4.3 SSE per-ChangeSet
 
@@ -806,8 +868,9 @@ whom?" — split into AI-coverage and human-coverage.
   inflate coverage misleadingly. Plans and coverage are orthogonal
   projections.
 
-**MCP exposure.** `shippable_get_progress(id)` returns coverage so the
-agent can know what the human has and hasn't read.
+**MCP exposure.** None in v1 — agents don't read coverage. If a flow
+emerges where the agent needs to know what the human has read, add a
+read tool back; today's queue-driven work doesn't need it.
 
 ---
 
@@ -827,7 +890,7 @@ file X?'."
   changeset reviewed" button in the changeset header. Toggle revokes.
 
 Both tiers are scoped by `(userId, changesetId[, file])`. Atomic writes +
-SSE events. Each tier is its own MCP read in `shippable_get_sign_off(id)`.
+SSE events. No MCP exposure in v1 — agents don't read sign-off state.
 
 **Why two gestures, not one.** They mean different things:
 
@@ -874,10 +937,10 @@ type Plan = {
   id: string;
   changesetId: string;
   source: "rule" | "ai";
-  headline: string;
+  headline: string;                                 // single-line plain text, no markdown; derived from ChangeSet title (branch/commit subject or PR title)
   structure: StructureMap;
   claims: Claim[];                                  // ordered intent claims (array order = ordinal)
-  entryPoints: EntryPoint[];                        // ≤3
+  entryPoints: EntryPoint[];                        // ≤3; server truncates to the first 3 by array order at write time
   generatedBy?: string;                             // → authors.id; null when source='rule'
   createdAt: string;
 };
@@ -972,12 +1035,12 @@ original ChangeSet; they don't carry forward.
 ## 7b. Agent queue and watch mode
 
 `agent_queue` is the unified inbox between Shippable and external MCP
-agents. Three row types: `plan`, `review`, `interaction`. The agent sees
-everything via one tool (`shippable_wait_for_work`); the server holds
-delivery state in one table.
+agents. Four row types: `plan`, `review`, `interaction`, `prompt`. The
+agent sees everything via one tool (`shippable_wait_for_work`); the
+server holds delivery state in one table.
 
 ```ts
-type AgentQueueType   = "plan" | "review" | "interaction";
+type AgentQueueType   = "plan" | "review" | "interaction" | "prompt";
 type AgentQueueStatus = "pending" | "in_progress" | "done" | "failed";
 
 type AgentQueueItem = {
@@ -987,11 +1050,11 @@ type AgentQueueItem = {
   changesetId: string;
   status: AgentQueueStatus;
   requestedAt: string;
-  requestedBy: string | null;                       // authors.id (AI requester) or null = local human
+  requestedBy: string;                              // authors.id of the requester (always set)
   claimedAt?: string;
   claimedBy?: string;                               // authors.id once claimed
   completedAt?: string;
-  payload?: PlanPayload | ReviewPayload | InteractionPayload;
+  payload?: PlanPayload | ReviewPayload | InteractionPayload | PromptPayload;
   resultId?: string;                                // FK to plans.id when type='plan'
   errorMsg?: string;
 };
@@ -999,15 +1062,26 @@ type AgentQueueItem = {
 type PlanPayload        = { regenerate?: boolean };
 type ReviewPayload      = { scope?: { files?: string[] } };
 type InteractionPayload = { interactionId: string };
+type PromptPayload      = {
+  promptId: string;                                 // matches library/user prompt id (§9b)
+  promptBody: string;                               // server-resolved markdown (args substituted) — the agent treats this as the instruction
+  args?: Record<string, unknown>;                   // the args the user supplied; agent can reference if needed
+};
 ```
 
+`wait_for_work` returns the row with the persisted `payload` *plus*
+type-specific context inlined for the agent (existing interactions,
+plan, parent chain — see §4.2 payload table). The persisted column
+stores only the small parameters above; the inlined context is computed
+at claim time.
+
 **Channels.** Every row carries a `channel_path` (the worktree path in
-v1). Agents declare which channels they're watching via
-`shippable_announce({identity, channels: string[]})`; `wait_for_work`
-returns only rows whose `channel_path` matches the caller's declared
-set. Two watchers on different worktrees never see each other's work;
-two on the same worktree race on first-claim. The channel concept
-generalises to PR / url / etc. in v1.5.
+v1). Agents declare which channels they're watching via the `channels`
+parameter on `shippable_wait_for_work`; the call returns only rows whose
+`channel_path` matches the caller's declared set. Two watchers on
+different worktrees never see each other's work; two on the same
+worktree race on first-claim. The channel concept generalises to PR /
+url / etc. in v1.5.
 
 **Producers:**
 
@@ -1022,18 +1096,24 @@ generalises to PR / url / etc. in v1.5.
   (questions, requests, blockers, comments, replies). Insertions by AI
   authors do not auto-enqueue (they *are* the agent's work).
 - **User-initiated.** "Regenerate plan" and "Run AI review now" buttons
-  insert rows directly via `POST /api/changesets/{id}/agent-queue`.
+  insert `plan` / `review` rows via `POST /api/changesets/{id}/agent-queue`.
+  The prompt-library "Run this prompt" affordance (§9b) resolves the
+  prompt body server-side and inserts a `prompt` row through the same
+  endpoint.
 
 **Consumers — watch mode.** Agents call `shippable_wait_for_work({timeout,
-types, channels?})` in a loop. When a row is pending in a watched channel,
+types, channels})` in a loop. When a row is pending in a watched channel,
 the server atomically claims it and returns it to the caller. Single-
 consumer claim — first watcher wins. Multiple watchers on the same
 channel = redundancy, not parallelism.
 
 **Lifecycle per type:**
 
-- `plan` and `review`: `pending → in_progress` on claim → `done | failed`
-  on agent transition. The agent reports completion explicitly.
+- `plan`, `review`, `prompt`: `pending → in_progress` on claim → `done |
+  failed` on agent transition. The agent reports completion explicitly.
+  `prompt` is shaped exactly like `review` from the agent's perspective
+  — execute the body, post Interactions (or a Plan, for plan-shaped
+  prompts), transition the row when done.
 - `interaction`: `pending → done` on claim. Claim is the ack. The agent
   doesn't need to mark anything afterwards. If the agent wants to reply,
   it inserts a new Interaction (which won't auto-enqueue because the
@@ -1101,7 +1181,7 @@ Interactions.
 - **Paste-and-run.** The user (or, in the future, an agent over MCP)
   drops code into the runner panel; it executes in a sandboxed iframe
   (`/runner-sandbox.html`) for JS/TS and via `@php-wasm` for PHP. No
-  filesystem reach. Works in every provenance + memory-only mode.
+  filesystem reach. Works in every provenance.
 - **No structured recipe.** Interactions no longer carry a `runRecipe`
   field; the runner reads code from its own panel state, not from the
   data model. The earlier "verify-this-finding" flow (AI Interaction →
@@ -1117,8 +1197,9 @@ Interactions.
 ## 9b. Prompt library
 
 A small content-management surface that ships markdown prompts the user
-can copy into their MCP agent. Distinct from Plan and Interaction; the
-library doesn't produce findings itself.
+can run against a ChangeSet. Distinct from Plan and Interaction; the
+library doesn't produce findings itself — running a prompt enqueues a
+`prompt` row (§7b) that a watching agent claims and executes.
 
 ```ts
 type Prompt = {
@@ -1167,8 +1248,21 @@ and `DELETE /api/user-prompts/{id}`. Library prompts are read-only at
 the surface — to change them, the operator changes the library source
 (`path` or `git`).
 
+**Run path — through the queue, not direct MCP.** The picker's "Run this
+prompt" button calls `POST /api/changesets/{id}/agent-queue` with
+`type: 'prompt'`. The server resolves the prompt body (looks up the
+prompt by id, substitutes args from the user's form), and inserts a
+`prompt` row with `payload = { promptId, promptBody, args }` (see §7b).
+A watching agent claims it, executes against the worktree, and posts
+results as Interactions (or a Plan, for plan-shaped prompts like
+`summarise-for-pr`). The agent never reads the library directly — the
+server has already resolved it.
+
 **Capability.** No explicit flag — the library always resolves (worst
 case, to the empty bundled set). The picker mounts unconditionally.
+Running a prompt requires a watcher in the channel; if none is present,
+the "Run" button surfaces the same "Connect an agent" affordance as
+§7b's setup banner.
 
 **Not in v1 (open):** prompt frontmatter–driven rubric extensions
 (§18), per-prompt MCP routing.
@@ -1213,7 +1307,7 @@ type Question = {
   id: string;
   target: Anchor;                                    // block | symbol | file | changeset
   prompt: string;
-  acceptableAnswers: string[];
+  acceptableAnswers: string[];                       // the AI's answer(s); shown after the user submits for self-evaluation. Not used for grading — there is no correctness check in v1.
 };
 
 type Quiz = {
@@ -1225,6 +1319,11 @@ type Quiz = {
 ```
 
 - Capability-gated via `quiz.enabled` (lit in v1).
+- **No correctness check.** The quiz is presentational. The user answers,
+  then `acceptableAnswers` is revealed and the user self-evaluates. The
+  server stores both the user's response and the question text; it does
+  not score. An agent asking "has the human responded?" is a presence
+  check, not a pass/fail.
 - **Rule-based floor at ingest.** A deterministic question generator runs
   alongside the rule plan and emits at least one changeset-level and one
   file-level question, so a quiz always exists even with no watcher
@@ -1235,7 +1334,7 @@ type Quiz = {
   `shippable_post_quiz` tool; the coupling is real (the agent already
   has the ChangeSet loaded when producing the plan).
 - Responses persist in `quiz_responses`. MCP-readable so an agent can ask
-  "has the human passed comprehension on this changeset?"
+  "has the human responded to comprehension questions on this changeset?"
 
 ---
 
@@ -1248,7 +1347,7 @@ resolves through it.
 type Author = {
   id: string;                                        // authorId — UUID, generated client-side for humans, server-assigned for AI
   role: "human" | "ai";
-  displayName: string;
+  displayName: string;                               // stable name for the author; "You" is render-time UI, not stored data
   declared?: {                                       // AI only
     handle: string;                                  // 'security-review'
     purpose: string;                                 // 'Audit auth flow'
@@ -1269,18 +1368,32 @@ type Author = {
 store it in `localStorage` under `shippable:userId:v1`. The id is sent
 on every API request as `X-Shippable-User-Id: <authorId>`; the server
 upserts the `authors` row on first sight (`{role: 'human', displayName:
-'You', declared: undefined, observed: undefined}`). localStorage is one
-of the few keys we intentionally keep client-side — `prefs` is keyed by
-`authorId`, so it can't bootstrap itself.
+<os-user-or-empty-string>, declared: undefined, observed: undefined}`).
+A settings affordance lets the human update `displayName` later;
+"You" is rendered by the UI when `interaction.author.id === currentUserId`,
+not stored as data. localStorage is one of the few keys we intentionally
+keep client-side — `prefs` is keyed by `authorId`, so it can't bootstrap
+itself.
 
-**AI agents** mint their identity via `shippable_announce({identity,
-channels})` at session start; the server assigns the `authorId`,
-fills `declared` from the MCP payload and `observed` from the transport
-context (`worktreePath` derived from MCP env / parent process; `harness`
-inferred from process tree; `osUser`/`host` from the server's view of
-the localhost connection). The agent sends the assigned id as
-`X-Shippable-Author-Id: <authorId>` on every subsequent
-`/api/agent/*` HTTP call.
+**AI identity is minted by the MCP subprocess**, not by the LLM peer.
+The subprocess (`mcp-server/src/index.ts`) generates a UUID v4 on
+startup and caches it in memory; every HTTP call it makes to
+`/api/agent/*` carries `X-Shippable-Author-Id: <uuid>`. The LLM
+calling MCP tools is unaware of this — the bridge handles plumbing.
+The Node server upserts the `authors` row on first sight (role
+`'ai'`) and refreshes `observed_json` from the transport context on
+every call (`worktreePath` derived from the declared channel and
+connection; `harness` inferred from process tree; `osUser`/`host` from
+the server's view of the localhost connection). Declared identity
+(handle, purpose, model) arrives via the optional `identity` parameter
+on `shippable_wait_for_work` — the subprocess passes through whatever
+the LLM peer supplies via the MCP tool call. Sent on every poll; last
+write wins; subprocesses (or LLMs) that skip it stay observed-only.
+
+Subprocess restart mints a new UUID and creates a new `authors` row —
+the old row stays in the table as historical (`lastSeenAt` stops
+advancing). In-memory minting is intentional in v1; persisted identity
+across subprocess restarts is deferred (§18).
 
 **Badge UI** (human-facing) combines fields so mismatches are visible:
 
@@ -1297,16 +1410,16 @@ auth.
 
 - `interactions.author_id` — who wrote a comment / finding / reply.
 - `plans.generated_by` — which agent produced a Plan (null for rule-based).
-- `agent_queue.requested_by` — who requested the row (null = local human).
+- `agent_queue.requested_by` — who requested the row (always set).
 - `agent_queue.claimed_by` — which watcher claimed the row.
 - `read_lines.user_id` / `sign_offs.user_id` / `reviewed_changesets.user_id` /
   `prefs.user_id` / `user_prompts.user_id` / `quiz_responses.user_id` —
   every per-user state row FKs to `authors.id`.
 
-Read APIs and MCP read tools **denormalize the author inline** —
-`shippable_get_changeset` returns each Interaction with its `author`
-expanded as `{id, role, displayName, declared?}`, so agents never need a
-second call to resolve who said what.
+Wire surfaces **denormalize the author inline** — every Interaction
+returned by REST, SSE, or MCP queue payload carries its `author`
+expanded as `{id, role, displayName, declared?}`, so callers never need
+a second lookup to resolve who said what.
 
 ---
 
@@ -1421,12 +1534,12 @@ Recorded so future archaeology doesn't resurrect them:
 |------------------------------------------|------------------------------------------|
 | `Anchor.prefer?: "before" \| "after"`    | Renderer falls back to diff-context default; revisit if needed (§18) |
 | `Interaction.generation` / `Plan.generation` field; `generation_json` columns | `changesetId` FK is the revision tag |
-| `shippable_post_interaction({…, parentInteractionId?})` parameter | Replies via `anchor: { kind: "comment", commentId }` |
+| `shippable_post_interaction({…, parentInteractionId?})` parameter | Replies via `anchor: { type: "interaction", interactionId }` |
 | Mutable Interaction anchors / intent / authorId / AI-only fields | Immutable post-insert; PATCH limited to `body` + `updatedAt` on human-authored rows |
 | Separate `jobs` table | `agent_queue` table with three types (`plan`/`review`/`interaction`) and `channel_path` scope (§7b) |
 | `interactions.agent_queue_status` + `interactions.worktree_path` (prototype) | Delivery state lives entirely on `agent_queue` rows |
 | Synthetic `fileId` everywhere               | `path` is the file key within a ChangeSet; storage PK is `(changeset_id, path)` |
-| Separate `shippable_get_interactions` MCP tool | `shippable_get_changeset` returns Interactions inline (authors expanded) |
+| Separate `shippable_get_interactions` MCP tool | Existing Interactions are inlined in the `wait_for_work` payload (authors expanded) for the queue types that need them — no explicit MCP read |
 | `Interaction.runRecipe` field + `RunRecipe` type | Runner decoupled from data model; free-form scratchpad (§9) |
 | `run_recipe_json` column on `interactions` | Removed                                 |
 | Server-side Anthropic call inside `server/src/plan.ts` | AI plan moves to MCP — agent posts via `shippable_post_plan` after claiming a `plan` job; rule plan still generated inline at ingest (§7b). The Zod schemas survive as wire-validation. |
@@ -1463,11 +1576,25 @@ Recorded so future archaeology doesn't resurrect them:
 | `Assignment` entity                      | Nothing — out of scope                   |
 | `Activity` entity                        | Derive from interaction stream           |
 | `AuthorRole = "agent"`                   | Folded into `"ai"`                       |
-| `Interaction.target` field               | `anchor.kind` discriminator              |
-| `Interaction.parentId` field             | `anchor: { kind: "comment", commentId }` |
+| `Interaction.target` field               | `anchor.type` discriminator              |
+| `Interaction.parentId` field             | `anchor: { type: "interaction", interactionId }` |
 | `Interaction.threadKey` field            | `resolveRootAnchor()` walks chains       |
 | `Anchor.kind = "hunk"`                   | `block` covering hunk lines              |
 | `Anchor.kind = "line"`                   | `block` with `lo === hi`                 |
+| `Anchor` discriminator field name `kind` | `type` (matches `BlockOrigin.type`)      |
+| `Anchor.kind = "comment"` / `commentId`  | `Anchor.type = "interaction"` / `interactionId` |
+| `Interaction.external { source, htmlUrl?, sentinelId? }` | Dropped from v1; reintroduced in v1.5 when PR ingest lands (§18) |
+| `interactions.external_json` column      | Dropped (along with `Interaction.external`) |
+| `shippable_get_settings()` MCP tool      | Dropped — auto-queue prefs are server-side queueing decisions, not agent-respected |
+| `shippable_announce({identity, channels})` MCP tool | Dropped — identity is implicit (UUID in `X-Shippable-Author-Id` header, server upserts on first sight); declared identity arrives via optional `identity` param on `shippable_wait_for_work`; channels are a param on `wait_for_work` |
+| `shippable_get_changeset(id)` MCP tool   | Dropped — diff lives on disk in the worktree, agent reads it itself; existing interactions/plan are inlined in `wait_for_work` payloads |
+| `shippable_get_plan(id)` MCP tool        | Dropped — folded into `wait_for_work` inline payload (no flow needed Plan in isolation from the rest of the changeset) |
+| `shippable_get_progress(id)` MCP tool    | Dropped — no v1 flow needed it; add back when an agent needs mid-task introspection |
+| `shippable_get_sign_off(id)` MCP tool    | Dropped — subset of progress; same rationale |
+| Direct-prompt MCP read path              | Dropped — library prompts route through the queue (§7b `prompt` type, §9b); every AI write into Shippable goes through watch mode |
+| Diff content shipped over MCP            | Dropped — worktree-only ingest means the agent reads diff from disk; MCP carries server-unique state only |
+| `agent_queue.requested_by` nullable      | `NOT NULL`; always set to the requester's `author_id` |
+| Human `displayName` hardcoded to `'You'` | Real display name stored on `authors`; "You" is render-time UI |
 | `CredentialsPanel` + `GitHubTokenModal`  | One `<CredentialPrompt>` + queue (GitHub-only) |
 | Anthropic credential panel               | "No watcher" banner (§7b)                |
 | Scattered `shippable:*` localStorage     | `prefs` SQLite table (server)            |
@@ -1507,9 +1634,9 @@ whole sequence completes.
    `fileDisplayMode` as `Record<path, mode>`, drafts, dismissals.
 
 4. **REST + SSE + MCP wire** — REST surface from §4.1; SSE events from
-   §4.3; MCP tools from §4.2 (`shippable_announce`,
-   `shippable_post_interaction`, `shippable_post_plan`,
-   `shippable_wait_for_work`, read tools). Both sign-off tiers exposed.
+   §4.3; MCP tools from §4.2 (`shippable_wait_for_work`,
+   `shippable_post_interaction`, `shippable_post_plan`). Both sign-off
+   tiers exposed via REST.
 
 5. **Worktree ingest** — the only provenance whose endpoint ships in v1.
    PR/paste/file/url remain in the `Provenance` union at the type level
@@ -1524,11 +1651,14 @@ whole sequence completes.
    Anthropic key.
 
 7. **Authors + identity surfacing** — `authors` is the unified store;
-   composite declared+observed badge UI; declared+observed handshake on
-   `shippable_announce`; `generated_by` on plans, `requested_by`/
-   `claimed_by` on `agent_queue` rows. Human `userId` minted client-side
-   (UUID v4 in localStorage); `X-Shippable-User-Id` / `X-Shippable-Author-Id`
-   headers on all `/api/*` and `/api/agent/*` calls respectively.
+   composite declared+observed badge UI; the MCP subprocess mints a UUID
+   on startup and sends it as `X-Shippable-Author-Id` (server upserts),
+   while declared identity arrives via the `identity` param on
+   `shippable_wait_for_work`; `generated_by` on plans,
+   `requested_by`/`claimed_by` on `agent_queue` rows. Human `userId`
+   minted client-side (UUID v4 in localStorage);
+   `X-Shippable-User-Id` / `X-Shippable-Author-Id` headers on all
+   `/api/*` and `/api/agent/*` calls respectively.
 
 8. **Capability system** — server detects environment, ChangeSet
    provenance narrows, reactive context, reasons on unavailable.
@@ -1555,13 +1685,13 @@ the primitive shapes and schema from items 1–2.
 
 Deferred past v1:
 
-- **PR ingest (v1.5).** First follow-up after v1 ships. Must be built so
-  the MCP-watcher pattern works against PR-loaded ChangeSets: server holds
-  the diff (via the GitHub API) and serves it through
-  `shippable_get_changeset`; the architecture should support both
-  "agent reads via MCP" and "agent reads via local working copy" — the
-  former so the door to memory-only audit deployments stays open, the
-  latter so test-running review keeps working.
+- **PR ingest (v1.5).** First follow-up after v1 ships. Must extend the
+  MCP-watcher pattern to PR-loaded ChangeSets: the server fetches the
+  diff via the GitHub API, and the watcher needs a way to read content
+  it can't pull from a local worktree. Likely shape: a new MCP read
+  tool that returns file content by path, or fat payloads on
+  `wait_for_work` that inline the diff for non-worktree provenances.
+  Design when the work lands.
 - **Paste / file / url ingest.** Deferred past PR ingest. Type-level
   union retained for forward-compatibility.
 - **Full-file-view + preview mode.** `fileDisplayMode` Record already has
@@ -1573,6 +1703,12 @@ Deferred past v1:
 - **Multi-user identity.** Replace local userId with real auth. The
   prefs/read-lines/coverage/sign-off shapes are already scoped-by-userId;
   migration is mostly auth-side.
+- **Persisted MCP-subprocess identity.** v1 mints a fresh UUID per
+  subprocess startup (in-memory), so a restart shows up as a new
+  `authors` row and the badge's "since 14:32" history resets. If badge
+  continuity becomes desirable, persist the UUID to a small file
+  (e.g., `~/.shippable/mcp-author-id`) and reload on startup. Cheap
+  add when there's a use case.
 - **Workspace-mode runner.** Inline-only today. A worktree-only
   `runner.workspace` capability for real test commands (e.g. `php artisan
   test`) is a v2 candidate.
