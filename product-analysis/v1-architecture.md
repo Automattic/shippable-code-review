@@ -20,6 +20,18 @@ The finalized architecture for v1, derived from four grill sessions of
   `authors` table. `Interaction.evidence` renamed `references` — evidence
   lives in the rubric, not in pointer lists. Added the changeset-level
   tier of sign-off and the `Record<fileId, mode>` file-display shape.
+- **Session 5 (2026-05-26):** refactor-strategy cleanup pass over the
+  doc. Dropped `Interaction.runRecipe` + the `RunRecipe` type — the
+  runner is now a free-form scratchpad, not data-driven (§9). Added
+  the prompt library as §9b (bundled / path / git library root, per-
+  user override table). Surfaced worktree live-reload in §2.1. Recorded
+  the AI work moving off server-side Anthropic SDK paths (`plan.ts`,
+  `review.ts`) and onto MCP via `shippable_post_plan` /
+  `shippable_post_interaction`; dropped the client-side GitHub PR
+  loading code; all in §16.
+  Collected the MCP-only AI rationale, watch-vs-direct patterns, and
+  degradation behaviour into a new §3b "AI integration model" so the
+  load-bearing choice has one home instead of five scattered restatements.
 
 Supersedes `suggested-architecture.md` and `rebuild-plan.md` (both
 preserved as working notes).
@@ -107,11 +119,6 @@ type CheckLabel =
 type CheckResult = { result: "yes" | "no"; note: string };   // note required on every check
 type Rubric      = Record<CheckLabel, CheckResult>;          // completeness enforced by the type
 
-type RunRecipe = {
-  source: string;                                   // inline code; runner has no fs reach
-  inputs: Record<string, string>;
-};
-
 type Interaction = {
   id: string;
   changesetId: string;
@@ -128,8 +135,6 @@ type Interaction = {
   rubric?: Rubric;
   rationale?: string;
   suggestedFix?: string;
-
-  runRecipe?: RunRecipe;
 
   external?: {
     source: "pr" | "mcp";
@@ -298,6 +303,13 @@ Turns an external source into a ChangeSet. Server-side, end to end.
   built so the MCP-watcher pattern works against PR-loaded ChangeSets
   (server holds the diff, agent reads via `shippable_get_changeset`,
   no local clone assumed).
+- **Live reload watches the worktree.** A file-system watcher (the
+  prototype's `useWorktreeLiveReload` + server-side fs notifier) detects
+  changes under the workdir and surfaces a "refresh available" affordance
+  (`LiveReloadBar`). Refresh produces a new ChangeSet with
+  `parentChangesetId` set; the existing changeset's interactions migrate
+  forward through re-anchoring (§1.1). Live reload is worktree-specific;
+  PR/paste/file/url provenances have no equivalent.
 - **Single reducer path for external updates** (the `APPLY_EXTERNAL_UPDATE`
   shape). Initial load, refresh, SSE-pushed changes from other actors —
   all hit the same `applyExternalUpdate(state, changeset)` reducer.
@@ -349,11 +361,12 @@ The review state machine: cursor, read-line tracking, projections.
 │  • read_lines            (ranges per user/cs/file)          │
 │  • sign_offs             (file-level human sign-off)        │
 │  • reviewed_changesets   (changeset-level human sign-off)   │
-│  • prefs                 (k/v per user — incl. auto-queue)  │
+│  • prefs                 (k/v per user — incl. auto-queue, recents) │
 │  • trusted_hosts         (server policy table)              │
 │  • authors               (unified identity — humans + AI)   │
 │  • plans                 (append-only; latest wins per cs)  │
 │  • jobs                  (plan/review queue; watch-claimed) │
+│  • user_prompts          (per-user prompt overrides; §9b)   │
 │  • quizzes / quiz_responses                                 │
 ├─────────────────────────────────────────────────────────────┤
 │  Keychain (Tauri) / RAM (dev) — secrets only                │
@@ -408,7 +421,6 @@ CREATE TABLE interactions (
   rubric_json     TEXT,                              -- Record<CheckLabel, CheckResult> or NULL
   rationale       TEXT,
   suggested_fix   TEXT,
-  run_recipe_json TEXT,
   external_json   TEXT,                              -- pr | mcp provenance
   generation_json TEXT,                              -- AI-only { ingestId, sha }
   created_at      TEXT NOT NULL,
@@ -484,6 +496,17 @@ CREATE TABLE jobs (
 CREATE INDEX jobs_pending ON jobs(status, type, requested_at);
 CREATE INDEX jobs_by_changeset ON jobs(changeset_id, status);
 
+CREATE TABLE user_prompts (
+  user_id      TEXT NOT NULL REFERENCES authors(id),
+  id           TEXT NOT NULL,                        -- prompt id (matches library id when overriding)
+  name         TEXT NOT NULL,
+  description  TEXT NOT NULL,
+  args_json    TEXT NOT NULL,                        -- PromptArg[]
+  body         TEXT NOT NULL,                        -- markdown
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (user_id, id)
+);
+
 CREATE TABLE quizzes (
   id             TEXT PRIMARY KEY,
   changeset_id   TEXT NOT NULL REFERENCES changesets(id),
@@ -510,10 +533,99 @@ CREATE TABLE quiz_responses (
   no auth in v1 — multi-user identity is deferred (§18).
 - **Secrets.** Only GitHub tokens. Keychain in Tauri, server memory in
   dev. Server is the policy boundary; secrets never reach the client.
-- **No Anthropic key.** All AI work flows through MCP — an external agent
-  holds its own credentials. The prototype's Anthropic SDK dependency
-  and the dead `ANTHROPIC_API_KEY` env-var warning at
-  `server/src/index.ts:1446-1450` are removed.
+- **No Anthropic key.** All AI work flows through MCP; agents hold
+  their own credentials. Rationale, patterns, and degradation in §3b.
+
+---
+
+## 3b. AI integration model
+
+Every AI workflow in v1 flows through an external MCP agent. The server
+holds no Anthropic key, imports no LLM SDK, and makes no outbound LLM
+calls. This is a load-bearing choice (restated as an invariant in §15)
+and the rest of the architecture — Plan jobs, watch-mode queue, identity
+surfacing, degradation banners — derives from it.
+
+### Why MCP-only
+
+- **The user already has an agent.** Shippable's audience is reviewers
+  who use Claude Code (or another MCP-capable peer) as their primary
+  surface. Making them paste a second key into Shippable duplicates
+  configuration they already have. Better to talk to the agent they're
+  already using.
+- **Keys stay with the user.** The server never sees, stores, or forwards
+  Anthropic credentials. The trust boundary collapses: server is policy
+  + persistence, agent is the LLM. GitHub tokens remain the only
+  server-held secret (§10) and they're scoped to git operations, not AI.
+- **Agent context comes along for free.** The agent that calls
+  `shippable_post_interaction` brings its own conversation history,
+  prompt customizations, and harness. The user's `~/CLAUDE.md`, their
+  custom prompts, and their preferred model are already wired into the
+  agent; Shippable doesn't need to mirror any of it.
+- **Billing and rate limits aren't Shippable's problem.** No Shippable-
+  side cost surface, no Anthropic dashboard to surface, no key-rotation
+  flow to design.
+- **Lock-in is protocol-level rather than commercial.** Any MCP-capable
+  agent works — Claude Code today, other MCP clients tomorrow.
+  Shippable defines the *protocol* (tools in §4.2), not the model.
+
+### How agents drive AI work
+
+Two patterns, both via the MCP tool surface in §4.2:
+
+1. **Watch mode (auto-queued).** The agent calls
+   `shippable_wait_for_work` in a loop. Server-queued jobs (`plan`,
+   `review`) are atomically claimed; the agent computes, then calls
+   `shippable_post_plan` or `shippable_post_interaction` per finding.
+   This is the "AI is reviewing, comments appear as they land" UX
+   (§7b).
+2. **Direct prompting.** The user prompts their agent themselves
+   ("review this changeset" / "explain hunk X"). The agent reads via
+   `shippable_get_changeset`, writes via `shippable_post_interaction`.
+   No queue, no job. The library prompts (§9b) seed common asks.
+
+### Degradation: no agent connected
+
+The capability flag `ai.mcp` reports watcher presence. When absent:
+
+- Rule plan (§7) still generates synchronously at ingest; the Plan
+  surface is never empty.
+- All human review (Interactions, sign-off, coverage, quiz) works
+  unchanged. Worktree-mode review remains fully functional.
+- The UI shows a "Connect an agent" setup banner (§7b) — a discovery
+  affordance, not a key prompt and not an error state.
+
+This is why MCP-only is safe to commit to: the floor is functional
+without it, and the ceiling rises as soon as an agent connects.
+
+### What moves, what goes
+
+**Moves to MCP, doesn't go away:**
+
+- *AI plan generation.* The prototype's `server/src/plan.ts` calls
+  Anthropic directly with a Zod-schema'd output format. In v1 the same
+  AI plan is produced by an external MCP agent that posts via
+  `shippable_post_plan` after claiming a `plan` job (§7b). The
+  schemas survive as wire-validation at the MCP boundary; the
+  Anthropic-SDK call site is gone.
+- *AI review.* The prototype's `server/src/review.ts` exposes an SSE
+  token stream from the server to the browser. In v1 there is no
+  server-side stream: MCP agents claim `review` jobs and post each
+  finding via `shippable_post_interaction`. SSE then delivers each
+  Interaction to all clients (§4.3). Atomic-per-finding, no
+  token-level streaming.
+
+**Truly goes away:**
+
+- The `@anthropic-ai/sdk` dependency in `package.json`.
+- The Anthropic credential rows in the auth store and the credential
+  UI for them (§10).
+- The `ANTHROPIC_API_KEY` env-var warning at `server/src/index.ts`.
+- The server-to-browser token-stream wire and `ClientEvent` event
+  type from `review.ts`.
+
+Prototype users with a saved Anthropic key migrate by registering an
+MCP agent instead; operational steps belong in release notes, not here.
 
 ---
 
@@ -541,6 +653,11 @@ CREATE TABLE quiz_responses (
 - `POST /api/changesets/{id}/jobs`                 → `Job` (user-initiated request; §7b)
 - `GET  /api/jobs?changesetId=...&status=...`      → `Job[]`
 - `GET  /api/watchers/active`                      → `Watcher[]` (presence indicator; §7b)
+- `GET  /api/library/prompts`                      → `Prompt[]` (bundled / path / git; §9b)
+- `POST /api/library/sync`                         → `{ ok: true }` (re-resolve a git-sourced library)
+- `GET  /api/user-prompts`                         → `Prompt[]` (per-user overrides)
+- `PUT  /api/user-prompts/{id}`                    → `Prompt`
+- `DELETE /api/user-prompts/{id}`                  → `{ ok: true }`
 
 PR / paste / file / url ingest endpoints are defined at the type level but
 not implemented in v1 — first follow-up is `POST /api/changesets/pr` in v1.5.
@@ -884,18 +1001,83 @@ Returns `{ symbols, references, provenance: "lsp" | "regex" }`.
 
 ## 9. In-browser code runner
 
-A renderer for `Interaction.runRecipe`, not a primitive.
+A free-form scratchpad sandbox. Not data-driven, not coupled to
+Interactions.
 
-- **Inline code only.** `runRecipe = { source, inputs }`. No filesystem
-  reach. Works in every provenance + memory-only mode.
-- **Client-side sandbox.** Sandboxed iframe (`/runner-sandbox.html`) +
-  postMessage for JS/TS. `@php-wasm` for PHP.
+- **Paste-and-run.** The user (or, in the future, an agent over MCP)
+  drops code into the runner panel; it executes in a sandboxed iframe
+  (`/runner-sandbox.html`) for JS/TS and via `@php-wasm` for PHP. No
+  filesystem reach. Works in every provenance + memory-only mode.
+- **No structured recipe.** Interactions no longer carry a `runRecipe`
+  field; the runner reads code from its own panel state, not from the
+  data model. The earlier "verify-this-finding" flow (AI Interaction →
+  runner) is gone in v1.
 - **Capability-gated** via `runner.js` / `runner.php`.
 - **v1 status: kept as-is, no new investment.** The prototype's runner
-  ships; we don't rebuild it. Verification of the rubric's "Tests run /
-  Tests pass" checks remains self-attested in v1.
+  ships as-is; we don't rebuild it. Verification of the rubric's "Tests
+  run / Tests pass" checks remains self-attested in v1. A workspace-mode
+  runner that re-couples to findings is a v2 candidate (§18).
 
 ---
+
+## 9b. Prompt library
+
+A small content-management surface that ships markdown prompts the user
+can copy into their MCP agent. Distinct from Plan and Interaction; the
+library doesn't produce findings itself.
+
+```ts
+type Prompt = {
+  id: string;
+  name: string;
+  description: string;
+  args: PromptArg[];                                 // declared in frontmatter
+  body: string;                                      // markdown
+  source: "library" | "user";                        // library = bundled; user = author-edited
+};
+
+type PromptArg = {
+  name: string;
+  required: boolean;
+  auto?: string;                                     // frontend-interpreted pre-fill hint ('selection', 'file', 'changeset.diff'…)
+  description?: string;
+};
+```
+
+**Two stores, merged on read.**
+
+- **Library prompts.** Markdown files under `library/prompts/` with
+  YAML frontmatter (`name`, `description`, `args`). v1 ships four:
+  `explain-this-hunk`, `security-review`, `suggest-tests`,
+  `summarise-for-pr`. The server resolves the library root from one of
+  three sources:
+  - `bundled` — files baked into the server build (`library/` next to
+    the source tree; what the prototype ships).
+  - `path` — operator-pointed local directory.
+  - `git` — operator-pointed git remote + ref, cloned into
+    `server/var/library/checkout` and re-fetched on `sync`.
+  The resolution policy lives in `server/src/library.ts`; the prompt
+  loader (`server/src/prompts.ts`) reads from whichever root resolved.
+- **User prompts.** Per-user authored or edited prompts that override a
+  library prompt of the same id. Persisted in `user_prompts` (per-user
+  rows; the prototype's localStorage key `shippable.prompts.user`
+  migrates here, consistent with the "no scattered localStorage" move
+  in §16).
+
+**Read path.** The client picker calls `GET /api/library/prompts` and
+`GET /api/user-prompts`, merges by id with user taking precedence, and
+caches in-process.
+
+**Write path.** User prompt edits go through `PUT /api/user-prompts/{id}`
+and `DELETE /api/user-prompts/{id}`. Library prompts are read-only at
+the surface — to change them, the operator changes the library source
+(`path` or `git`).
+
+**Capability.** No explicit flag — the library always resolves (worst
+case, to the empty bundled set). The picker mounts unconditionally.
+
+**Not in v1 (open):** prompt frontmatter–driven rubric extensions
+(§18), per-prompt MCP routing.
 
 ## 10. Credential prompt — reactive queue
 
@@ -1122,6 +1304,13 @@ Recorded so future archaeology doesn't resurrect them:
 
 | Dropped                                  | Replaced by                              |
 |------------------------------------------|------------------------------------------|
+| `Interaction.runRecipe` field + `RunRecipe` type | Runner decoupled from data model; free-form scratchpad (§9) |
+| `run_recipe_json` column on `interactions` | Removed                                 |
+| Server-side Anthropic call inside `server/src/plan.ts` | AI plan moves to MCP — agent posts via `shippable_post_plan` after claiming a `plan` job; rule plan still generated inline at ingest (§7b). The Zod schemas survive as wire-validation. |
+| SSE token-stream review wire in `server/src/review.ts` (`streamReview` + `ClientEvent`) | AI review moves to MCP — agent claims `review` jobs and posts each finding via `shippable_post_interaction`; SSE delivers Interactions atomically, no token-level streaming (§4.3) |
+| `@anthropic-ai/sdk` dependency | Removed — no LLM SDK on the server |
+| Anthropic credential rows in `auth/store` | Only GitHub credentials remain (§3.2)    |
+| Client-side GitHub PR loading (`useGithubPrLoad`, `githubPrClient`) | None in v1; PR ingest returns server-side in v1.5 |
 | Flat `AnchorCtx { hash, contextLines, originType }` on every anchor | `BlockOrigin` discriminated union — committed: `{sha}` only; dirty: `{context}` snapshot |
 | Stored fingerprint hash on anchors       | Derived FNV-1a at re-anchor time         |
 | Writing blobs into the user's `.git` to address dirty content | Welded `context: string[]` snapshot in our SQLite |
@@ -1187,7 +1376,7 @@ whole sequence completes.
 2. **Server SQLite schema** — `changesets`, `diff_files`, `authors`
    (unified — humans + AI), `interactions`, `read_lines`, `sign_offs`,
    `reviewed_changesets`, `prefs`, `trusted_hosts`, `plans`, `jobs`,
-   `quizzes`, `quiz_responses`. SSE per-ChangeSet wired.
+   `user_prompts`, `quizzes`, `quiz_responses`. SSE per-ChangeSet wired.
 
 3. **Reducer + client state** — one `APPLY_EXTERNAL_UPDATE` reducer for
    ingest/refresh/SSE. UI state holds cursor (in-app memory + localStorage),
