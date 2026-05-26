@@ -5,25 +5,31 @@
 *living* decision log, not a finished spec.
 
 **Progress (last worked 2026-05-26):** locked #9 (Checks — was Q-A),
-#10 (Identity storage — was Q-B), #11 (Plan structure — was Q-C), and
+#10 (Identity storage — was Q-B), #11 (Plan structure — was Q-C),
 #12 (AI comment persistence — was Q-D), #13 (Progress write-through —
-was Q-E), and #14 (`threadKey` removal — was Q-F) this session, plus
-**Q-G Part 1** (added a `changeset` Anchor kind). #11 **revises #8**:
-plan bullets are a `Claim` type, NOT comments (#8 had said all AI output
-is comments). #12: AI notes are durable comments (only the `Plan`
-regenerates); `changesetId` on `Comment`+`Plan`; staleness is per-anchor
-(no generation tag). #13: progress is "save-the-answer" (derived, not
-event-sourced), with two write speeds — sign-off immediate,
-cursor/readLines ~1s debounced. #14: `threadKey` removed; threading by
-parent-pointer (`anchor.kind==="comment"`), safe because of #12. Earlier
-this session: three model edits — `hunk` folded into `block` (#8), roles
-merged to `human | ai` (#8), and `Author` is the single identity type (no
-`Participant`).
+was Q-E), #14 (`threadKey` removal — was Q-F), and **#15 (Anchor
+old-code recovery — was Q-G Part 2)** this session; Q-G Part 1 (the
+`changeset` Anchor kind) folded into #8 earlier. #15 reshaped the anchor
+model: the old four-field `ReanchorHint` is **gone** — committed code is
+re-derived from git by SHA (content-addressing, git's own principle),
+dirty code keeps one immutable welded snapshot in OUR store, and the
+matching fingerprint is derived not stored. We will **not** write into
+the user's `.git`. #11 **revises #8**: plan bullets are a `Claim` type,
+NOT comments. #12: AI notes are durable comments (only the `Plan`
+regenerates); `changesetId` on `Comment`+`Plan`; staleness is per-anchor.
+#13: progress is "save-the-answer," sign-off immediate / cursor+readLines
+~1s debounced. #14: threading by parent-pointer (`anchor.kind==="comment"`),
+safe because of #12. Earlier model edits: `hunk` folded into `block`,
+roles merged to `human | ai`, `Author` the single identity type.
 
-**PAUSED at Q-G Part 2** (`ReanchorHint` shape) — recommendation on the
-table ("confirm all four fields"), awaiting a yes/trim answer. This is a
-clean handoff point: every lettered question Q-A…Q-F is locked, Q-G Part
-1 is locked, only Q-G Part 2 remains before the **Downstream agenda**.
+**RESUMED + RESOLVED Q-G Part 2 → #15.** Every lettered question
+Q-A…Q-G is now locked. Next is the **Downstream agenda** below — none of
+it grilled yet.
+
+**Working rule (top of mind):** the rebuild keeps **zero backwards
+compatibility** with the prototype — no migrations, no preserving old
+data shapes. Always pick the clean redesign; the prototype's persisted
+shapes have no claim on us (drove #15's "drop the stored hash").
 
 **How to resume (method):** we are using the `grill-me` skill —
 interview relentlessly, one question at a time, each with a recommended
@@ -31,10 +37,15 @@ answer; walk every branch of the design tree resolving dependencies
 before moving on; explore the codebase to answer a question rather than
 asking when the code can tell us. **Plain-language rule:** explain every
 question/option in plain terms first (analogies over jargon), precise
-version underneath — the human asked for this explicitly. Pick up at
-**Open questions** below at the one marked ← RESUME — currently **Q-G
-Part 2** (confirm the `ReanchorHint` shape; then move to the Downstream
-agenda).
+version underneath — the human asked for this explicitly.
+
+**← RESUME HERE:** every Q-letter is locked, so work moves to the
+**Downstream agenda** below. Recommended first item: the **persistence
+schema** — it's the most foundational (it realizes #4, #12, #13) and #15
+explicitly handed it an open thread: where the dirty `BlockOrigin.context`
+snapshot lives, and the "one bundle per changeset" load shape. Grilling it
+pressure-tests those locked decisions against a concrete SQLite schema.
+Confirm the item with the human, then grill one question at a time.
 
 **Source material:**
 - `product-analysis/product.md` — the synthesis (feature inventory, tiers, §4 unification opportunities, §5 rebuild sequence).
@@ -153,7 +164,7 @@ type Role = "human" | "ai";       // merged: an MCP agent is an `ai` author; *wh
 type Author = { id: string; role: Role; displayName: string };  // uniform; provenance (#7) stored separately, keyed by id
 
 type Anchor =
-  | { kind: "block";  path: string; lo: number; hi: number; reanchor: ReanchorHint } // line = lo===hi; a hunk is just a block
+  | { kind: "block";  path: string; lo: number; hi: number; origin: BlockOrigin } // line = lo===hi; a hunk is just a block; origin = how to recover the old code (#15)
   | { kind: "symbol"; path?: string; name: string; symbolKind?: string }
   | { kind: "file";   path: string }
   | { kind: "comment"; commentId: string }   // anchoring to a comment = a reply
@@ -184,7 +195,7 @@ Consequences (all wins):
 - **Nested replies for free** (a comment can anchor to a reply).
 - **`hunk` folded into `block`.** A hunk is just a `block` (line range)
   — one code-range anchor kind, all reanchored on reload. Drops the
-  stable `hunkId`; a hunk reference survives via `reanchor`, not an id.
+  stable `hunkId`; a hunk reference survives via re-anchoring (#15), not an id.
   (Resolves Q-G's hunk question by construction.)
 - **Roles merged to `human | ai`.** An MCP agent and the built-in plan
   generator are both `ai` authors; the human tells them apart by
@@ -426,53 +437,89 @@ colon-bearing PR hunkIds (`pr:host:owner:repo:N`).
   as-ack, §4.2). Guides are v1.5+ (#5); when they return, a dismissal
   needs a threading home (the guide needs an id to ack against).
 
+### 15. Anchor old-code recovery — content-addressed, never touch `.git` (RESOLVED, was Q-G Part 2)
+Re-anchoring needs the **old** version of a commented line — to relocate
+it after the diff moves, or to caption it once detached. Where that old
+code comes from splits by whether git can address it, applying git's own
+principle (content-addressing + immutability) **in our store, without
+writing to the user's `.git`.**
+
+- **Committed → git IS the storage.** `git show <sha>` reproduces the
+  exact old diff, deterministically, on demand. Store only the address
+  (`{ sha }`) + position; re-derive the window when needed — no snapshot.
+  A fixed commit's diff is immutable, so committed anchors barely
+  re-anchor at all (only when HEAD advances, and then both sides are
+  SHA-addressable). **Caveat:** recoverable only while the commit is
+  reachable — a rebase/amend can orphan it and GC eventually prunes it.
+  Accepted over copying.
+- **Dirty → we hold one immutable snapshot.** Uncommitted content has no
+  SHA; git can't reconstruct it and forgets it on the next edit. So a
+  dirty anchor welds a frozen 10-line `context` window **at write time** —
+  the only unavoidable copy. Lives in OUR store (SQLite TEXT). Capturing
+  it at write time is mandatory: it's the one moment the content exists.
+- **Rejected — writing blobs into `.git`.** `git hash-object -w` would
+  give dirty content a SHA too, collapsing both cases to `{ sha }`. We
+  decline it: it mutates the repo under review, forces us to manage git
+  GC/reachability (a `notes` ref to survive prune), and is heavy machinery
+  for a ~10-line minority payload a TEXT column holds with zero intrusion.
+  Steal git's *principle*, not its object store.
+- **The matching fingerprint is derived, never stored.** Relocation scans
+  the new diff, fingerprinting each candidate window (cheap FNV-1a) and
+  comparing — O(lines in the changed file), the same cost whether or not a
+  target hash was persisted. Storing it saved one hash out of hundreds, so
+  it's dropped (a back-compat-free call, per the working rule). The
+  committed window is fingerprinted right after `git show`; the dirty
+  window from its welded `context`. FNV, **not** a crypto SHA: a collision
+  here = a missed match (same outcome as no match), so identity-grade
+  hashing is unneeded — git needs crypto for identity, we need cheap for
+  fuzzy relocation.
+- **`ReanchorHint` (the old four-field struct) is gone.** `originSha` →
+  the committed `sha`; `originType` → the union discriminant; `context`
+  survives only on dirty anchors; `hash` is derived. The block anchor:
+
+```ts
+| { kind: "block"; path: string; lo: number; hi: number; origin: BlockOrigin }
+
+type BlockOrigin =
+  | { type: "committed"; sha: string }      // git re-derives the window; nothing else stored
+  | { type: "dirty"; context: DiffLine[] }  // git can't address it → immutable snapshot in OUR store
+```
+
+- **Perf: off the hot path.** Re-anchoring fires on reload (diff content
+  changed), never on a keystroke (`j`/`k`/typing don't touch it). The
+  committed `git show` is per-file (not per-comment), batched into a moment
+  already running git for re-ingest, and cacheable per `(sha, path)` if it
+  ever shows up hot.
+- **Detached** still falls out of a failed re-anchor (#14); the caption
+  reads old code from git (committed) or the welded `context` (dirty).
+  Whether "detached" is a derived flag or its own `Anchor` kind is a
+  UI-model detail deferred to the UI-surfaces branch.
+- **Open thread for the persistence-schema branch:** `BlockOrigin.dirty`
+  is the only anchor that carries stored content; the SQLite design must
+  hold its `context` (and the schema can content-address it for dedup
+  later — inline is fine for v1).
+
 ---
 
 ## Open questions (resume here)
 
 Each has a recommendation. Grill one at a time.
 
-### Q-G. Anchor details — PART 2 PAUSED HERE ← RESUME
-**Part 1 (changeset kind) — RESOLVED.** Added `{ kind: "changeset" }` to
-the `Anchor` union (see #8 model block). It's the canonical "whole change"
-pointer, with three real consumers: the quiz's mandatory changeset-level
-Q1 (the `/api/plan` prompt requires one; #8 says `Question.target` reuses
-`Anchor`), the old `EvidenceRef { kind: "description" }`, and
-changeset-level comments / sign-off notes. No payload — the containing
-`Comment`/`Plan` already carries `changesetId` (#12).
+### Q-G. Anchor details — RESOLVED → #15
+**Part 1 (changeset kind)** folded into #8's model block — `{ kind:
+"changeset" }` is the canonical "whole change" pointer (quiz changeset-Q1,
+the old `EvidenceRef { kind: "description" }`, changeset-level comments /
+sign-off), no payload.
 
-**Part 2 (`ReanchorHint` shape) — PAUSED, awaiting confirm.**
-Confirm the per-line-pointer relocation hint. It lives **only on the
-`block` anchor** — `file`/`symbol`/`comment`/`changeset` have no line to
-lose (symbol re-finds by name; file by path).
+**Part 2 (re-anchoring / old-code recovery)** resolved as **#15**, *not*
+as the doc's earlier "confirm all four `ReanchorHint` fields." The
+four-field struct is gone: committed code re-derives from git by SHA,
+dirty code keeps an immutable welded snapshot in our store, the matching
+fingerprint is derived, and we never write to `.git`. See #15 for the
+`BlockOrigin` shape and rationale.
 
-```ts
-type ReanchorHint = {
-  hash: string;                      // FNV-1a of the inner 5-line window
-  context: DiffLine[];               // 10-line snapshot
-  originSha?: string;                // commit minted-against (else cs.id)
-  originType: "committed" | "dirty";
-};
-```
-
-**Grounding (`web/src/anchor.ts`):** the relocation *search*
-(`findAnchorInFile`) uses **only `hash`** — it scans hunks for a 5-line
-window whose FNV-1a matches, biased toward the same position (`prefer`,
-*computed at search time* from the anchor's own `lo`/`hi` — NOT a stored
-field). `context` / `originSha` / `originType` exist **only** for the
-detached-card "origin caption" (`anchor.ts:147` falls `originSha` back to
-`cs.id` "so detached entries still have *something* to display").
-
-**Recommendation: confirm all four.** Only `hash` does the re-finding;
-the other three power the "you got detached, here's where you were"
-caption — a v1 feature (part of comments+anchoring). **Drop** the
-speculative `prefer: "before"|"after"` the old `suggested-architecture.md`
-listed; the real `prefer` is a derived position, not stored.
-**Alternative on the table:** trim to just `hash` (leaner; loses the
-detached caption UX).
-
-**After Q-G:** every lettered question (Q-A…Q-G) is resolved. Work moves
-to the **Downstream agenda** below — none of it grilled yet.
+**All lettered questions Q-A…Q-G are now locked.** Work moves to the
+**Downstream agenda** below — none of it grilled yet.
 
 ---
 
