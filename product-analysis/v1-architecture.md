@@ -2,14 +2,6 @@
 
 The finalized architecture for v1, derived from four grill sessions of [`suggested-architecture.md`](./suggested-architecture.md) and the earlier [`rebuild-plan.md`](./rebuild-plan.md) handoff:
 
-- **Session 1 (2026-05-25):** entity-by-entity validation of the four-primitive proposal.
-- **Session 2 (2026-05-26):** reconciliation with the earlier `rebuild-plan.md` handoff — sign-off, agent identity, MCP read-peer surface, invariants.
-- **Session 3 (2026-05-26):** Plan/Claim split out of Interaction; MCP-only AI (no server-side Anthropic calls); first-class job queue driven by the existing watch-mode pattern.
-- **Session 4 (2026-05-26):** divergence sweep against `rebuild-plan.md`'s 15 locked decisions. Re-adopted the content-addressed anchor recovery (no `.git` writes), the flat 5-label rubric, and worktree-only v1 ingest. Dropped the session-2 strangler-fig framing in favor of a one-shot refactor on a branch. `agent_identities` folded into a unified `authors` table. `Interaction.evidence` renamed `references` — evidence lives in the rubric, not in pointer lists. Added the changeset-level tier of sign-off and the `Record<fileId, mode>` file-display shape.
-- **Session 5 (2026-05-26):** refactor-strategy cleanup pass over the doc. Dropped `Interaction.runRecipe` + the `RunRecipe` type — the runner is now a free-form scratchpad, not data-driven (§9). Added the prompt library as §9b (bundled / path / git library root, per-user override table). Surfaced worktree live-reload in §2.1. Recorded the AI work moving off server-side Anthropic SDK paths (`plan.ts`, `review.ts`) and onto MCP via `shippable_post_plan` / `shippable_post_interaction`; dropped the client-side GitHub PR loading code; all in §16. Collected the MCP-only AI rationale, watch-vs-direct patterns, and degradation behaviour into a new §3b "AI integration model" so the load-bearing choice has one home instead of five scattered restatements.
-- **Session 7 (2026-05-26):** post-review-2 cleanup. Renamed Anchor discriminator field `kind` → `type` (matches `BlockOrigin.type`) and value `"comment"` → `"interaction"` with `commentId` → `interactionId` (vocabulary now matches the entity). Dropped `Interaction.external` and the `external_json` column from v1 (PR-ingest reintroduces in v1.5; carrying it as dead surface added no value). Human `displayName` stores a real name — "You" is render-time UI when `author.id === currentUserId`. Quiz is presentational only — `acceptableAnswers` is the AI's answer revealed for self-evaluation; no correctness check. Read-lines do not carry forward across ChangeSet refresh (overkill to re-anchor passive attention-tracking). Documented `Plan.headline` as single-line plain text derived from `cs.title`, and codified server-side truncation of `entryPoints` to the first 3. **MCP surface collapsed from nine tools to three:** `shippable_wait_for_work` (the spine, with `channels` + optional `identity` params), `shippable_post_interaction`, `shippable_post_plan`. Dropped `shippable_announce` (identity is implicit via `X-Shippable-Author-Id` header + upsert; declared identity rides on `wait_for_work`), `shippable_get_changeset` (agent reads diff from worktree directly; existing interactions / plan / parent chain inline in `wait_for_work` payload), and the `get_plan` / `get_progress` / `get_sign_off` / `get_settings` reads. Diff bytes never cross the MCP boundary — worktree on disk, agent has filesystem access. Library prompts route through a new `agent_queue.type = 'prompt'` row (server resolves `promptBody` at enqueue time; agent never reads the library directly). Direct prompting via MCP dropped — every AI write into Shippable goes through watch mode. Attributed AI UUID minting to the **MCP subprocess** (`mcp-server/`), not the LLM peer: the bridge generates the UUID on startup, caches it in memory, attaches the `X-Shippable-Author-Id` header to every HTTP call; the LLM never sees the header. Persisted-across-restart identity deferred (§18).
-- **Session 6 (2026-05-26):** review-driven cleanup. Subagent audit of the doc flagged eight open architectural decisions and a punch list of wrong/contradictory citations. Locked: dropped `Anchor.prefer?` (§18); Interaction `anchor` / `intent` / `authorId` / AI-only fields are immutable post-insert, PATCH limited to human `body`/`updatedAt`, parent-must-exist on response-intent inserts (cycles impossible by construction); dropped `generation` field — `changesetId` FK is the revision tag; locked human `userId` minting (client UUID v4 → `localStorage shippable:userId:v1` → `X-Shippable-User-Id` header); locked MCP auth header (`X-Shippable-Author-Id` returned by `shippable_announce`); renamed `jobs` → `agent_queue`, added `interaction` type and `channel_path` worktree scope; quiz ships in v1 with questions riding on `shippable_post_plan`; rubric required on every AI Interaction regardless of intent (closes §18). Defined `StructureMap` and `fileId === path` inline. Dropped the `parentInteractionId?` parameter; collapsed `shippable_get_interactions` into `shippable_get_changeset`.
-
 Supersedes `suggested-architecture.md` and `rebuild-plan.md` (both preserved as working notes).
 
 ---
@@ -27,12 +19,12 @@ type Anchor =
   | { type: "block";       file: string; lo: number; hi: number; origin: BlockOrigin }
   | { type: "symbol";      file: string; symbol: string }
   | { type: "file";        file: string }
-  | { type: "changeset" }                          // zero-data: applies to the whole ChangeSet
-  | { type: "interaction"; interactionId: string };// anchors to another Interaction (reply chain)
+  | { type: "changeset" }                           // zero-data: applies to the whole ChangeSet
+  | { type: "interaction"; interactionId: string }; // anchors to another Interaction (reply chain)
 
 type BlockOrigin =
-  | { type: "committed"; sha: string }            // git re-derives the window from sha on demand
-  | { type: "dirty";     context: string[] };     // ~10-line welded snapshot in OUR store
+  | { type: "committed"; sha: string }                  // git re-derives the window from sha on demand
+  | { type: "dirty";     hash: string; context: blob }; // non-git hash, file snapshot in OUR store (stored when there are interactions, but in a central store: once per hash-file, not per interaction)
 ```
 
 **Key decisions:**
@@ -43,52 +35,47 @@ type BlockOrigin =
 - **`file: string` is the path within the ChangeSet** (matches `diff_files.path`). The prototype's synthetic `fileId` collapses to `path` in v1 — file rows are uniquely keyed by `(changeset_id, path)` in storage and by `path` within a single ChangeSet's namespace. `UIState.fileDisplayMode` keys by the same `path` string.
 - **`interaction` anchors are how threading works.** A reply is an Interaction anchored to its parent. Reply-of-reply allowed. Cycles prevented by acyclic insert.
 - **`symbol` resolves lazily.** Anchor stores symbol name + file; the renderer asks the code-graph to resolve symbol → line. Survives line drift; falls back to text-search when LSP unavailable.
-- **`BlockOrigin` is a discriminated union, not a flat `originType` flag.** Committed code is content-addressed by SHA — git already stores the window, so we store only the address and call `git show <sha>:<path>` when we need it. Dirty (uncommitted) code has no SHA; we weld a ~10-line context snapshot at write time, because that's the only moment the content exists. We never `git hash-object -w` — we don't write blobs into the user's `.git`. The principle is *steal content-addressing, not the object store.*
-- **The matching fingerprint is derived, never stored.** Re-anchoring scans the new diff with FNV-1a per candidate window — cost is O(lines in the changed file), the same whether or not we persisted a target hash. Storing it saved one hash out of hundreds; dropped.
+- **`BlockOrigin` is a discriminated union, not a flat `originType` flag.** Committed code is content-addressed by SHA — git already stores the window, so we store only the address and call `git show <sha>:<path>` when we need it. Dirty (uncommitted) code has no SHA; we store a hash for the file, plus the file itself at write time, because that's the only moment the content exists. We never `git hash-object -w` — we don't write blobs into the user's `.git`. The principle is *steal content-addressing, not the object store.*
 - **Re-anchoring is off the hot path.** Fires on reload (diff content changed), never on keystrokes. The committed `git show` is per-file, batched at ingest, cacheable by `(sha, path)` if it ever shows up hot.
 - **Recoverable only while reachable.** A committed `BlockOrigin` loses its window if the commit gets garbage-collected (rebase/amend + prune). Anchors detach with a "lost commit" caption; accepted as audit-trail decay rather than data loss for live review.
 
-**Reply chain resolution.** `resolveRootAnchor(anchor)` walks the `interaction`-anchor chain until it hits a code-or-changeset anchor. Terminates because asks must root on non-`interaction` anchors (write-time rule).
+**Reply chain resolution.** `resolveRootAnchor(anchor)` walks the `interaction`-anchor chain until it hits a code-or-changeset anchor. Terminates because interactions must root on non-`interaction` anchors (write-time rule).
 
 ### 1.2 Interaction
 
 The unified signal. One shape for every reviewer event — human comment, AI finding (from a review job, §7b), MCP agent post, reply, ack/reject. (External PR comments are deferred to v1.5+; see §1.3 and §18.)
 
 ```ts
-type AskIntent      = "comment" | "question" | "request" | "blocker";
-type ResponseIntent = "ack" | "unack" | "accept" | "reject";
+type AskIntent      = "comment" | "question" | "blocker";
+type ResponseIntent = "accept" | "reject";
 type Intent         = AskIntent | ResponseIntent;
 
-type CheckLabel =
-  | "Reproduced"
-  | "Tests run"
-  | "Tests pass"
-  | "Traced the code"
-  | "Second agent confirmed";
+type CheckKey =
+  | "reproduced"
+  | "tests-run"
+  | "tests-pass"
+  | "traced-the-code"
+  | "confirmed-by-second-agent";
 
 type CheckResult = { result: "yes" | "no"; note: string };   // note required on every check
-type Rubric      = Record<CheckLabel, CheckResult>;          // completeness enforced by the type
+type Checks      = Record<CheckKey, CheckResult>;          // completeness enforced by the type
 
 type Interaction = {
   id: string;
   changesetId: string;
-
   anchor: Anchor;
-  references?: Anchor[];                            // optional supplementary positions
-
-  authorId: string;                                 // → authors.id (§3.1, §13)
+  authorId: string;       // → authors.id (§3.1, §13)
   intent: Intent;
-
-  body: string;                                     // markdown
-
-  // ai-only structured fields
-  rubric?: Rubric;
-  rationale?: string;
-  suggestedFix?: string;
-
+  body: string;           // markdown
   createdAt: string;
   updatedAt: string;
 };
+
+type AgentInteraction = Interaction & {
+  checks?: Checks;
+  rationale?: string;
+  suggestedFix?: string;
+}
 ```
 
 **Write-time validation rules:**
@@ -96,9 +83,9 @@ type Interaction = {
 - `intent ∈ AskIntent`  →  `anchor.type !== "interaction"` (asks root on code/changeset).
 - `intent ∈ ResponseIntent`  →  `anchor.type === "interaction"` (responses reply).
 - `anchor.type === "interaction"`  →  the referenced `interactionId` must exist at insert time (parent-must-exist; rejects orphan replies).
-- author's role is `"ai"` → full rubric required, regardless of intent (every `CheckLabel` answered, each with `result` and a non-empty `note`).
-- author's role is `"human"`  →  `rubric`, `rationale`, `suggestedFix` absent. Humans can use any of the four `AskIntent`s (comment, question, request, blocker); the intent vocabulary describes the *kind of ask*, not the kind of author.
-- `Interaction.anchor`, `intent`, `references`, `authorId`, and all AI-only fields are **immutable post-insert.** `PATCH /api/interactions/{id}` can modify only `body` and `updatedAt`, and only for human-authored rows. AI Interactions cannot be patched at all — the agent replies to revise its position, doesn't edit history.
+- author's role is `"agent"` → full rubric required, regardless of intent (every `CheckKey` answered, each with `result` and a non-empty `note`).
+- author's role is `"human"`  →  `rubric`, `rationale`, `suggestedFix` absent. Humans can use any of the four `AskIntent`s (comment, question, blocker); the intent vocabulary describes the *kind of ask*, not the kind of author.
+- `Interaction.anchor`, `intent`, `authorId`, and all AI-only fields are **immutable post-insert.** `PATCH /api/interactions/{id}` can modify only `body` and `updatedAt`, and only for human-authored rows. AI Interactions cannot be patched at all — the agent replies to revise its position, doesn't edit history.
 - Anchor immutability + parent-must-exist means comment-chain cycles are impossible by construction.
 - Interactions are inserted atomically — no streaming state. An AI review job posts each Interaction with a separate MCP write, and SSE delivers them one by one as they arrive (§7b).
 
@@ -107,12 +94,11 @@ type Interaction = {
 - **No `threadKey` field.** Threading derives from `anchor.type === "interaction"` chains. The prototype's prefixed keys (`note:`, `block:`, `user:`, `teammate:`, `hunkSummary:`) were a workaround; the anchor is the unified pointer.
 - **No `target`, no `parentId`.** Anchor is the sole positioning field.
 - **AuthorId references `authors`, not a free-text display name.** Identity lives in one table (§13). Read-side denormalizes — every Interaction surfaced over the wire (REST, SSE, MCP queue payload) carries its `author: {id, role, displayName, declared?}` expanded inline so callers don't need a second lookup.
-- **Rubric is a flat 5-label closed set, complete every time, required on every AI Interaction regardless of intent.** The type is `Record<CheckLabel, CheckResult>` so a partial rubric is unrepresentable by construction. The agent must face every label — including the uncomfortable ones (`Second agent confirmed`) — on every Interaction it posts (comment, question, request, blocker, or any reply). Not-done is encoded as `result: "no"` with a note explaining why; there is no `na`. The earlier carve-out for AI {comment, question} is gone — the rubric attaches to "an AI is on record about this", not to verdict severity.
+- **Rubric is a flat 5-label closed set, complete every time, required on every AI Interaction regardless of intent.** The type is `Record<CheckLabel, CheckResult>` so a partial rubric is unrepresentable by construction. The agent must face every label — including the uncomfortable ones (`second-agent-confirmed`) — on every Interaction it posts (comment, question, request, blocker, or any reply). Not-done is encoded as `result: "no"` with a note explaining why; there is no `na`.
 - **`note` is required on every check, including `yes` ones.** "Tests run: yes" without context is empty; "Tests run: yes, `npm test -- auth/token.test.ts`" is evidence. Yes-with-no-note is rejected server-side.
 - **Self-attested in v1.** No runner verifies the rubric in v1; the win is a comparable, requirable, filterable vocabulary — what the agent reports it did. Verification waits for the (deferred) code-runner.
-- **AI fills its own rubric; humans don't touch it.** Disagreement expressed via `ack`/`reject` reply, not by editing the AI's self-report.
+- **AI fills its own rubric; humans don't touch it.** Disagreement expressed via `accept`/`reject` reply, not by editing the AI's self-report.
 - **`rationale` and `suggestedFix` stay structured.** Renderable as distinct UI elements (e.g. "apply this patch" button).
-- **`references: Anchor[]`** lets one Interaction cite multiple code positions beyond its home `anchor`. Always optional — Plan claims have their own non-empty `references` requirement (§7), independent of Interactions. The field is named `references` on both Interaction and Claim because the shape is structural ("Anchor[] that points at code"); the *evidence* concept lives in the rubric, not in pointer lists.
 - **Revision tag = `changesetId`.** AI Interactions are tied to a specific ChangeSet by their FK column; there is no separate `generation` field. On re-ingest, old AI Interactions stay on their original ChangeSet and surface as "from prior revision" via the parent chain in `changesets`.
 - **No Plan or Claim is an Interaction.** Plan claims are Plan-internal value types (§7); Interactions are reviewer events on positions.
 
@@ -123,37 +109,37 @@ The unit of review. A snapshot of a diff plus the source it came from.
 ```ts
 type ChangeSet = {
   id: string;
-  parentChangesetId?: string;                       // set on refresh; links to prior snapshot
-  provenance: Provenance;
+  parentChangesetId?: string;  // set on refresh; links to prior snapshot
+  source: ChangeSetSource;
   files: DiffFile[];
   ingestedAt: string;
 };
 
-type Provenance =
-  | { kind: "worktree"; workdir: string; branch: string; sha: string | "WORKING"; dirty: boolean }
-  | { kind: "pr";       owner: string; repo: string; number: number; sha: string; title: string; body: string; author: string }
-  | { kind: "paste";    raw: string; pastedAt: string }
-  | { kind: "file";     filename: string; size: number }
-  | { kind: "url";      url: string; sha?: string };
+type ChangeSetSource = // current only worktree. other types need to be thought-through later
+  | { kind: "worktree"; workdir: string; branch: string; identifier: string; dirty: boolean }; // identifier is the commit sha, of computed identifier in case of uncomitted changes
+//  | { kind: "pr";       owner: string; repo: string; number: number; sha: string; title: string; body: string; author: string }
+//  | { kind: "paste";    raw: string; pastedAt: string }
+//  | { kind: "file";     filename: string; size: number }
+//  | { kind: "url";      url: string; sha?: string };
 ```
 
 **ChangeSet id derivation:**
 
 | Provenance | id format                                     |
 |------------|-----------------------------------------------|
-| worktree   | `worktree:{workdir}@{sha-or-WORKING}`         |
+| worktree   | `worktree:{workdir}@{indentifier}`            |
+<!-- to be defined later
 | pr         | `pr:{owner}/{repo}/{number}@{sha}`            |
 | url        | `url:{url}@{sha}` (or content-hash if no sha) |
 | paste      | `paste:{contentHash}`                         |
 | file       | `file:{filename}:{contentHash}`               |
+-->
 
 **Key decisions:**
 
-- **Immutable.** Refresh creates a new ChangeSet with `parentChangesetId`. Re-anchoring migrates interactions forward. Audit trail preserved.
-- **Provenance-derived id with content-hash fallback** for paste/file/ url-without-sha.
+- **Immutable.** Reload creates a new ChangeSet with `parentChangesetId`, if there are changes. Re-anchoring migrates interactions forward. Audit trail preserved.
 - **No `external` field in v1.** PR ingest in v1.5+ reintroduces an `external` discriminated variant on Interaction (provenance for mirrored PR comments + an `htmlUrl` back to the original). The field is omitted from v1 entirely rather than carried as dead surface; see §18.
-- **Metadata lives on the provenance variant**, not a flat `meta` bag.
-- **Union keeps all 5 variants in v1** even though only `worktree` ingest ships. The type stays open so v1.5 can add PR ingest without a type-level migration.
+- **Union keeps only worktree variant in v1.**
 
 ### 1.4 Capability
 
@@ -161,14 +147,10 @@ The flag system that decides what UI mounts.
 
 ```ts
 type CapabilityKey =
-  | "ingest.worktree"                              // lit in v1
-  | "ingest.pr" | "ingest.paste" | "ingest.file" | "ingest.url"  // defined; not lit in v1
   | "lsp.typescript" | "lsp.php" | "lsp.python"
   | "runner.js" | "runner.php"
   | "ai.mcp"                                       // any watcher present
-  | "vcs.gh-clone"
   | "picker.directory"                             // tauri-plugin-dialog or AppleScript
-  | "quiz.enabled";
 
 type Capability =
   | { available: true }
@@ -179,11 +161,10 @@ type Capabilities = Record<CapabilityKey, Capability>;
 
 **Key decisions:**
 
-- **Per-feature granularity.** One flag per shippable feature.
+- **Capabilities inform which system capabilities are available.** They are not general feature flags.
 - **Server ∩ ChangeSet.** Server reports its base set ("typescript-language-server installed"); ChangeSet provenance narrows it ("paste, no worktree disk"). Effective capability = intersection.
 - **Reactive.** Capabilities live in a context. Flag flip-off unmounts consumer components; open dialogs auto-close.
 - **Reasons on unavailable caps.** UI renders "feature off because X" tooltips.
-- **Non-worktree ingest flags are defined but not lit in v1.** Their keys exist so the type stays stable; the server reports them `{ available: false, reason: "Not in v1; PR ingest lands in v1.5" }`.
 
 ---
 
