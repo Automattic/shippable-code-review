@@ -64,7 +64,7 @@ type Interaction = {
   id: string;
   changesetId: string;
   anchor: Anchor;
-  authorId: string;       // → authors.id (§3.1, §13)
+  authorId: string;       // → users.id (§3.1, §13)
   intent: Intent;
   body: string;           // markdown
   createdAt: string;
@@ -93,7 +93,7 @@ type AgentInteraction = Interaction & {
 
 - **No `threadKey` field.** Threading derives from `anchor.type === "interaction"` chains. The prototype's prefixed keys (`note:`, `block:`, `user:`, `teammate:`, `hunkSummary:`) were a workaround; the anchor is the unified pointer.
 - **No `target`, no `parentId`.** Anchor is the sole positioning field.
-- **AuthorId references `authors`, not a free-text display name.** Identity lives in one table (§13). Read-side denormalizes — every Interaction surfaced over the wire (REST, SSE, MCP queue payload) carries its `author: {id, role, displayName, declared?}` expanded inline so callers don't need a second lookup.
+- **AuthorId references `users`, not a free-text display name.** Identity lives in one table (§13). Read-side denormalizes — every Interaction surfaced over the wire (REST, SSE, MCP queue payload) carries its `author: {id, role, displayName, declared?}` expanded inline so callers don't need a second lookup.
 - **Checks are a flat 5-label closed set, complete every time, required on every AI Interaction regardless of intent.** The type is `Record<CheckKey, CheckResult>` so partial checks are unrepresentable by construction. The agent must face every label — including the uncomfortable ones (`second-agent-confirmed`) — on every Interaction it posts (comment, question, blocker, or any reply). Not-done is encoded as `result: "no"` with a note explaining why; there is no `na`.
 - **`note` is required on every check, including `yes` ones.** "Tests run: yes" without context is empty; "Tests run: yes, `npm test -- auth/token.test.ts`" is evidence. Yes-with-no-note is rejected server-side.
 - **Self-attested in v1.** No runner verifies the checks in v1; the win is a comparable, requirable, filterable vocabulary — what the agent reports it did. Verification waits for the (deferred) code-runner.
@@ -209,14 +209,13 @@ The review state machine: cursor, read-line tracking, projections.
 │  SQLite (server)         — source of truth                  │
 │  • interactions          (the unified timeline)             │
 │  • changesets            (immutable snapshots; parent chain)│
-│  • diff_files            (denormalised file rows per cs)    │
+│  • diff_files            (denormalised file rows per changeset)    │
 │  • read_lines            (ranges per user/cs/file)          │
 │  • sign_offs             (file-level human sign-off)        │
 │  • reviewed_changesets   (changeset-level human sign-off)   │
-│  • prefs                 (k/v per user — incl. auto-queue, recents) │
-│  • trusted_hosts         (server policy table)              │
-│  • authors               (unified identity — humans + AI)   │
-│  • plans                 (append-only; latest wins per cs)  │
+│  • prefs                 (k/v per user — incl. auto-queue, recents, trusted hosts) │
+│  • users                 (unified identity — humans + AI)   │
+│  • plans                 (append-only; latest wins per changeset)  │
 │  • agent_queue           (plan/review/interaction/prompt;   │
 │                          channel-scoped; watch-claimed; §7b)│
 │  • prompts               (library + user, source-tagged §9b)│
@@ -235,7 +234,7 @@ The review state machine: cursor, read-line tracking, projections.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Entity-relationship diagram.** Two hubs carry the schema: `changesets` (every review artifact is scoped to a snapshot) and `authors` (every "who did this?" resolves here). `trusted_hosts` is the lone standalone table; `agent_queue.result_id` is a soft pointer to `plans` (set only when `type='plan'`).
+**Entity-relationship diagram.** Two hubs carry the schema: `changesets` (every review artifact is scoped to a snapshot) and `users` (every "who did this?" resolves here). `agent_queue.result_id` is a soft pointer to `plans` (set only when `type='plan'`).
 
 ```
 changesets   (id PK · parent_changeset_id ⟲ self · source_type · source_json · ingested_at)
@@ -244,20 +243,19 @@ changesets   (id PK · parent_changeset_id ⟲ self · source_type · source_jso
   ├─ interactions         + author_id FK ─────────┐
   ├─ read_lines           + user_id FK            │
   ├─ sign_offs            + user_id FK            │
-  ├─ reviewed_changesets  + user_id FK            ├──▶ authors
+  ├─ reviewed_changesets  + user_id FK            ├──▶ users
   ├─ plans                + generated_by FK       │
   ├─ agent_queue          + requested_by,         │
   │                         claimed_by FK         │
   └─ quizzes              + user_id FK ───────────┘
 
-authors   (id PK · role human|ai · display_name · declared_json · observed_json · last_seen_at)
+users     (id PK · role human|ai · display_name · declared_json · observed_json · last_seen_at)
   │  also referenced (changeset-independent) by user_id FK:
   ├─ prefs
   └─ prompts              user_id NULL ⇒ library row
 
-soft / standalone:
+soft pointer:
   • agent_queue.result_id ┄▶ plans.id    (set only when type='plan')
-  • trusted_hosts          standalone — host PK, no FKs (server policy table)
 ```
 
 ### 3.1 Column-level shapes
@@ -272,15 +270,16 @@ CREATE TABLE changesets (
 );
 
 CREATE TABLE diff_files (
+  id            TEXT PRIMARY KEY,
   changeset_id  TEXT NOT NULL REFERENCES changesets(id),
   path          TEXT NOT NULL,
   status        TEXT NOT NULL,                       -- added | modified | deleted | renamed
   file_json     TEXT NOT NULL,                       -- hunks, lines
-  PRIMARY KEY (changeset_id, path)
+  UNIQUE KEY (changeset_id, path)
 );
 
-CREATE TABLE authors (
-  id             TEXT PRIMARY KEY,                   -- authorId — client-minted UUID (humans) or MCP-subprocess-minted UUID (AI)
+CREATE TABLE users (
+  id             TEXT PRIMARY KEY,                   -- userId — client-minted UUID (humans) or MCP-subprocess-minted UUID (AI)
   role           TEXT NOT NULL,                      -- 'human' | 'ai'
   display_name   TEXT NOT NULL,
   declared_json  TEXT,                               -- AI only: { handle, purpose, model }
@@ -292,7 +291,7 @@ CREATE TABLE interactions (
   id              TEXT PRIMARY KEY,
   changeset_id    TEXT NOT NULL REFERENCES changesets(id),
   anchor_json     TEXT NOT NULL,                     -- Anchor discriminated union
-  author_id       TEXT NOT NULL REFERENCES authors(id),
+  author_id       TEXT NOT NULL REFERENCES users(id),
   intent          TEXT NOT NULL,
   body            TEXT NOT NULL,
   checks_json     TEXT,                              -- Record<CheckKey, CheckResult> or NULL
@@ -301,43 +300,29 @@ CREATE TABLE interactions (
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
-CREATE INDEX idx_interactions_cs ON interactions(changeset_id);
+CREATE INDEX idx_interactions_changeset ON interactions(changeset_id);
 
 CREATE TABLE read_lines (
-  user_id      TEXT NOT NULL REFERENCES authors(id),
-  changeset_id TEXT NOT NULL REFERENCES changesets(id),
-  file         TEXT NOT NULL,
+  user_id      TEXT NOT NULL REFERENCES users(id),
   ranges_json  TEXT NOT NULL,                        -- compact [lo,hi][]
   updated_at   TEXT NOT NULL,
+  diff_file_id TEXT NOT NULL REFERENCES diff_files(id),
   PRIMARY KEY (user_id, changeset_id, file)
 );
 
 CREATE TABLE sign_offs (
-  user_id      TEXT NOT NULL REFERENCES authors(id),
+  user_id      TEXT NOT NULL REFERENCES users(id),
   changeset_id TEXT NOT NULL REFERENCES changesets(id),
-  file         TEXT NOT NULL,
+  diff_file    TEXT NULL REFERENCES diff_files(id)
   signed_at    TEXT NOT NULL,
+  `type`       TEXT, --changeset|file--
   PRIMARY KEY (user_id, changeset_id, file)
 );
 
-CREATE TABLE reviewed_changesets (
-  user_id      TEXT NOT NULL REFERENCES authors(id),
-  changeset_id TEXT NOT NULL REFERENCES changesets(id),
-  signed_at    TEXT NOT NULL,
-  PRIMARY KEY (user_id, changeset_id)
-);
-
 CREATE TABLE prefs (
-  user_id    TEXT NOT NULL REFERENCES authors(id),
-  key        TEXT NOT NULL,
+  key        TEXT NOT NULL PRIMARY KEY,
   value      TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY (user_id, key)
-);
-
-CREATE TABLE trusted_hosts (
-  host       TEXT PRIMARY KEY,
-  trusted_at TEXT NOT NULL
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE plans (
@@ -348,44 +333,41 @@ CREATE TABLE plans (
   structure_json    TEXT NOT NULL,                   -- StructureMap (§7)
   claims_json       TEXT NOT NULL,                   -- Claim[] (inline; §7)
   entry_points_json TEXT NOT NULL,                   -- EntryPoint[] (≤3; §7)
-  generated_by      TEXT REFERENCES authors(id),     -- AI author; null = rule
+  generated_by      TEXT REFERENCES users(id),     -- AI author; null = rule
   created_at        TEXT NOT NULL
 );
 CREATE INDEX plans_by_changeset ON plans(changeset_id, created_at DESC);
 
 CREATE TABLE agent_queue (
   id              TEXT PRIMARY KEY,
-  type            TEXT NOT NULL,                     -- 'plan' | 'review' | 'interaction' | 'prompt'
+  request_type    TEXT NOT NULL,                     -- 'plan' | 'review' | 'interaction' | 'prompt'
   channel_path    TEXT NOT NULL,                     -- worktree path (v1); broader in v1.5 (PR/url/etc.)
   changeset_id    TEXT NOT NULL REFERENCES changesets(id),
   status          TEXT NOT NULL,                     -- 'pending' | 'in_progress' | 'done' | 'failed'
   requested_at    TEXT NOT NULL,
-  requested_by    TEXT NOT NULL REFERENCES authors(id),  -- always set to the requester's author_id (human for user-initiated/auto-queue-from-human-action; AI for future agent-to-agent enqueue)
+  requested_by    TEXT NOT NULL REFERENCES users(id),  -- always set to the requester's author_id (human for user-initiated/auto-queue-from-human-action; AI for future agent-to-agent enqueue)
   claimed_at      TEXT,
-  claimed_by      TEXT REFERENCES authors(id),       -- AI author once claimed
+  claimed_by      TEXT REFERENCES users(id),       -- AI author once claimed
   completed_at    TEXT,
   payload_json    TEXT,                              -- type-specific: {interactionId} for type='interaction'; params for plan/review
   result_id       TEXT,                              -- FK to plans.id when type='plan'
   error_msg       TEXT
 );
 CREATE INDEX agent_queue_pending  ON agent_queue(channel_path, status, type, requested_at);
-CREATE INDEX agent_queue_by_cs    ON agent_queue(changeset_id, status);
+CREATE INDEX agent_queue_by_changeset    ON agent_queue(changeset_id, status);
 
 CREATE TABLE prompts (
-  user_id      TEXT REFERENCES authors(id),          -- NULL for source='library' (global rows); see §9b normalization note
-  id           TEXT NOT NULL,                        -- prompt id (users cannot edit library prompts)
+  id           TEXT NOT NULL PRIMARY KEY,                        -- prompt id (users cannot edit library prompts)
   source       TEXT NOT NULL,                        -- 'library' | 'user'
   name         TEXT NOT NULL,
   description  TEXT NOT NULL,
   args_json    TEXT NOT NULL,                        -- PromptArg[]
   body         TEXT NOT NULL,                        -- markdown
   updated_at   TEXT NOT NULL,
-  PRIMARY KEY (user_id, id)                          -- revisit: NULL user_id for library rows needs a uniqueness rule (§9b)
 );
 
 CREATE TABLE quizzes (
   id             TEXT PRIMARY KEY,
-  user_id      TEXT NOT NULL REFERENCES authors(id),
   changeset_id   TEXT NOT NULL REFERENCES changesets(id),
   questions_json TEXT NOT NULL,  
   answers_json TEXT NOT NULL,                    -- Question[] with Anchor targets
@@ -395,7 +377,7 @@ CREATE TABLE quizzes (
 
 ### 3.2 Identity, secrets
 
-- **Identity.** Every Interaction, plan, agent_queue row, sign-off, read-line, pref, user prompt, and quiz response references `authors.id`. Humans mint their `authorId` client-side (UUID v4 in localStorage; `X-Shippable-User-Id` header); the server upserts the row on first sight (role `'human'`, no declared/observed). For AI, the **MCP subprocess** (`mcp-server/`, the stdio bridge between the LLM and the Node server) mints a UUID v4 on startup and attaches it as `X-Shippable-Author-Id` to every HTTP call it makes; the LLM peer never sees the header. The Node server upserts a row (role `'ai'`) on first sight. Declared identity (handle, purpose, model) arrives via the optional `identity` parameter on `shippable_wait_for_work` — no separate handshake. Observed identity (worktree, harness, osUser, host) is filled from connection context and refreshed on every call. The subprocess holds its UUID in memory only — restarts mint a new id and a new `authors` row; persistence is deferred (§18). No accounts, no auth in v1 — multi-user identity is deferred (§18).
+- **Identity.** Every Interaction, plan, agent_queue row, sign-off, read-line, pref, user prompt, and quiz response references `users.id`. Humans mint their `userId` client-side (UUID v4 in localStorage; `X-Shippable-User-Id` header); the server upserts the row on first sight (role `'human'`, no declared/observed). For AI, the **MCP subprocess** (`mcp-server/`, the stdio bridge between the LLM and the Node server) mints a UUID v4 on startup and attaches it as `X-Shippable-User-Id` to every HTTP call it makes; the LLM peer never sees the header. The Node server upserts a row (role `'ai'`) on first sight. Declared identity (handle, purpose, model) arrives via the optional `identity` parameter on `shippable_wait_for_work` — no separate handshake. Observed identity (worktree, harness, osUser, host) is filled from connection context and refreshed on every call. The subprocess holds its UUID in memory only — restarts mint a new id and a new `users` row; persistence is deferred (§18). No accounts, no auth in v1 — multi-user identity is deferred (§18).
 - **Secrets.** Only GitHub tokens. Keychain in Tauri, server memory in dev. Server is the policy boundary; secrets never reach the client.
 - **No Anthropic key.** All AI work flows through MCP; agents hold their own credentials. Rationale, patterns, and degradation in §3b.
 
@@ -488,9 +470,9 @@ Three tools. Watch mode is the only flow; the agent reads diff content from the 
 
 **The spine — long-poll claim, watch mode:**
 
-- `shippable_wait_for_work({timeout, types, channels, identity?})` — blocks until a pending `agent_queue` row matches one of the caller's declared `channels` (worktree paths) and `types`, or the timeout fires. Returns the claimed `AgentQueueItem` with type-specific context inlined (see payload table below). Single-consumer claim: first watcher in a channel wins. Long-poll calls implicitly stamp presence per `(authorId, channelPath)`; watchers older than `WATCH_TTL_MS` are considered offline.
+- `shippable_wait_for_work({timeout, types, channels, identity?})` — blocks until a pending `agent_queue` row matches one of the caller's declared `channels` (worktree paths) and `types`, or the timeout fires. Returns the claimed `AgentQueueItem` with type-specific context inlined (see payload table below). Single-consumer claim: first watcher in a channel wins. Long-poll calls implicitly stamp presence per `(userId, channelPath)`; watchers older than `WATCH_TTL_MS` are considered offline.
 
-  `identity` is optional. When provided, the server upserts `authors.declared_json` (handle, purpose, model) so the human-facing badge can show rich identity (§13). Agents that skip it are observed-only — badge shows just the worktree path and `firstSeenAt`.
+  `identity` is optional. When provided, the server upserts `users.declared_json` (handle, purpose, model) so the human-facing badge can show rich identity (§13). Agents that skip it are observed-only — badge shows just the worktree path and `firstSeenAt`.
 
   Payload returned by `wait_for_work` (no diff content — agent reads the worktree directly):
 
@@ -499,9 +481,9 @@ Three tools. Watch mode is the only flow; the agent reads diff content from the 
 **Write tools:**
 
 - `shippable_post_interaction({changesetId, anchor, intent, body, checks, rationale?, suggestedFix?})` — one Interaction per call. Atomic. Replies use `anchor: { type: "interaction", interactionId }` — there is no separate `parentInteractionId`. `checks` is required (universal for AI authors). Used for review/prompt/reply output.
-- `shippable_post_plan({changesetId, headline, structure, claims[], entryPoints[], questions?})` — atomic Plan insert. Appends a new row; latest wins (§7). The caller's `authorId` (from the `X-Shippable-Author-Id` header) becomes the plan's `generated_by`. The optional `questions` array carries an AI quiz alongside the plan (§12); a rule-based quiz floor is generated at ingest regardless. **Write-time validation:** `claims[*].references` must be non-empty per claim; `entryPoints` longer than 3 is truncated server-side to the first 3 by array order (matches the prototype's `assemblePlan` behavior).
+- `shippable_post_plan({changesetId, headline, structure, claims[], entryPoints[], questions?})` — atomic Plan insert. Appends a new row; latest wins (§7). The caller's `userId` (from the `X-Shippable-User-Id` header) becomes the plan's `generated_by`. The optional `questions` array carries an AI quiz alongside the plan (§12); a rule-based quiz floor is generated at ingest regardless. **Write-time validation:** `claims[*].references` must be non-empty per claim; `entryPoints` longer than 3 is truncated server-side to the first 3 by array order (matches the prototype's `assemblePlan` behavior).
 
-**Auth header.** Every request to `/api/agent/*` carries `X-Shippable-Author-Id: <uuid>`. The header is minted and attached by the **MCP subprocess** (`mcp-server/`) — a UUID v4 generated on startup, cached in memory for the subprocess lifetime. The LLM peer calling MCP tools never sees the header; identity is plumbing handled by the bridge. The Node server upserts an `authors` row (role `'ai'`) on first sight from that id and refreshes `observed_json` + `last_seen_at` on every call. No prior handshake — the first `wait_for_work` is both registration and the first poll. Subprocess restart = new UUID = new `authors` row; in-memory by design (§13).
+**Auth header.** Every request to `/api/agent/*` carries `X-Shippable-User-Id: <uuid>`. The header is minted and attached by the **MCP subprocess** (`mcp-server/`) — a UUID v4 generated on startup, cached in memory for the subprocess lifetime. The LLM peer calling MCP tools never sees the header; identity is plumbing handled by the bridge. The Node server upserts an `users` row (role `'ai'`) on first sight from that id and refreshes `observed_json` + `last_seen_at` on every call. No prior handshake — the first `wait_for_work` is both registration and the first poll. Subprocess restart = new UUID = new `users` row; in-memory by design (§13).
 
 ### 4.3 SSE per-ChangeSet
 
@@ -588,7 +570,7 @@ type Plan = {
   structure: StructureMap;
   claims: Claim[];                                  // ordered intent claims (array order = ordinal)
   entryPoints: EntryPoint[];                        // ≤3; server truncates to the first 3 by array order at write time
-  generatedBy?: string;                             // → authors.id; null when source='rule'
+  generatedBy?: string;                             // → users.id; null when source='rule'
   createdAt: string;
 };
 
@@ -657,9 +639,9 @@ type AgentQueueItem = {
   changesetId: string;
   status: AgentQueueStatus;
   requestedAt: string;
-  requestedBy: string;                              // authors.id of the requester (always set)
+  requestedBy: string;                              // users.id of the requester (always set)
   claimedAt?: string;
-  claimedBy?: string;                               // authors.id once claimed
+  claimedBy?: string;                               // users.id once claimed
   completedAt?: string;
   payload?: PlanPayload | ReviewPayload | InteractionPayload | PromptPayload;
   resultId?: string;                                // FK to plans.id when type='plan'
@@ -693,7 +675,7 @@ type PromptPayload      = {
 - `plan`, `review`, `prompt`: `pending → in_progress` on claim → `done | failed` on agent transition. The agent reports completion explicitly. `prompt` is shaped exactly like `review` from the agent's perspective — execute the body, post Interactions (or a Plan, for plan-shaped prompts), transition the row when done.
 - `interaction`: `pending → done` on claim. Claim is the ack. The agent doesn't need to mark anything afterwards. If the agent wants to reply, it inserts a new Interaction (which won't auto-enqueue because the author is AI).
 
-**Presence.** Long-poll calls to `shippable_wait_for_work` stamp a last-seen timestamp per `(authorId, channelPath)`. Watchers older than `WATCH_TTL_MS` are considered offline. The UI subscribes to `GET /api/watchers/active` for the "Agent is watching" indicator — **new endpoint in v1**, not previously wired in the prototype.
+**Presence.** Long-poll calls to `shippable_wait_for_work` stamp a last-seen timestamp per `(userId, channelPath)`. Watchers older than `WATCH_TTL_MS` are considered offline. The UI subscribes to `GET /api/watchers/active` for the "Agent is watching" indicator — **new endpoint in v1**, not previously wired in the prototype.
 
 **No watcher = setup banner.** If no watcher is present in a worktree's channel, the UI shows the rule plan with a visible "Connect an agent for AI plans and reviews" banner — a discovery affordance, not an error state. The capability `ai.mcp` is `false` for that channel; AI features hide themselves cleanly.
 
@@ -784,7 +766,7 @@ const token = await credentials.require("github:api.github.com");
 
 - Boot, settings, on-401 all funnel through `require()`.
 - One queue; the prompt renders the head.
-- Trusted-host opt-in is part of the prompt UX; opting in PATCHes the server's `trusted_hosts`.
+- Trusted-host opt-in is part of the prompt UX; opting in PATCHes the `trusted_hosts` pref (a JSON array of host values; §3).
 
 Today's `CredentialsPanel` + `GitHubTokenModal` duplication collapses to one component. The Anthropic key panel is removed; if MCP is not connected the UI shows the "no watcher" banner from §7b, not a key prompt.
 
@@ -828,15 +810,15 @@ type Quiz = {
 
 ---
 
-## 13. Authors (unified identity)
+## 13. Users (unified identity)
 
-`authors` is the one identity table. Every "who did this?" question resolves through it.
+`users` is the one identity table. Every "who did this?" question resolves through it.
 
 ```ts
-type Author = {
-  id: string;                                        // authorId — UUID, generated client-side for humans, server-assigned for AI
+type User = {
+  id: string;                                        // userId — UUID, generated client-side for humans, server-assigned for AI
   role: "human" | "ai";
-  displayName: string;                               // stable name for the author; "You" is render-time UI, not stored data
+  displayName: string;                               // stable name for the user; "You" is render-time UI, not stored data
   declared?: {                                       // AI only
     handle: string;                                  // 'security-review'
     purpose: string;                                 // 'Audit auth flow'
@@ -853,11 +835,11 @@ type Author = {
 };
 ```
 
-**Humans** mint their `authorId` client-side (UUID v4) on first load and store it in `localStorage` under `shippable:userId:v1`. The id is sent on every API request as `X-Shippable-User-Id: <authorId>`; the server upserts the `authors` row on first sight (`{role: 'human', displayName: <os-user-or-empty-string>, declared: undefined, observed: undefined}`). A settings affordance lets the human update `displayName` later; "You" is rendered by the UI when `interaction.author.id === currentUserId`, not stored as data. localStorage is one of the few keys we intentionally keep client-side — `prefs` is keyed by `authorId`, so it can't bootstrap itself.
+**Humans** mint their `userId` client-side (UUID v4) on first load and store it in `localStorage` under `shippable:userId:v1`. The id is sent on every API request as `X-Shippable-User-Id: <userId>`; the server upserts the `users` row on first sight (`{role: 'human', displayName: <os-user-or-empty-string>, declared: undefined, observed: undefined}`). A settings affordance lets the human update `displayName` later; "You" is rendered by the UI when `interaction.author.id === currentUserId`, not stored as data. localStorage is one of the few keys we intentionally keep client-side — `prefs` is keyed by `userId`, so it can't bootstrap itself.
 
-**AI identity is minted by the MCP subprocess**, not by the LLM peer. The subprocess (`mcp-server/src/index.ts`) generates a UUID v4 on startup and caches it in memory; every HTTP call it makes to `/api/agent/*` carries `X-Shippable-Author-Id: <uuid>`. The LLM calling MCP tools is unaware of this — the bridge handles plumbing. The Node server upserts the `authors` row on first sight (role `'ai'`) and refreshes `observed_json` from the transport context on every call (`worktreePath` derived from the declared channel and connection; `harness` inferred from process tree; `osUser`/`host` from the server's view of the localhost connection). Declared identity (handle, purpose, model) arrives via the optional `identity` parameter on `shippable_wait_for_work` — the subprocess passes through whatever the LLM peer supplies via the MCP tool call. Sent on every poll; last write wins; subprocesses (or LLMs) that skip it stay observed-only.
+**AI identity is minted by the MCP subprocess**, not by the LLM peer. The subprocess (`mcp-server/src/index.ts`) generates a UUID v4 on startup and caches it in memory; every HTTP call it makes to `/api/agent/*` carries `X-Shippable-User-Id: <uuid>`. The LLM calling MCP tools is unaware of this — the bridge handles plumbing. The Node server upserts the `users` row on first sight (role `'ai'`) and refreshes `observed_json` from the transport context on every call (`worktreePath` derived from the declared channel and connection; `harness` inferred from process tree; `osUser`/`host` from the server's view of the localhost connection). Declared identity (handle, purpose, model) arrives via the optional `identity` parameter on `shippable_wait_for_work` — the subprocess passes through whatever the LLM peer supplies via the MCP tool call. Sent on every poll; last write wins; subprocesses (or LLMs) that skip it stay observed-only.
 
-Subprocess restart mints a new UUID and creates a new `authors` row — the old row stays in the table as historical (`lastSeenAt` stops advancing). In-memory minting is intentional in v1; persisted identity across subprocess restarts is deferred (§18).
+Subprocess restart mints a new UUID and creates a new `users` row — the old row stays in the table as historical (`lastSeenAt` stops advancing). In-memory minting is intentional in v1; persisted identity across subprocess restarts is deferred (§18).
 
 **Badge UI** (human-facing) combines fields so mismatches are visible:
 
@@ -873,7 +855,7 @@ security-review · Claude Opus 4.7 · via Claude Code · ~/work/feat · since 14
 - `plans.generated_by` — which agent produced a Plan (null for rule-based).
 - `agent_queue.requested_by` — who requested the row (always set).
 - `agent_queue.claimed_by` — which watcher claimed the row.
-- `read_lines.user_id` / `sign_offs.user_id` / `reviewed_changesets.user_id` / `prefs.user_id` / `prompts.user_id` / `quiz_responses.user_id` — every per-user state row FKs to `authors.id`.
+- `read_lines.user_id` / `sign_offs.user_id` / `reviewed_changesets.user_id` / `prefs.user_id` / `prompts.user_id` / `quiz_responses.user_id` — every per-user state row FKs to `users.id`.
 
 Wire surfaces **denormalize the author inline** — every Interaction returned by REST, SSE, or MCP queue payload carries its `author` expanded as `{id, role, displayName, declared?}`, so callers never need a second lookup to resolve who said what.
 
@@ -965,8 +947,8 @@ Recorded so future archaeology doesn't resurrect them:
 | Intent-keyed rubric (blocker:4, request:2, comment:0) | Flat 5-label `Record<CheckKey, CheckResult>`; required on every AI Interaction |
 | `note` required only when `pass===false` | `note` required on every check, including yes |
 | `Interaction.evidence` field             | Dropped — Interaction has no reference field (Claim keeps `references`) |
-| Free-text `author` + parallel `authorRole` column | `author_id` FK to unified `authors` table |
-| Separate `agent_identities` table        | Folded into `authors` (humans + AI)      |
+| Free-text `author` + parallel `authorRole` column | `author_id` FK to unified `users` table |
+| Separate `agent_identities` table        | Folded into `users` (humans + AI)      |
 | `confidence: low\|medium\|high`          | Flat 5-label checks                      |
 | Checks scoped to AI {blocker, request} only | Universal — checks required on every AI Interaction regardless of intent (§1.2, §15) |
 | Server-side cursor                       | Client-only (in-app memory + localStorage) |
@@ -998,7 +980,7 @@ Recorded so future archaeology doesn't resurrect them:
 | `Interaction.external { source, htmlUrl?, sentinelId? }` | Dropped from v1; reintroduced in v1.5 when PR ingest lands (§18) |
 | `interactions.external_json` column      | Dropped (along with `Interaction.external`) |
 | `shippable_get_settings()` MCP tool      | Dropped — auto-queue prefs are server-side queueing decisions, not agent-respected |
-| `shippable_announce({identity, channels})` MCP tool | Dropped — identity is implicit (UUID in `X-Shippable-Author-Id` header, server upserts on first sight); declared identity arrives via optional `identity` param on `shippable_wait_for_work`; channels are a param on `wait_for_work` |
+| `shippable_announce({identity, channels})` MCP tool | Dropped — identity is implicit (UUID in `X-Shippable-User-Id` header, server upserts on first sight); declared identity arrives via optional `identity` param on `shippable_wait_for_work`; channels are a param on `wait_for_work` |
 | `shippable_get_changeset(id)` MCP tool   | Dropped — diff lives on disk in the worktree, agent reads it itself; existing interactions/plan are inlined in `wait_for_work` payloads |
 | `shippable_get_plan(id)` MCP tool        | Dropped — folded into `wait_for_work` inline payload (no flow needed Plan in isolation from the rest of the changeset) |
 | `shippable_get_progress(id)` MCP tool    | Dropped — no v1 flow needed it; add back when an agent needs mid-task introspection |
@@ -1006,7 +988,7 @@ Recorded so future archaeology doesn't resurrect them:
 | Direct-prompt MCP read path              | Dropped — library prompts route through the queue (§7b `prompt` type, §9b); every AI write into Shippable goes through watch mode |
 | Diff content shipped over MCP            | Dropped — worktree-only ingest means the agent reads diff from disk; MCP carries server-unique state only |
 | `agent_queue.requested_by` nullable      | `NOT NULL`; always set to the requester's `author_id` |
-| Human `displayName` hardcoded to `'You'` | Real display name stored on `authors`; "You" is render-time UI |
+| Human `displayName` hardcoded to `'You'` | Real display name stored on `users`; "You" is render-time UI |
 | `CredentialsPanel` + `GitHubTokenModal`  | One `<CredentialPrompt>` + queue (GitHub-only) |
 | Anthropic credential panel               | "No watcher" banner (§7b)                |
 | Scattered `shippable:*` localStorage     | `prefs` SQLite table (server)            |
@@ -1025,7 +1007,7 @@ The order below is the dependency-driven execution order on the branch. Earlier 
 
 1. **Primitives** — `Anchor` discriminated union with `BlockOrigin`; `Interaction` shape (no `target`, no `parentId`, no `threadKey`, no `status`, no `references`/`evidence`; `author_id` FK). Flat 5-label `Checks = Record<CheckKey, CheckResult>` with notes required on every check.
 
-2. **Server SQLite schema** — `changesets`, `diff_files`, `authors` (unified — humans + AI), `interactions`, `read_lines`, `sign_offs`, `reviewed_changesets`, `prefs`, `trusted_hosts`, `plans`, `agent_queue`, `prompts`, `quizzes`, `quiz_responses`. SSE per-ChangeSet wired.
+2. **Server SQLite schema** — `changesets`, `diff_files`, `users` (unified — humans + AI), `interactions`, `read_lines`, `sign_offs`, `reviewed_changesets`, `prefs`, `plans`, `agent_queue`, `prompts`, `quizzes`, `quiz_responses`. SSE per-ChangeSet wired.
 
 3. **Reducer + client state** — one `APPLY_EXTERNAL_UPDATE` reducer for ingest/refresh/SSE. UI state holds cursor (in-app memory + localStorage), `fileDisplayMode` as `Record<path, mode>`, drafts, dismissals.
 
@@ -1035,7 +1017,7 @@ The order below is the dependency-driven execution order on the branch. Earlier 
 
 6. **Plan + agent_queue + auto-queue prefs** — rule plan + rule quiz floor generated synchronously at ingest; AI plan + quiz via `agent_queue` claimed by a watching MCP agent; AI review via `review` queue items; reviewer Interactions auto-enqueued as `interaction` queue items. `prefs[user:autoQueuePlan]='on'` and `prefs[user:autoQueueReview]='off'` defaults. Server holds no Anthropic key.
 
-7. **Authors + identity surfacing** — `authors` is the unified store; composite declared+observed badge UI; the MCP subprocess mints a UUID on startup and sends it as `X-Shippable-Author-Id` (server upserts), while declared identity arrives via the `identity` param on `shippable_wait_for_work`; `generated_by` on plans, `requested_by`/`claimed_by` on `agent_queue` rows. Human `userId` minted client-side (UUID v4 in localStorage); `X-Shippable-User-Id` / `X-Shippable-Author-Id` headers on all `/api/*` and `/api/agent/*` calls respectively.
+7. **Users + identity surfacing** — `users` is the unified store; composite declared+observed badge UI; the MCP subprocess mints a UUID on startup and sends it as `X-Shippable-User-Id` (server upserts), while declared identity arrives via the `identity` param on `shippable_wait_for_work`; `generated_by` on plans, `requested_by`/`claimed_by` on `agent_queue` rows. Human `userId` minted client-side (UUID v4 in localStorage); `X-Shippable-User-Id` header on all `/api/*` and `/api/agent/*` calls.
 
 8. **Capability system** — server detects environment, ChangeSet source narrows, reactive context, reasons on unavailable. `ingest.worktree` lit; the other ingest capabilities report `{available: false, reason: 'Not in v1; PR ingest lands in v1.5'}`.
 
@@ -1058,7 +1040,7 @@ Deferred past v1:
 - **Full-file-view + preview mode.** `fileDisplayMode` Record already has the slots; the UI / capability work lands later.
 - **Renderer hint for vanished anchors.** Dropped the `prefer?: "before" | "after"` field on `block` anchors in session 5 — underspecified, no use sites. Renderer defaults are sufficient today. Revisit if the vanished-block UX needs a writer-side hint.
 - **Multi-user identity.** Replace local userId with real auth. The prefs/read-lines/coverage/sign-off shapes are already scoped-by-userId; migration is mostly auth-side.
-- **Persisted MCP-subprocess identity.** v1 mints a fresh UUID per subprocess startup (in-memory), so a restart shows up as a new `authors` row and the badge's "since 14:32" history resets. If badge continuity becomes desirable, persist the UUID to a small file (e.g., `~/.shippable/mcp-author-id`) and reload on startup. Cheap add when there's a use case.
+- **Persisted MCP-subprocess identity.** v1 mints a fresh UUID per subprocess startup (in-memory), so a restart shows up as a new `users` row and the badge's "since 14:32" history resets. If badge continuity becomes desirable, persist the UUID to a small file (e.g., `~/.shippable/mcp-author-id`) and reload on startup. Cheap add when there's a use case.
 - **Workspace-mode runner.** Inline-only today. A worktree-only `runner.workspace` capability for real test commands (e.g. `php artisan test`) is a v2 candidate.
 - **Cross-device cursor / drafts.** Single-tab in v1. Both shapes already scoped-by-user when needed.
 - **Drafts as Interactions with `status: "draft"`.** Useful when agents want "human is typing" awareness. Schema is forward-compatible.
