@@ -72,8 +72,8 @@ type Interaction = {
 };
 
 type AgentInteraction = Interaction & {
-  checks?: Checks;
-  rationale?: string;
+  checks: Checks;
+  rationale: string;
   suggestedFix?: string;
 }
 ```
@@ -83,8 +83,8 @@ type AgentInteraction = Interaction & {
 - `intent ∈ AskIntent`  →  `anchor.type !== "interaction"` (asks root on code/changeset).
 - `intent ∈ ResponseIntent`  →  `anchor.type === "interaction"` (responses reply).
 - `anchor.type === "interaction"`  →  the referenced `interactionId` must exist at insert time (parent-must-exist; rejects orphan replies).
-- author's role is `"agent"` → full rubric required, regardless of intent (every `CheckKey` answered, each with `result` and a non-empty `note`).
-- author's role is `"human"`  →  `rubric`, `rationale`, `suggestedFix` absent. Humans can use any of the four `AskIntent`s (comment, question, blocker); the intent vocabulary describes the *kind of ask*, not the kind of author.
+- author's role is `"agent"` → full checks required, regardless of intent (every `CheckKey` answered, each with `result` and a non-empty `note`).
+- author's role is `"human"`  →  `checks`, `rationale`, `suggestedFix` absent. Humans can use any of the three `AskIntent`s (comment, question, blocker); the intent vocabulary describes the *kind of ask*, not the kind of author.
 - `Interaction.anchor`, `intent`, `authorId`, and all AI-only fields are **immutable post-insert.** `PATCH /api/interactions/{id}` can modify only `body` and `updatedAt`, and only for human-authored rows. AI Interactions cannot be patched at all — the agent replies to revise its position, doesn't edit history.
 - Anchor immutability + parent-must-exist means comment-chain cycles are impossible by construction.
 - Interactions are inserted atomically — no streaming state. An AI review job posts each Interaction with a separate MCP write, and SSE delivers them one by one as they arrive (§7b).
@@ -94,10 +94,10 @@ type AgentInteraction = Interaction & {
 - **No `threadKey` field.** Threading derives from `anchor.type === "interaction"` chains. The prototype's prefixed keys (`note:`, `block:`, `user:`, `teammate:`, `hunkSummary:`) were a workaround; the anchor is the unified pointer.
 - **No `target`, no `parentId`.** Anchor is the sole positioning field.
 - **AuthorId references `authors`, not a free-text display name.** Identity lives in one table (§13). Read-side denormalizes — every Interaction surfaced over the wire (REST, SSE, MCP queue payload) carries its `author: {id, role, displayName, declared?}` expanded inline so callers don't need a second lookup.
-- **Rubric is a flat 5-label closed set, complete every time, required on every AI Interaction regardless of intent.** The type is `Record<CheckLabel, CheckResult>` so a partial rubric is unrepresentable by construction. The agent must face every label — including the uncomfortable ones (`second-agent-confirmed`) — on every Interaction it posts (comment, question, request, blocker, or any reply). Not-done is encoded as `result: "no"` with a note explaining why; there is no `na`.
+- **Checks are a flat 5-label closed set, complete every time, required on every AI Interaction regardless of intent.** The type is `Record<CheckKey, CheckResult>` so partial checks are unrepresentable by construction. The agent must face every label — including the uncomfortable ones (`second-agent-confirmed`) — on every Interaction it posts (comment, question, blocker, or any reply). Not-done is encoded as `result: "no"` with a note explaining why; there is no `na`.
 - **`note` is required on every check, including `yes` ones.** "Tests run: yes" without context is empty; "Tests run: yes, `npm test -- auth/token.test.ts`" is evidence. Yes-with-no-note is rejected server-side.
-- **Self-attested in v1.** No runner verifies the rubric in v1; the win is a comparable, requirable, filterable vocabulary — what the agent reports it did. Verification waits for the (deferred) code-runner.
-- **AI fills its own rubric; humans don't touch it.** Disagreement expressed via `accept`/`reject` reply, not by editing the AI's self-report.
+- **Self-attested in v1.** No runner verifies the checks in v1; the win is a comparable, requirable, filterable vocabulary — what the agent reports it did. Verification waits for the (deferred) code-runner.
+- **AI fills its own checks; humans don't touch it.** Disagreement expressed via `accept`/`reject` reply, not by editing the AI's self-report.
 - **`rationale` and `suggestedFix` stay structured.** Renderable as distinct UI elements (e.g. "apply this patch" button).
 - **Revision tag = `changesetId`.** AI Interactions are tied to a specific ChangeSet by their FK column; there is no separate `generation` field. On re-ingest, old AI Interactions stay on their original ChangeSet and surface as "from prior revision" via the parent chain in `changesets`.
 - **No Plan or Claim is an Interaction.** Plan claims are Plan-internal value types (§7); Interactions are reviewer events on positions.
@@ -111,21 +111,21 @@ type ChangeSet = {
   id: string;
   parentChangesetId?: string;  // set on refresh; links to prior snapshot
   source: ChangeSetSource;
-  files: DiffFile[];
+  files: DiffFile[];           // DiffFile (and Hunk/DiffLine) unchanged from the prototype — see web/src/types.ts
   ingestedAt: string;
 };
 
 type ChangeSetSource = // current only worktree. other types need to be thought-through later
-  | { kind: "worktree"; workdir: string; branch: string; identifier: string; dirty: boolean }; // identifier is the commit sha, of computed identifier in case of uncomitted changes
-//  | { kind: "pr";       owner: string; repo: string; number: number; sha: string; title: string; body: string; author: string }
-//  | { kind: "paste";    raw: string; pastedAt: string }
-//  | { kind: "file";     filename: string; size: number }
-//  | { kind: "url";      url: string; sha?: string };
+  | { type: "worktree"; workdir: string; branch: string; identifier: string; dirty: boolean }; // identifier is the commit sha, of computed identifier in case of uncomitted changes
+//  | { type: "pr";       owner: string; repo: string; number: number; sha: string; title: string; body: string; author: string }
+//  | { type: "paste";    raw: string; pastedAt: string }
+//  | { type: "file";     filename: string; size: number }
+//  | { type: "url";      url: string; sha?: string };
 ```
 
 **ChangeSet id derivation:**
 
-| Provenance | id format                                     |
+| Source     | id format                                     |
 |------------|-----------------------------------------------|
 | worktree   | `worktree:{workdir}@{indentifier}`            |
 <!-- to be defined later
@@ -138,7 +138,7 @@ type ChangeSetSource = // current only worktree. other types need to be thought-
 **Key decisions:**
 
 - **Immutable.** Reload creates a new ChangeSet with `parentChangesetId`, if there are changes. Re-anchoring migrates interactions forward. Audit trail preserved.
-- **No `external` field in v1.** PR ingest in v1.5+ reintroduces an `external` discriminated variant on Interaction (provenance for mirrored PR comments + an `htmlUrl` back to the original). The field is omitted from v1 entirely rather than carried as dead surface; see §18.
+- **No `external` field in v1.** PR ingest in v1.5+ reintroduces an `external` discriminated variant on Interaction (source info for mirrored PR comments + an `htmlUrl` back to the original). The field is omitted from v1 entirely rather than carried as dead surface; see §18.
 - **Union keeps only worktree variant in v1.**
 
 ### 1.4 Capability
@@ -162,7 +162,7 @@ type Capabilities = Record<CapabilityKey, Capability>;
 **Key decisions:**
 
 - **Capabilities inform which system capabilities are available.** They are not general feature flags.
-- **Server ∩ ChangeSet.** Server reports its base set ("typescript-language-server installed"); ChangeSet provenance narrows it ("paste, no worktree disk"). Effective capability = intersection.
+- **Server ∩ ChangeSet.** Server reports its base set ("typescript-language-server installed"); ChangeSet source narrows it ("paste, no worktree disk"). Effective capability = intersection.
 - **Reactive.** Capabilities live in a context. Flag flip-off unmounts consumer components; open dialogs auto-close.
 - **Reasons on unavailable caps.** UI renders "feature off because X" tooltips.
 
@@ -176,8 +176,8 @@ Doc-level organisation. Not a code partition.
 
 Turns an external source into a ChangeSet. Server-side, end to end.
 
-- **Worktree is the only ingest endpoint that ships in v1.** Client posts a workdir; server reads git state, builds a ChangeSet, returns the id. PR/paste/file/url remain in the `Provenance` union at the type level but their endpoints don't land — first follow-up is PR ingest in v1.5. v1's MCP integration assumes the agent has filesystem access to the worktree; reintroducing non-disk provenances will need a separate channel for shipping diff content to the agent, designed when that work lands.
-- **Live reload watches the worktree.** A file-system watcher (the prototype's `useWorktreeLiveReload` + server-side fs notifier) detects changes under the workdir and surfaces a "refresh available" affordance (`LiveReloadBar`). Refresh produces a new ChangeSet with `parentChangesetId` set; the existing changeset's interactions migrate forward through re-anchoring (§1.1). Live reload is worktree-specific; PR/paste/file/url provenances have no equivalent.
+- **Worktree is the only ingest endpoint that ships in v1.** Client posts a workdir; server reads git state, builds a ChangeSet, returns the id. v1's MCP integration assumes the agent has filesystem access to the worktree; reintroducing non-disk sources will need a separate channel for shipping diff content to the agent, designed when that work lands.
+- **Live reload watches the worktree.** A file-system watcher (the prototype's `useWorktreeLiveReload` + server-side fs notifier) detects changes under the workdir and surfaces a "refresh available" affordance (`LiveReloadBar`). Refresh produces a new ChangeSet with `parentChangesetId` set; the existing changeset's interactions migrate forward through re-anchoring (§1.1).
 - **Single reducer path for external updates** (the `APPLY_EXTERNAL_UPDATE` shape). Initial load, refresh, SSE-pushed changes from other actors — all hit the same `applyExternalUpdate(state, changeset)` reducer. Re-anchoring runs once, in one place.
 
 ### 2.2 Review
@@ -197,10 +197,8 @@ The review state machine: cursor, read-line tracking, projections.
 
 - **Cursor is client-only.** Lives in the React state tree (and localStorage for resume-on-reload within a tab). Never written to the server. Per-tab independence is a feature, not a bug — single-user-local in v1.
 - **Read-lines batch+debounce on the client; POST every 1–2s.** Server stores compact merged ranges keyed by `(userId, changesetId, file)`.
-- **Read-lines do not carry forward across ChangeSet refresh.** They're scoped by `changesetId`; the child ChangeSet starts empty. Per-range re-anchoring would need the same anchor-hash machinery Interactions use (§1.1), which is overkill for what is effectively passive attention-tracking. Re-reading after a revision is part of reviewing the new revision — consistent with sign-off's "explicit re-sign" rule (§6).
+- **Read-lines only carry forward across ChangeSet refreshes for files that weren't modified.** 
 - **Sign-off writes immediate, per-gesture.** Two tiers — file-level and changeset-level (§6).
-- **No persisted drafts.** Submit-or-lose.
-- **Coverage** and **sign-off** are derived projections (§§5–6).
 
 ---
 
@@ -219,10 +217,10 @@ The review state machine: cursor, read-line tracking, projections.
 │  • trusted_hosts         (server policy table)              │
 │  • authors               (unified identity — humans + AI)   │
 │  • plans                 (append-only; latest wins per cs)  │
-│  • agent_queue           (plan/review/interaction; channel- │
-│                           scoped; watch-claimed; §7b)       │
-│  • user_prompts          (per-user prompt overrides; §9b)   │
-│  • quizzes / quiz_responses                                 │
+│  • agent_queue           (plan/review/interaction/prompt;   │
+│                          channel-scoped; watch-claimed; §7b)│
+│  • prompts               (library + user, source-tagged §9b)│
+│  • quizzes               (store quiz questions and answers) │
 ├─────────────────────────────────────────────────────────────┤
 │  Keychain (Tauri) / RAM (dev) — secrets only                │
 │  • github tokens (per host)                                 │
@@ -237,14 +235,39 @@ The review state machine: cursor, read-line tracking, projections.
 └─────────────────────────────────────────────────────────────┘
 ```
 
+**Entity-relationship diagram.** Two hubs carry the schema: `changesets` (every review artifact is scoped to a snapshot) and `authors` (every "who did this?" resolves here). `trusted_hosts` is the lone standalone table; `agent_queue.result_id` is a soft pointer to `plans` (set only when `type='plan'`).
+
+```
+changesets   (id PK · parent_changeset_id ⟲ self · source_type · source_json · ingested_at)
+  │  scoped by changeset_id FK:
+  ├─ diff_files           PK(changeset_id, path)
+  ├─ interactions         + author_id FK ─────────┐
+  ├─ read_lines           + user_id FK            │
+  ├─ sign_offs            + user_id FK            │
+  ├─ reviewed_changesets  + user_id FK            ├──▶ authors
+  ├─ plans                + generated_by FK       │
+  ├─ agent_queue          + requested_by,         │
+  │                         claimed_by FK         │
+  └─ quizzes              + user_id FK ───────────┘
+
+authors   (id PK · role human|ai · display_name · declared_json · observed_json · last_seen_at)
+  │  also referenced (changeset-independent) by user_id FK:
+  ├─ prefs
+  └─ prompts              user_id NULL ⇒ library row
+
+soft / standalone:
+  • agent_queue.result_id ┄▶ plans.id    (set only when type='plan')
+  • trusted_hosts          standalone — host PK, no FKs (server policy table)
+```
+
 ### 3.1 Column-level shapes
 
 ```sql
 CREATE TABLE changesets (
   id                   TEXT PRIMARY KEY,
   parent_changeset_id  TEXT REFERENCES changesets(id),
-  provenance_kind      TEXT NOT NULL,
-  provenance_json      TEXT NOT NULL,                -- discriminated variant blob
+  source_type          TEXT NOT NULL,
+  source_json          TEXT NOT NULL,                -- discriminated variant blob
   ingested_at          TEXT NOT NULL
 );
 
@@ -269,11 +292,10 @@ CREATE TABLE interactions (
   id              TEXT PRIMARY KEY,
   changeset_id    TEXT NOT NULL REFERENCES changesets(id),
   anchor_json     TEXT NOT NULL,                     -- Anchor discriminated union
-  references_json TEXT,                              -- Anchor[] or NULL (supplementary positions)
   author_id       TEXT NOT NULL REFERENCES authors(id),
   intent          TEXT NOT NULL,
   body            TEXT NOT NULL,
-  rubric_json     TEXT,                              -- Record<CheckLabel, CheckResult> or NULL
+  checks_json     TEXT,                              -- Record<CheckKey, CheckResult> or NULL
   rationale       TEXT,
   suggested_fix   TEXT,
   created_at      TEXT NOT NULL,
@@ -349,30 +371,25 @@ CREATE TABLE agent_queue (
 CREATE INDEX agent_queue_pending  ON agent_queue(channel_path, status, type, requested_at);
 CREATE INDEX agent_queue_by_cs    ON agent_queue(changeset_id, status);
 
-CREATE TABLE user_prompts (
-  user_id      TEXT NOT NULL REFERENCES authors(id),
-  id           TEXT NOT NULL,                        -- prompt id (matches library id when overriding)
+CREATE TABLE prompts (
+  user_id      TEXT REFERENCES authors(id),          -- NULL for source='library' (global rows); see §9b normalization note
+  id           TEXT NOT NULL,                        -- prompt id (users cannot edit library prompts)
+  source       TEXT NOT NULL,                        -- 'library' | 'user'
   name         TEXT NOT NULL,
   description  TEXT NOT NULL,
   args_json    TEXT NOT NULL,                        -- PromptArg[]
   body         TEXT NOT NULL,                        -- markdown
   updated_at   TEXT NOT NULL,
-  PRIMARY KEY (user_id, id)
+  PRIMARY KEY (user_id, id)                          -- revisit: NULL user_id for library rows needs a uniqueness rule (§9b)
 );
 
 CREATE TABLE quizzes (
   id             TEXT PRIMARY KEY,
-  changeset_id   TEXT NOT NULL REFERENCES changesets(id),
-  questions_json TEXT NOT NULL,                      -- Question[] with Anchor targets
-  created_at     TEXT NOT NULL
-);
-
-CREATE TABLE quiz_responses (
-  quiz_id      TEXT NOT NULL REFERENCES quizzes(id),
   user_id      TEXT NOT NULL REFERENCES authors(id),
-  answers_json TEXT NOT NULL,
-  submitted_at TEXT NOT NULL,
-  PRIMARY KEY (quiz_id, user_id)
+  changeset_id   TEXT NOT NULL REFERENCES changesets(id),
+  questions_json TEXT NOT NULL,  
+  answers_json TEXT NOT NULL,                    -- Question[] with Anchor targets
+  created_at     TEXT NOT NULL
 );
 ```
 
@@ -457,11 +474,9 @@ Prototype users with a saved Anthropic key migrate by registering an MCP agent i
 - `POST /api/changesets/{id}/agent-queue`          → `AgentQueueItem` (user-initiated request; §7b)
 - `GET  /api/agent-queue?changesetId=...&status=...` → `AgentQueueItem[]`
 - `GET  /api/watchers/active`                      → `Watcher[]` (presence indicator; new in v1; §7b)
-- `GET  /api/library/prompts`                      → `Prompt[]` (bundled / path / git; §9b)
-- `POST /api/library/sync`                         → `{ ok: true }` (re-resolve a git-sourced library)
-- `GET  /api/user-prompts`                         → `Prompt[]` (per-user overrides)
-- `PUT  /api/user-prompts/{id}`                    → `Prompt`
-- `DELETE /api/user-prompts/{id}`                  → `{ ok: true }`
+- `GET  /api/prompts`                              → `Prompt[]` (library + user, source-tagged; §9b)
+- `PUT  /api/prompts/{id}`                         → `Prompt` (user rows only)
+- `DELETE /api/prompts/{id}`                       → `{ ok: true }` (user rows only)
 
 PR / paste / file / url ingest endpoints are defined at the type level but not implemented in v1 — first follow-up is `POST /api/changesets/pr` in v1.5.
 
@@ -483,7 +498,7 @@ Three tools. Watch mode is the only flow; the agent reads diff content from the 
 
 **Write tools:**
 
-- `shippable_post_interaction({changesetId, anchor, intent, body, rubric, rationale?, suggestedFix?, references?})` — one Interaction per call. Atomic. Replies use `anchor: { type: "interaction", interactionId }` — there is no separate `parentInteractionId`. `rubric` is required (universal for AI authors). Used for review/prompt/reply output.
+- `shippable_post_interaction({changesetId, anchor, intent, body, checks, rationale?, suggestedFix?})` — one Interaction per call. Atomic. Replies use `anchor: { type: "interaction", interactionId }` — there is no separate `parentInteractionId`. `checks` is required (universal for AI authors). Used for review/prompt/reply output.
 - `shippable_post_plan({changesetId, headline, structure, claims[], entryPoints[], questions?})` — atomic Plan insert. Appends a new row; latest wins (§7). The caller's `authorId` (from the `X-Shippable-Author-Id` header) becomes the plan's `generated_by`. The optional `questions` array carries an AI quiz alongside the plan (§12); a rule-based quiz floor is generated at ingest regardless. **Write-time validation:** `claims[*].references` must be non-empty per claim; `entryPoints` longer than 3 is truncated server-side to the first 3 by array order (matches the prototype's `assemblePlan` behavior).
 
 **Auth header.** Every request to `/api/agent/*` carries `X-Shippable-Author-Id: <uuid>`. The header is minted and attached by the **MCP subprocess** (`mcp-server/`) — a UUID v4 generated on startup, cached in memory for the subprocess lifetime. The LLM peer calling MCP tools never sees the header; identity is plumbing handled by the bridge. The Node server upserts an `authors` row (role `'ai'`) on first sight from that id and refreshes `observed_json` + `last_seen_at` on every call. No prior handshake — the first `wait_for_work` is both registration and the first poll. Subprocess restart = new UUID = new `authors` row; in-memory by design (§13).
@@ -517,10 +532,10 @@ Coverage answers "what fraction of this ChangeSet has been reviewed, by whom?" �
 - **Inputs (server-side):** `read_lines` rows + existing AI Interactions.
 - **Computed on read.** No materialised coverage table.
 - **Per-line covered:**
-  - **AI-covered** iff any AI Interaction anchors that line (primary or any `references` entry).
+  - **AI-covered** iff any AI Interaction anchors that line.
   - **Human-covered** iff the line is in the user's `read_lines`.
 - **Combined** is the union, surfaced for the "did anyone look at this?" view.
-- **Rubric `result === "no"` does not exclude** an AI Interaction from coverage. Coverage measures attention, not verdict.
+- **A check with `result === "no"` does not exclude** an AI Interaction from coverage. Coverage measures attention, not verdict.
 - **Plans do not contribute to coverage.** Coverage is "where did evidence-bearing commentary land", line-level. Plan claims are ChangeSet-level assertions about scope/structure; including them would inflate coverage misleadingly. Plans and coverage are orthogonal projections.
 
 **MCP exposure.** None in v1 — agents don't read coverage. If a flow emerges where the agent needs to know what the human has read, add a read tool back; today's queue-driven work doesn't need it.
@@ -598,11 +613,11 @@ type StructureMap = {
 
 - `headline` and `structure` are ChangeSet-level signals that don't fit a single anchored position.
 - `entryPoints` are an *ordering* — "start here, then here, then here" — orthogonal to per-finding anchors.
-- Claims are AI-only ChangeSet-level assertions; they have no intent (blocker/request/note), no rubric, no status, no threading. Forcing them into the Interaction shape required seven carve-outs.
+- Claims are AI-only ChangeSet-level assertions; they have no intent (comment/question/blocker), no checks, no status, no threading. Forcing them into the Interaction shape required seven carve-outs.
 
 **Plan/Claim are split from Interaction.** Earlier drafts merged them; v1 reverses that. Humans do not author or reply to Claims — Claims are presented, not interacted with. Disagreement lives as a normal Interaction anchored to code, not as commentary on a Claim.
 
-**Claim.references is non-empty.** UI refuses to render a Claim with no references; server validates at write time. This is the evidence-mandatory invariant: every Claim must point at code that substantiates it; an unbacked Claim is unrenderable by construction. (The field is named `references` to match Interaction's `references` — the structural shape is "Anchor[] pointing at code." Evidence-of-verification lives in the rubric, not in pointer lists.)
+**Claim.references is non-empty.** UI refuses to render a Claim with no references; server validates at write time. This is the evidence-mandatory invariant: every Claim must point at code that substantiates it; an unbacked Claim is unrenderable by construction. (The field is named `references` — the structural shape is "Anchor[] pointing at code." Evidence-of-verification lives in the checks, not in pointer lists.)
 
 **EntryPoint is flat, not a composed Claim.** Same underlying shape as a Claim (text + Anchor[]), but distinct type. Claims and EntryPoints are rendered differently (bullet list vs. ordered "start here" sequence) and serve different domains; sharing the type would be a structural pun.
 
@@ -713,10 +728,10 @@ When LSP is unavailable, regex+heuristics produce best-effort symbols. Result ca
 
 A free-form scratchpad sandbox. Not data-driven, not coupled to Interactions.
 
-- **Paste-and-run.** The user (or, in the future, an agent over MCP) drops code into the runner panel; it executes in a sandboxed iframe (`/runner-sandbox.html`) for JS/TS and via `@php-wasm` for PHP. No filesystem reach. Works in every provenance.
+- **Paste-and-run.** The user (or, in the future, an agent over MCP) drops code into the runner panel; it executes in a sandboxed iframe (`/runner-sandbox.html`) for JS/TS and via `@php-wasm` for PHP. No filesystem reach. Works in every source.
 - **No structured recipe.** Interactions no longer carry a `runRecipe` field; the runner reads code from its own panel state, not from the data model. The earlier "verify-this-finding" flow (AI Interaction → runner) is gone in v1.
 - **Capability-gated** via `runner.js` / `runner.php`.
-- **v1 status: kept as-is, no new investment.** The prototype's runner ships as-is; we don't rebuild it. Verification of the rubric's "Tests run / Tests pass" checks remains self-attested in v1. A workspace-mode runner that re-couples to findings is a v2 candidate (§18).
+- **v1 status: kept as-is, no new investment.** The prototype's runner ships as-is; we don't rebuild it. Verification of the "Tests run / Tests pass" checks remains self-attested in v1. A workspace-mode runner that re-couples to findings is a v2 candidate (§18).
 
 ---
 
@@ -731,7 +746,7 @@ type Prompt = {
   description: string;
   args: PromptArg[];                                 // declared in frontmatter
   body: string;                                      // markdown
-  source: "library" | "user";                        // library = bundled; user = author-edited
+  source: "library" | "user";                        // 'library' = shipped/seeded; 'user' = author-edited
 };
 
 type PromptArg = {
@@ -742,23 +757,22 @@ type PromptArg = {
 };
 ```
 
-**Two stores, merged on read.**
+**One `prompts` table, source-discriminated.** Both library and user prompts live as rows in `prompts`, tagged by `source: 'library' | 'user'` (matches `Prompt.source`). Users cannot edit library prompts.
 
-- **Library prompts.** Markdown files under `library/prompts/` with YAML frontmatter (`name`, `description`, `args`). v1 ships four: `explain-this-hunk`, `security-review`, `suggest-tests`, `summarise-for-pr`. The server resolves the library root from one of three sources:
-  - `bundled` — files baked into the server build (`library/` next to the source tree; what the prototype ships).
-  - `path` — operator-pointed local directory.
-  - `git` — operator-pointed git remote + ref, cloned into `server/var/library/checkout` and re-fetched on `sync`. The resolution policy lives in `server/src/library.ts`; the prompt loader (`server/src/prompts.ts`) reads from whichever root resolved.
-- **User prompts.** Per-user authored or edited prompts that override a library prompt of the same id. Persisted in `user_prompts` (per-user rows; the prototype's localStorage key `shippable.prompts.user` migrates here, consistent with the "no scattered localStorage" move in §16).
+- **Library prompts** (`source='library'`). The bundled set ships four: `explain-this-hunk`, `security-review`, `suggest-tests`, `summarise-for-pr`. Their content comes from SQlite, bundled through a migration.
+- **User prompts** (`source='user'`). Per-user authored or edited prompts. The prototype's localStorage key `shippable.prompts.user` migrates here, consistent with the "no scattered localStorage" move in §16.
 
-**Read path.** The client picker calls `GET /api/library/prompts` and `GET /api/user-prompts`, merges by id with user taking precedence, and caches in-process.
+**Read path.** The client picker calls `GET /api/prompts` (both sources), which merges by `id` with `user` taking precedence, and caches in-process.
 
-**Write path.** User prompt edits go through `PUT /api/user-prompts/{id}` and `DELETE /api/user-prompts/{id}`. Library prompts are read-only at the surface — to change them, the operator changes the library source (`path` or `git`).
+**Write path.** User prompt edits go through `PUT /api/prompts/{id}` and `DELETE /api/prompts/{id}` (library rows are not user-editable). The `POST /api/library/sync` for 're-seeding' goes away.
+
+**Normalization — deferred to implementation time.** Folding library and user prompts into one table leaves shape questions to settle when this is built, not now: library rows are global while user rows are per-user, so the `(user_id, id)` PK doesn't fit library rows cleanly (sentinel/NULL `user_id`, or a separate uniqueness rule); how library content is seeded and refreshed from `bundled`/`path`/`git` into the table; and the precise user-overrides-library merge/dedup plus write-protection (`PUT`/`DELETE` must refuse `library` rows). The decision is fixed — one `prompts` table, `source`-discriminated; the normalization is an implementation detail.
 
 **Run path — through the queue, not direct MCP.** The picker's "Run this prompt" button calls `POST /api/changesets/{id}/agent-queue` with `type: 'prompt'`. The server resolves the prompt body (looks up the prompt by id, substitutes args from the user's form), and inserts a `prompt` row with `payload = { promptId, promptBody, args }` (see §7b). A watching agent claims it, executes against the worktree, and posts results as Interactions (or a Plan, for plan-shaped prompts like `summarise-for-pr`). The agent never reads the library directly — the server has already resolved it.
 
 **Capability.** No explicit flag — the library always resolves (worst case, to the empty bundled set). The picker mounts unconditionally. Running a prompt requires a watcher in the channel; if none is present, the "Run" button surfaces the same "Connect an agent" affordance as §7b's setup banner.
 
-**Not in v1 (open):** prompt frontmatter–driven rubric extensions (§18), per-prompt MCP routing.
+**Not in v1 (open):** prompt frontmatter–driven checks extensions (§18), per-prompt MCP routing.
 
 ## 10. Credential prompt — reactive queue
 
@@ -784,7 +798,7 @@ Unchanged from the prototype. Four themes (Light, Dark, Dollhouse, Dollhouse Noi
 
 ## 12. Quiz
 
-Human-side comprehension check ("anti-LGTM"). Distinct from rubric (quiz tests the human; rubric reports the AI). Both reuse Anchor — `Question.target: Anchor`.
+Human-side comprehension check ("anti-LGTM"). Distinct from checks (quiz tests the human; checks report the AI). Both reuse Anchor — `Question.target: Anchor`.
 
 ```ts
 type Question = {
@@ -793,7 +807,11 @@ type Question = {
   prompt: string;
   acceptableAnswers: string[];                       // the AI's answer(s); shown after the user submits for self-evaluation. Not used for grading — there is no correctness check in v1.
 };
-
+type Answer = {
+  id: string;
+  text: string;
+  submittedAt: string;
+}
 type Quiz = {
   id: string;
   changesetId: string;
@@ -855,7 +873,7 @@ security-review · Claude Opus 4.7 · via Claude Code · ~/work/feat · since 14
 - `plans.generated_by` — which agent produced a Plan (null for rule-based).
 - `agent_queue.requested_by` — who requested the row (always set).
 - `agent_queue.claimed_by` — which watcher claimed the row.
-- `read_lines.user_id` / `sign_offs.user_id` / `reviewed_changesets.user_id` / `prefs.user_id` / `user_prompts.user_id` / `quiz_responses.user_id` — every per-user state row FKs to `authors.id`.
+- `read_lines.user_id` / `sign_offs.user_id` / `reviewed_changesets.user_id` / `prefs.user_id` / `prompts.user_id` / `quiz_responses.user_id` — every per-user state row FKs to `authors.id`.
 
 Wire surfaces **denormalize the author inline** — every Interaction returned by REST, SSE, or MCP queue payload carries its `author` expanded as `{id, role, displayName, declared?}`, so callers never need a second lookup to resolve who said what.
 
@@ -910,7 +928,7 @@ Constraints the prototype validated; refactor agents must not undo them without 
 - **Keyboard-first walk:** `j`/`k` line navigation, `Shift+M` mark reviewed (file), `]`/`[` next/prev file, `n`/`N` next/prev unresolved comment, gutter rail. The keymap is product-defining; locked.
 - **Capability-gated language features:** "disabled is worse than absent." A feature whose backend is down hides itself entirely.
 - **References-mandatory on Claims:** `Claim.references` is non-empty; UI refuses to render a Claim with none (§7). Server validates at write time.
-- **Rubric-mandatory on every AI Interaction:** the rubric is a complete `Record<CheckLabel, CheckResult>` — partial rubrics are unrepresentable by construction. Required regardless of intent (comment, question, request, blocker, or any reply). Every check carries a non-empty `note`, including the yes ones.
+- **Checks-mandatory on every AI Interaction:** the checks are a complete `Record<CheckKey, CheckResult>` — partial checks are unrepresentable by construction. Required regardless of intent (comment, question, blocker, or any reply). Every check carries a non-empty `note`, including the yes ones.
 - **Interaction anchors are immutable post-insert:** combined with parent-must-exist for response-intent inserts, comment-chain cycles are impossible by construction. PATCH affects only `body` / `updatedAt`, and only on human-authored rows.
 - **No server-side AI calls:** the server holds no Anthropic key and imports no LLM SDK. AI work happens exclusively through MCP agents (§4.2). Reintroducing a server-side LLM path requires explicit re-architecture, not a quick fix.
 - **Plan is immutable per row:** rows in `plans` are append-only. Each generation produces a new row; latest visible wins. No row is ever updated or deleted.
@@ -930,7 +948,7 @@ Recorded so future archaeology doesn't resurrect them:
 | `Interaction.generation` / `Plan.generation` field; `generation_json` columns | `changesetId` FK is the revision tag |
 | `shippable_post_interaction({…, parentInteractionId?})` parameter | Replies via `anchor: { type: "interaction", interactionId }` |
 | Mutable Interaction anchors / intent / authorId / AI-only fields | Immutable post-insert; PATCH limited to `body` + `updatedAt` on human-authored rows |
-| Separate `jobs` table | `agent_queue` table with three types (`plan`/`review`/`interaction`) and `channel_path` scope (§7b) |
+| Separate `jobs` table | `agent_queue` table with four types (`plan`/`review`/`interaction`/`prompt`) and `channel_path` scope (§7b) |
 | `interactions.agent_queue_status` + `interactions.worktree_path` (prototype) | Delivery state lives entirely on `agent_queue` rows |
 | Synthetic `fileId` everywhere               | `path` is the file key within a ChangeSet; storage PK is `(changeset_id, path)` |
 | Separate `shippable_get_interactions` MCP tool | Existing Interactions are inlined in the `wait_for_work` payload (authors expanded) for the queue types that need them — no explicit MCP read |
@@ -944,13 +962,13 @@ Recorded so future archaeology doesn't resurrect them:
 | Flat `AnchorCtx { hash, contextLines, originType }` on every anchor | `BlockOrigin` discriminated union — committed: `{sha}` only; dirty: `{context}` snapshot |
 | Stored fingerprint hash on anchors       | Derived FNV-1a at re-anchor time         |
 | Writing blobs into the user's `.git` to address dirty content | Welded `context: string[]` snapshot in our SQLite |
-| Intent-keyed rubric (blocker:4, request:2, comment:0) | Flat 5-label `Record<CheckLabel, CheckResult>`; required on AI {blocker, request} |
+| Intent-keyed rubric (blocker:4, request:2, comment:0) | Flat 5-label `Record<CheckKey, CheckResult>`; required on every AI Interaction |
 | `note` required only when `pass===false` | `note` required on every check, including yes |
-| `Interaction.evidence` field             | `Interaction.references` (matches Claim) |
+| `Interaction.evidence` field             | Dropped — Interaction has no reference field (Claim keeps `references`) |
 | Free-text `author` + parallel `authorRole` column | `author_id` FK to unified `authors` table |
 | Separate `agent_identities` table        | Folded into `authors` (humans + AI)      |
-| `confidence: low\|medium\|high`          | Flat 5-label rubric                      |
-| Rubric scoped to AI {blocker, request} only | Universal — rubric required on every AI Interaction regardless of intent (§1.2, §15) |
+| `confidence: low\|medium\|high`          | Flat 5-label checks                      |
+| Checks scoped to AI {blocker, request} only | Universal — checks required on every AI Interaction regardless of intent (§1.2, §15) |
 | Server-side cursor                       | Client-only (in-app memory + localStorage) |
 | Server-side `cursor` POST endpoint       | None — cursor never leaves the client    |
 | 4 ingest endpoints (pr/paste/file/url)   | Type-level union only in v1; PR follow-up in v1.5 |
@@ -966,7 +984,7 @@ Recorded so future archaeology doesn't resurrect them:
 | Token-delta SSE events                   | Snapshot-per-event; one event per Plan   |
 | `shippable_check_review_comments`        | `shippable_wait_for_work({types:[…]})`   |
 | `shippable_watch_review_comments`        | `shippable_wait_for_work({types:[…]})`   |
-| Old `EvidenceRef` union                  | `Anchor[]` (both `Claim.references` and `Interaction.references`) |
+| Old `EvidenceRef` union                  | `Anchor[]` (`Claim.references` only) |
 | `Assignment` entity                      | Nothing — out of scope                   |
 | `Activity` entity                        | Derive from interaction stream           |
 | `AuthorRole = "agent"`                   | Folded into `"ai"`                       |
@@ -995,7 +1013,7 @@ Recorded so future archaeology doesn't resurrect them:
 | `ANTHROPIC_API_KEY` env-var warning      | Server has no Anthropic SDK              |
 | Client-side primary persistence          | Server SQLite for shared state           |
 | `RubricCheck.comment` field name         | `CheckResult.note`                       |
-| Separate ingest reducers per provenance  | One `APPLY_EXTERNAL_UPDATE` reducer      |
+| Separate ingest reducers per source      | One `APPLY_EXTERNAL_UPDATE` reducer      |
 
 ---
 
@@ -1005,21 +1023,21 @@ Recorded so future archaeology doesn't resurrect them:
 
 The order below is the dependency-driven execution order on the branch. Earlier items unblock later items; the branch is not shippable until the whole sequence completes.
 
-1. **Primitives** — `Anchor` discriminated union with `BlockOrigin`; `Interaction` shape (no `target`, no `parentId`, no `threadKey`, no `status`; `references?` instead of `evidence`; `author_id` FK). Flat 5-label `Rubric = Record<CheckLabel, CheckResult>` with notes required on every check.
+1. **Primitives** — `Anchor` discriminated union with `BlockOrigin`; `Interaction` shape (no `target`, no `parentId`, no `threadKey`, no `status`, no `references`/`evidence`; `author_id` FK). Flat 5-label `Checks = Record<CheckKey, CheckResult>` with notes required on every check.
 
-2. **Server SQLite schema** — `changesets`, `diff_files`, `authors` (unified — humans + AI), `interactions`, `read_lines`, `sign_offs`, `reviewed_changesets`, `prefs`, `trusted_hosts`, `plans`, `agent_queue`, `user_prompts`, `quizzes`, `quiz_responses`. SSE per-ChangeSet wired.
+2. **Server SQLite schema** — `changesets`, `diff_files`, `authors` (unified — humans + AI), `interactions`, `read_lines`, `sign_offs`, `reviewed_changesets`, `prefs`, `trusted_hosts`, `plans`, `agent_queue`, `prompts`, `quizzes`, `quiz_responses`. SSE per-ChangeSet wired.
 
 3. **Reducer + client state** — one `APPLY_EXTERNAL_UPDATE` reducer for ingest/refresh/SSE. UI state holds cursor (in-app memory + localStorage), `fileDisplayMode` as `Record<path, mode>`, drafts, dismissals.
 
 4. **REST + SSE + MCP wire** — REST surface from §4.1; SSE events from §4.3; MCP tools from §4.2 (`shippable_wait_for_work`, `shippable_post_interaction`, `shippable_post_plan`). Both sign-off tiers exposed via REST.
 
-5. **Worktree ingest** — the only provenance whose endpoint ships in v1. PR/paste/file/url remain in the `Provenance` union at the type level but their endpoints don't land.
+5. **Worktree ingest** — the only source whose endpoint ships in v1. PR/paste/file/url remain in the `ChangeSetSource` union at the type level but their endpoints don't land.
 
 6. **Plan + agent_queue + auto-queue prefs** — rule plan + rule quiz floor generated synchronously at ingest; AI plan + quiz via `agent_queue` claimed by a watching MCP agent; AI review via `review` queue items; reviewer Interactions auto-enqueued as `interaction` queue items. `prefs[user:autoQueuePlan]='on'` and `prefs[user:autoQueueReview]='off'` defaults. Server holds no Anthropic key.
 
 7. **Authors + identity surfacing** — `authors` is the unified store; composite declared+observed badge UI; the MCP subprocess mints a UUID on startup and sends it as `X-Shippable-Author-Id` (server upserts), while declared identity arrives via the `identity` param on `shippable_wait_for_work`; `generated_by` on plans, `requested_by`/`claimed_by` on `agent_queue` rows. Human `userId` minted client-side (UUID v4 in localStorage); `X-Shippable-User-Id` / `X-Shippable-Author-Id` headers on all `/api/*` and `/api/agent/*` calls respectively.
 
-8. **Capability system** — server detects environment, ChangeSet provenance narrows, reactive context, reasons on unavailable. `ingest.worktree` lit; the other ingest capabilities report `{available: false, reason: 'Not in v1; PR ingest lands in v1.5'}`.
+8. **Capability system** — server detects environment, ChangeSet source narrows, reactive context, reasons on unavailable. `ingest.worktree` lit; the other ingest capabilities report `{available: false, reason: 'Not in v1; PR ingest lands in v1.5'}`.
 
 9. **Quiz** — `quizzes`/`quiz_responses` tables; UI; MCP-readable.
 
@@ -1035,7 +1053,7 @@ The branch merges to `main` once items 1–10 are complete and item 11 has reach
 
 Deferred past v1:
 
-- **PR ingest (v1.5).** First follow-up after v1 ships. Must extend the MCP-watcher pattern to PR-loaded ChangeSets: the server fetches the diff via the GitHub API, and the watcher needs a way to read content it can't pull from a local worktree. Likely shape: a new MCP read tool that returns file content by path, or fat payloads on `wait_for_work` that inline the diff for non-worktree provenances. Design when the work lands.
+- **PR ingest (v1.5).** First follow-up after v1 ships. Must extend the MCP-watcher pattern to PR-loaded ChangeSets: the server fetches the diff via the GitHub API, and the watcher needs a way to read content it can't pull from a local worktree. Likely shape: a new MCP read tool that returns file content by path, or fat payloads on `wait_for_work` that inline the diff for non-worktree sources. Design when the work lands.
 - **Paste / file / url ingest.** Deferred past PR ingest. Type-level union retained for forward-compatibility.
 - **Full-file-view + preview mode.** `fileDisplayMode` Record already has the slots; the UI / capability work lands later.
 - **Renderer hint for vanished anchors.** Dropped the `prefer?: "before" | "after"` field on `block` anchors in session 5 — underspecified, no use sites. Renderer defaults are sufficient today. Revisit if the vanished-block UX needs a writer-side hint.
@@ -1044,6 +1062,6 @@ Deferred past v1:
 - **Workspace-mode runner.** Inline-only today. A worktree-only `runner.workspace` capability for real test commands (e.g. `php artisan test`) is a v2 candidate.
 - **Cross-device cursor / drafts.** Single-tab in v1. Both shapes already scoped-by-user when needed.
 - **Drafts as Interactions with `status: "draft"`.** Useful when agents want "human is typing" awareness. Schema is forward-compatible.
-- **Per-prompt rubric extensions.** Fixed enum in v1; extensible via prompt frontmatter in v2.
+- **Per-prompt checks extensions.** Fixed enum in v1; extensible via prompt frontmatter in v2.
 - **Live capability degradation** beyond available/unavailable. First- class tri-state for "degraded with regex fallback" can come later; reason string carries this informationally in v1.
 - **Authenticated agent identity.** Self-declared is unauthenticated in v1. When multi-user, identity needs real auth.
