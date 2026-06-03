@@ -2,7 +2,7 @@
 
 Local-first review for agent diffs and pull requests. When you're working with agents, dozens of meaningful diffs a day is normal — on your machine, and in the pull requests they land in. Reading them is harder than writing the code ever was. Shippable is the review pass designed to take less out of you, before the work disappears into a skimmed read or another agent run.
 
-This is an early **prototype**. The code is throwaway as we work out the shape — don't use it in any production setting yet.
+This is an early **prototype**. Expect rough edges and fast-changing internals; it's not stable for production yet.
 
 ![shippable demo](docs/all.gif)
 
@@ -13,29 +13,73 @@ This is an early **prototype**. The code is throwaway as we work out the shape �
 - **A claim you can run is a test.** Highlight a hunk; the in-app sandboxed runner detects input slots and executes it — JavaScript, TypeScript, and PHP today. AI concerns can hand their snippet straight to the runner.
 - **Built around git worktrees.** Per-task branches and folders, live-refreshing diffs, agent context inline. Most diff GUIs treat worktrees as an afterthought; we started there.
 
-The longer story, with pictures, is on (tbd)
-## Install
+## What to expect today
 
-Download the latest macOS build:
+Shippable is usable today as a local review desk for agent-written changes. It works best when you are reviewing a git worktree on your machine: open a checkout, get a hunk-anchored review plan, move through the diff with read / signed off / flagged states, and verify JavaScript, TypeScript, or PHP hunks in the in-browser runner.
 
-→ **Shippable.dmg** - pending
+You can also connect an MCP-speaking coding agent. Agents can leave findings anchored to lines in your diff, and they can pull in the comments you write back during review.
 
-The DMG is unsigned, so the first launch trips Gatekeeper — right-click the .app in Finder → Open → confirm once. Subsequent launches don't prompt. macOS only today; Linux and Windows are on the roadmap.
+GitHub PRs work, but only as a read-only source. You can paste a PR URL from github.com or GitHub Enterprise and review it in Shippable, but Shippable does not yet post comments, approvals, or change requests back to GitHub.
 
-**Anthropic API key (optional).** AI plan and streaming review need an Anthropic key; everything else works without one. Paste it in Settings on first launch — it lives in your login Keychain, not in any config file. Skip the prompt with "Skip — use rule-based only" if you only want the rule-based plan.
+Current limits:
 
-**GitHub token (optional).** Loading a PR by URL needs a GitHub PAT, one per host. Shippable will prompt for it the first time you paste a PR URL. Use `repo` scope for private repositories; any valid token works for public PRs. Stored in Keychain on the desktop app, in server memory in dev.
+- Reviews stay on one machine. Read progress is stored in the browser; comments are stored in the local server database. There is no sync, sharing, or team review workflow yet.
+- AI features use Claude only. Add an Anthropic key in Settings for AI plan and streaming review; without one, Shippable still runs the rule-based plan.
+- The packaged desktop app is macOS-only and unsigned. Linux, Windows, and remote sandbox users should run from source for now.
+- This is still a prototype. There is no CI, and the product shape is still changing quickly.
 
-## What you can do with it
+## Run it from source
 
-- **Open a worktree.** Pick a checkout in the worktree picker and Shippable builds a changeset — at HEAD, a single ref, or across any SHA range. The diff refreshes live as the agent commits.
-- **Load a pull request.** Paste an HTTPS PR URL into Load → From URL. Works with github.com and GitHub Enterprise. Read-only today; pushing review conclusions back as PR comments is next on the roadmap.
-- **Get a review plan.** Rule-based by default; AI-augmented when you have a key. Every finding is anchored to a hunk you can click.
-- **Verify by running.** Select a hunk or a block; the runner builds an input form and executes the snippet in a sandboxed worker. JavaScript, TypeScript, and PHP today.
-- **Track three review states.** Lines your cursor passed (faded), explicit sign-offs, and things you've left flagged. State is durable — close the laptop, come back tomorrow, pick up where you left off. Threads re-anchor when the underlying code moves.
-- **Connect to agents over MCP.** The `shippable` MCP server (in [`mcp-server/`](./mcp-server/README.md)) wires the loop both ways. Ask your agent to review a worktree and `report back to shippable` — its comments land anchored to the right lines in your diff, ready to read alongside the code. Going the other way, `check shippable` pulls feedback you've written back into the agent's context for another pass. Works with Claude Code, Codex CLI, Cursor, or any MCP-speaking harness.
+No DMG on Linux or in a remote sandbox? Run the whole app — web bundle and server — on a single port:
 
-[`docs/overview.md`](docs/overview.md) walks through what the product does today and what it doesn't; [`IDEA.md`](IDEA.md) is the original problem statement.
+```sh
+npm run setup     # install server + web + mcp-server deps (first time)
+npm start         # build web + mcp, then serve everything on one port
+```
+
+Open `http://localhost:3001`. Set `PORT` to change it (`PORT=8080 npm start`) — it's the only port to forward out of a sandbox, since the API is served on the same origin as the app. Node 22 (`web/.nvmrc`).
+
+For AI plan and streaming review, paste an Anthropic key in Settings on first load; without one you get the rule-based plan. In source mode, Anthropic and GitHub credentials are kept in the local server process, so you will re-enter them after restarting the server.
+
+For active development with hot reload, use the two dev servers in [Developing locally](#developing-locally) instead.
+
+## Desktop build
+
+Download the latest macOS build from GitHub Releases:
+
+→ [**Shippable.dmg**](https://github.com/Automattic/shippable-code-review/releases)
+
+The DMG is unsigned, so the first launch trips Gatekeeper — right-click the .app in Finder → Open → confirm once. Subsequent launches don't prompt. macOS only today; Linux and Windows users should run from source.
+
+**Anthropic API key (optional).** AI plan and streaming review need an Anthropic key; everything else works without one. Paste it in Settings on first launch — in the desktop app, it lives in your login Keychain, not in any config file. Skip the prompt with "Skip — use rule-based only" if you only want the rule-based plan.
+
+**GitHub token (optional).** Loading a PR by URL needs a GitHub PAT, one per host. Shippable will prompt for it the first time you paste a PR URL. Use `repo` scope for private repositories; any valid token works for public PRs. In the desktop app, tokens are stored in Keychain.
+
+## Connect an agent over MCP
+
+The `shippable` MCP server ([`mcp-server/`](./mcp-server/README.md)) wires the review loop to a coding agent both ways.
+
+Build it (if you already ran `npm run setup`, you can skip `npm install`; the build produces `mcp-server/dist/index.js`):
+
+```sh
+cd mcp-server && npm install && npm run build
+```
+
+Register it with your agent. For Claude Code:
+
+```sh
+claude mcp add shippable -- node /absolute/path/to/mcp-server/dist/index.js
+```
+
+For Cursor, Cline, Claude Desktop, or OpenCode, add the same command to the harness's MCP config JSON (`command: "node"`, `args: ["/absolute/path/to/mcp-server/dist/index.js"]`). See [`mcp-server/README.md`](./mcp-server/README.md) for the per-harness list and the tool reference.
+
+Then drive the loop with three phrases:
+
+- **`report back to shippable`** — the agent posts its findings as comments anchored to the right lines in your diff.
+- **`check shippable`** — the agent pulls the feedback you've written, once.
+- **`watch shippable`** — the agent keeps watching for your feedback live until you interrupt it.
+
+The MCP defaults to port 3001 and auto-discovers the desktop app's port, so it works against the DMG or a from-source run with no config. If you run the app on a non-default `PORT`, set `SHIPPABLE_PORT` to the same value.
 
 ## Developing locally
 
@@ -50,5 +94,9 @@ cd web && npm install && npm run dev
 ```
 
 Node 22 (see `web/.nvmrc`). Symbol navigation needs an LSP installed locally — see [`docs/lsp-setup.md`](docs/lsp-setup.md). Building the desktop DMG is covered in [`docs/RELEASE.md`](docs/RELEASE.md).
+
+## More docs
+
+[`docs/overview.md`](docs/overview.md) walks through what the product does today and what it doesn't; [`IDEA.md`](IDEA.md) is the original problem statement.
 
 For everything else — quality checks, code style, architecture, deployment modes, where ideas live — read [`AGENTS.md`](AGENTS.md). The full HTTP surface lives in [`server/src/index.ts`](server/src/index.ts); request/response shapes are typed in [`web/src/types.ts`](web/src/types.ts). The architecture map is in [`docs/architecture.md`](docs/architecture.md).
