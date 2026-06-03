@@ -2,6 +2,8 @@
   "name": "shippable",
   "private": true,
   "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "start": "node scripts/start.mjs",
     "desktop:setup": "(cd server && bun install) && (cd web && npm install)",
     "desktop:dev": "cd src-tauri && cargo tauri dev",
     "build:dmg": "node scripts/build-dmg.mjs",

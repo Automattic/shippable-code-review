@@ -15,6 +15,7 @@ import type {
   Interaction,
 } from "./agent-queue.ts";
 import { removePortFile, writePortFile } from "./port-file.ts";
+import { serveStatic } from "./static-serve.ts";
 import { getCredential, hasCredential } from "./auth/store.ts";
 import {
   handleAuthSet,
@@ -51,6 +52,10 @@ import type { DefinitionRequest } from "../../web/src/definitionTypes.ts";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const HOST = "127.0.0.1";
+// When set, the server also serves the built web bundle from this directory, so
+// `npm start` runs the whole app on one port. Unset in dev and in the Tauri
+// sidecar, where the bundle is served elsewhere.
+const WEB_DIST = process.env.SHIPPABLE_WEB_DIST;
 const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -199,6 +204,14 @@ export function createApp(): Server {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, db: getDbStatus() }));
       return;
+    }
+    // Static serving never shadows the API namespace: an unmatched /api GET
+    // (with or without a query string) must fall through to the JSON 404, not
+    // the SPA shell. Match on the path alone so `/api?x=1` is reserved too.
+    const reqPath = req.url?.split(/[?#]/, 1)[0];
+    const isApi = reqPath === "/api" || reqPath?.startsWith("/api/");
+    if (WEB_DIST && req.method === "GET" && req.url && !isApi) {
+      if (await serveStatic(WEB_DIST, req.url, res)) return;
     }
     writeCorsHeaders(res, origin);
     res.writeHead(404, { "Content-Type": "application/json" });
@@ -1418,11 +1431,18 @@ function isRequestAllowed(
   check: OriginCheck,
   fetchSite: FetchSite | null,
 ): boolean {
-  // Browser requests that present an Origin header must always match the
-  // explicit allowlist. `Sec-Fetch-Site` is only an extra deny signal; it is
-  // never enough on its own to broaden the allowlist.
+  // Browser requests that present an Origin header must match the explicit
+  // allowlist — with one safe exception: a browser-labelled `same-origin`
+  // request (see below). `Sec-Fetch-Site` otherwise only ever narrows access,
+  // never broadens it.
   if (check.kind === "value") {
-    return ALLOWED_ORIGINS.has(check.origin);
+    if (ALLOWED_ORIGINS.has(check.origin)) return true;
+    // A request the browser labels same-origin came from a page this server
+    // served itself (single-port `npm start`). Same-origin is never cross-site,
+    // so it can't be CSRF — allow it regardless of the host, which varies on
+    // remote sandboxes and can't be pinned in the allowlist ahead of time.
+    // `Sec-Fetch-Site` is browser-set and unspoofable by page scripts.
+    return fetchSite === "same-origin";
   }
   // Opaque origins (`Origin: null`, sandboxed iframes, data: URLs, some
   // redirects) are always denied.

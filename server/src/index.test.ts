@@ -1026,6 +1026,38 @@ describe("POST /api/auth/set", () => {
   });
 });
 
+describe("origin gating for same-origin requests", () => {
+  // The single-port `npm start` serves the app from the server itself, so its
+  // own POSTs carry an Origin that isn't in the allowlist. Same-origin is never
+  // cross-site, so it must pass the gate (reaching the handler), while a
+  // cross-site request with the same Origin must still be denied.
+  const headers = (fetchSite: string) => ({
+    "Content-Type": "application/json",
+    Origin: "http://example.test:9999",
+    "Sec-Fetch-Site": fetchSite,
+  });
+  const body = JSON.stringify({ credential: { kind: "anthropic" } });
+
+  it("allows a same-origin request whose Origin isn't allowlisted", async () => {
+    const res = await fetch(`${baseUrl}/api/auth/set`, {
+      method: "POST",
+      headers: headers("same-origin"),
+      body,
+    });
+    expect(res.status).not.toBe(403);
+    expect(res.status).toBe(400); // reached the handler: missing value
+  });
+
+  it("denies a cross-site request whose Origin isn't allowlisted", async () => {
+    const res = await fetch(`${baseUrl}/api/auth/set`, {
+      method: "POST",
+      headers: headers("cross-site"),
+      body,
+    });
+    expect(res.status).toBe(403);
+  });
+});
+
 describe("POST /api/auth/clear", () => {
   it("clears a stored credential", async () => {
     await postJson(`${baseUrl}/api/auth/set`, {
@@ -1568,4 +1600,48 @@ describe("POST /api/github/pr/branch-lookup", () => {
     });
     expect(res.status).toBe(403);
   });
+});
+
+describe("single-port static serving (SHIPPABLE_WEB_DIST set)", () => {
+  let staticServer: Server;
+  let staticBase: string;
+  let distDir: string;
+
+  beforeAll(async () => {
+    distDir = await fs.mkdtemp(path.join(os.tmpdir(), "shippable-dist-"));
+    await fs.writeFile(path.join(distDir, "index.html"), "<!doctype html><title>app</title>");
+    process.env.SHIPPABLE_WEB_DIST = distDir;
+    vi.resetModules(); // pick up the module-level WEB_DIST const on re-import
+    const indexMod = await import("./index.ts");
+    staticServer = indexMod.createApp();
+    await new Promise<void>((resolve) => staticServer.listen(0, "127.0.0.1", () => resolve()));
+    const addr = staticServer.address();
+    if (!addr || typeof addr === "string") throw new Error("no address");
+    staticBase = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) =>
+      staticServer.close((err) => (err ? reject(err) : resolve())),
+    );
+    await fs.rm(distDir, { recursive: true, force: true });
+    delete process.env.SHIPPABLE_WEB_DIST;
+    vi.resetModules();
+  });
+
+  it("serves the SPA shell for an extensionless route", async () => {
+    const res = await fetch(`${staticBase}/some/deep/route`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+  });
+
+  it.each(["/api/not-real", "/api", "/api?x=1"])(
+    "returns the JSON 404 for unmatched API GET %s, not the SPA shell",
+    async (url) => {
+      const res = await fetch(`${staticBase}${url}`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await res.json()).toEqual({ error: "not found" });
+    },
+  );
 });
