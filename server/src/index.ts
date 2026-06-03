@@ -1479,9 +1479,19 @@ async function main() {
   }
   const server = createApp();
   server.listen(PORT, HOST, () => {
-    const allowed = ALLOWED_ORIGINS.size > 0 ? [...ALLOWED_ORIGINS].join(", ") : "(none)";
     console.log(`[server] listening on http://${HOST}:${PORT}`);
-    console.log(`[server] allowed browser origins: ${allowed}`);
+    if (WEB_DIST) {
+      // Serving the bundle ourselves makes the app same-origin, so its requests
+      // pass the gate via Sec-Fetch-Site regardless of host/port. The
+      // cross-origin allowlist still works but isn't the mechanism here, so
+      // printing it would only confuse — show what actually applies.
+      console.log(
+        `[server] serving web bundle from ${WEB_DIST} — same-origin requests on this port are allowed`,
+      );
+    } else {
+      const allowed = ALLOWED_ORIGINS.size > 0 ? [...ALLOWED_ORIGINS].join(", ") : "(none)";
+      console.log(`[server] allowed browser origins: ${allowed}`);
+    }
     // Gated so the dev server (`npm run server`) doesn't fight the Tauri
     // sidecar for the same on-disk file. The Tauri shell sets the env
     // var when spawning us; nobody else should.
