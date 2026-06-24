@@ -117,6 +117,56 @@ export function createWorktreeRepo(): FixtureRepo {
   };
 }
 
+export interface SplitRepo extends FixtureRepo {
+  /** Land a follow-up commit on a new file. Moves HEAD (trips the sha-based
+   *  live-reload poll) while leaving the uncommitted edit in dirty.ts intact,
+   *  so the reload still sees a dirty tree. */
+  landCommit: () => void;
+}
+
+/**
+ * A repo whose committed change and uncommitted change live in DIFFERENT
+ * files: `committed.ts` is edited in a commit on `feat/x`, `dirty.ts` only in
+ * the working tree. Loading "last commit + uncommitted" shows both; a reload
+ * that collapses to dirty-only would drop `committed.ts`, so its presence in
+ * the sidebar is a clean assertion. Used by the reload-preserves-range test.
+ */
+export function createSplitRepo(): SplitRepo {
+  const path = mkdtempSync(join(tmpdir(), "shippable-e2e-split-"));
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: path, stdio: "pipe" });
+
+  git("init", "-b", "main");
+  git("config", "user.email", "e2e@shippable.test");
+  git("config", "user.name", "e2e");
+  git("config", "commit.gpgsign", "false");
+
+  writeFileSync(join(path, "committed.ts"), "export const value = 1;\n");
+  writeFileSync(join(path, "dirty.ts"), "export const draft = 1;\n");
+  git("add", ".");
+  git("commit", "-m", "base commit");
+
+  git("checkout", "-b", "feat/x");
+  writeFileSync(join(path, "committed.ts"), "export const value = 2;\n");
+  git("commit", "-am", "Bump committed value");
+
+  // Uncommitted edit in the OTHER file only — leaves the tree dirty so a
+  // reload that collapses to dirty-only would drop committed.ts.
+  writeFileSync(join(path, "dirty.ts"), "export const draft = 2;\n");
+
+  return {
+    path,
+    cleanup: () => rmSync(path, { recursive: true, force: true }),
+    landCommit: () => {
+      // Commit a NEW file (not dirty.ts) so HEAD moves — tripping the
+      // sha-based live-reload poll — while the uncommitted edit survives.
+      writeFileSync(join(path, "added.ts"), "export const added = 1;\n");
+      git("add", "added.ts");
+      git("commit", "-m", "Agent lands a follow-up commit");
+    },
+  };
+}
+
 /** Land a fresh commit in an existing fixture repo — used to trip the
  *  worktree live-reload poll mid-test. */
 export function addCommit(repoPath: string): void {

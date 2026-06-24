@@ -16,6 +16,7 @@ import {
 import { mockEnqueueRejects } from "./_lib/mocks";
 import {
   createWorktreeRepo,
+  createSplitRepo,
   addCommit,
   type FixtureRepo,
 } from "./_lib/worktree-repo";
@@ -436,6 +437,59 @@ test.describe("Journey 2 — local worktree", () => {
       // reload.
       addCommit(own.path);
       await expect(liveBar).toContainText("reload", { timeout: 12_000 });
+    } finally {
+      own.cleanup();
+    }
+  });
+
+  test("reload preserves a range load — committed changes don't vanish", async ({
+    visit,
+    page,
+  }) => {
+    // Regression for the reload-drops-scope bug: a "last commit + uncommitted"
+    // range load that, on reload after a dirty edit, collapsed to dirty-only
+    // (git diff HEAD) and dropped the committed file from the view.
+    const own = createSplitRepo();
+    try {
+      await visit("/?cs=42");
+      await expectWorkspaceLoaded(page);
+      await loadFixtureWorktree(page, own.path);
+      await page.keyboard.press("Escape").catch(() => {}); // dismiss plan overlay
+
+      // Re-slice to "last commit + uncommitted" via the range picker: from
+      // defaults to the latest commit, to stays at HEAD, and we tick the
+      // uncommitted toggle.
+      await page.getByRole("button", { name: /range/ }).click();
+      const picker = page.locator(".range-picker");
+      await picker
+        .getByRole("checkbox", { name: "include uncommitted changes" })
+        .check();
+      await picker.getByRole("button", { name: "load range" }).click();
+      // The picker closes only after onApply's fetch resolves, so this is the
+      // signal the range load actually landed — and that its live-reload
+      // baseline captured the current HEAD. Without it, landCommit() below
+      // races the in-flight load and the baseline captures the new sha.
+      await expect(picker).toHaveCount(0);
+      await expectWorkspaceLoaded(page);
+
+      // The range view holds both the committed file and the dirty-only file.
+      await expect(page.getByText("committed.ts").first()).toBeVisible();
+      await expect(page.getByText("dirty.ts").first()).toBeVisible();
+
+      // A follow-up commit lands (HEAD moves) while the tree stays dirty —
+      // the 3s poll picks up the new sha and the banner offers a reload.
+      const liveBar = page.getByRole("status", { name: "live reload" });
+      own.landCommit();
+      await expect(liveBar).toContainText("reload", { timeout: 12_000 });
+
+      // Reload. Before the fix this collapsed to dirty-only (the tree is
+      // dirty) and committed.ts disappeared; now the original range is
+      // re-fetched and the committed file stays.
+      await liveBar.getByRole("button", { name: "reload" }).click();
+      await expect(liveBar).toContainText("watching", { timeout: 12_000 });
+
+      await expect(page.getByText("committed.ts").first()).toBeVisible();
+      await expect(page.getByText("dirty.ts").first()).toBeVisible();
     } finally {
       own.cleanup();
     }
