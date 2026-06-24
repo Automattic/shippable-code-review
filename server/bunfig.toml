@@ -1,0 +1,4 @@
+[install]
+# Supply-chain cooldown: only install versions published >7 days ago (604800s = 7d). Mirrors .npmrc.
+minimumReleaseAge = 604800
+# minimumReleaseAgeExcludes = []  # exempt a package to pull a fix before the cooldown elapses
