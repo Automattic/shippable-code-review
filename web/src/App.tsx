@@ -40,9 +40,7 @@ import {
 } from "./recents";
 import { useTheme } from "./useTheme";
 import { useWorktreeLiveReload } from "./useWorktreeLiveReload";
-import { parseDiff } from "./parseDiff";
-import { postJson } from "./apiClient";
-import { fetchDiffCodeGraph } from "./codeGraphClient";
+import { fetchWorktreeChangeset, type LoadOpts } from "./worktreeChangeset";
 import { fetchInteractions } from "./interactionClient";
 import { useInteractionSync } from "./useInteractionSync";
 import { reportStat } from "./reportStat";
@@ -383,36 +381,19 @@ export default function App() {
     if (!provenance || !activeCs || busyReloading) return;
     setBusyReloading(true);
     try {
-      const wantDirty = staleNext?.dirty ?? false;
-      const json = await postJson<{
-        diff: string;
-        sha: string;
-        subject: string;
-        author: string;
-        branch: string | null;
-        fileContents?: Record<string, string>;
-        state: WorktreeState;
-      }>("/api/worktrees/changeset", {
-        path: provenance.path,
-        dirty: wantDirty,
-      });
-      const newCs = parseDiff(json.diff, {
-        id: `wt-${json.sha.slice(0, 12)}`,
-        title:
-          json.subject ||
-          `${provenance.branch ?? "detached"} @ ${json.sha.slice(0, 7)}`,
-        author: json.author,
-        head: json.branch ?? json.sha.slice(0, 7),
-        fileContents: json.fileContents,
-      });
-      const lspGraph = await fetchDiffCodeGraph(provenance.path, json.sha, newCs.files);
-      if (lspGraph) newCs.graph = lspGraph;
-      newCs.worktreeSource = {
-        worktreePath: provenance.path,
-        commitSha: json.sha,
-        branch: provenance.branch,
-        state: json.state,
-      };
+      // Reload the same slice the user originally loaded. Without this the
+      // reload collapsed to dirty-only or the cumulative branch view, dropping
+      // whatever scope was picked (e.g. a "last commit + uncommitted" range).
+      const src = activeCs.worktreeSource;
+      const opts: LoadOpts | undefined = src?.range
+        ? { kind: "range", ...src.range }
+        : src?.dirty
+          ? { kind: "dirty" }
+          : undefined;
+      const newCs = await fetchWorktreeChangeset(
+        { path: provenance.path, branch: provenance.branch },
+        opts,
+      );
       // RELOAD_CHANGESET (not LOAD_CHANGESET) so the anchoring pass runs:
       // existing replies re-anchor to the new diff or move into the
       // Detached pile. LOAD_CHANGESET would silently orphan them.
