@@ -106,6 +106,14 @@ Slices (a)–(d) are the feature. (e) is the next-most-useful follow-up. (f) is 
 - **(e) View at `<sha>`** — shipped. `POST /api/worktrees/file-at` (`git show <sha>:<file>`); inline panel under detached committed entries scrolls to `Reply.anchorLineNo`.
 - **(f)** — not started.
 
+### Later corrections (2026-06)
+
+When you load a worktree you pick a *view* of its changes — the whole branch, a single commit, a range of commits, or a range plus your uncommitted edits. The SHA range picker (`fromRef..toRef`, optionally `+dirty`) landed the day after this feature and added that range view, which the reload path never knew about. Two bugs followed, both from the same mistake: using "what the worktree looks like right now" as a stand-in for "the view the user chose to review."
+
+**On reload, re-fetch the view the user picked — don't guess it.** The original `reloadWorktree` built its request from `staleNext.dirty` (`dirty: wantDirty`) instead of from what was loaded. That held up while only two views existed (cumulative branch / dirty-only), but a range load reloaded as `git diff HEAD` — dropping every committed change. Reload now reconstructs `LoadOpts` from `cs.worktreeSource` (range → dirty → branch view) and routes through `fetchWorktreeChangeset`, which re-stamps `range`/`dirty` so a second reload doesn't re-break. Reload is not a frozen snapshot: it re-runs the chosen view's query against the *current* worktree, so new commits and edits inside that view's scope do show up — they just land in the same view instead of at a guessed scope. The trap that hid this: a "last commit + uncommitted" range and the cumulative branch view list the *same files*, so silently swapping one for the other isn't visually obvious — only the committed hunks quietly vanish.
+
+**Only nudge "reload" for changes the loaded view would actually show.** `useWorktreeLiveReload` takes `watchSha` / `watchDirty`. A range loaded without "include uncommitted" ignores dirty edits (`watchDirty = range.includeDirty`); a range pinned to a fixed `toRef` ignores new commits (`watchSha = toRef === "HEAD"`). Branch and dirty-only views watch both. Without this, a range that excludes uncommitted work would pop "worktree changed — reload" and then reload nothing, because the re-fetch still excludes that work. Worktree-gone detection stays on regardless.
+
 ## Architecture sketch
 
 ```
