@@ -10,6 +10,11 @@
 .playwright-mcp/
 /screenshots/
 
+# Playwright test output (web/.gitignore covers these inside web/; this
+# catches a stray root dir, e.g. .last-run.json from a root-cwd test run).
+test-results/
+playwright-report/
+
 # Project-level Claude Code MCP config — kept out for now; bring back if
 # we want the playwright MCP to be shared with collaborators.
 .mcp.json
