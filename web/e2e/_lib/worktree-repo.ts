@@ -10,7 +10,7 @@
 // diff has separated hunks with collapsed context to expand.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -80,7 +80,14 @@ Edited, uncommitted.
 `;
 
 export function createWorktreeRepo(): FixtureRepo {
-  const path = mkdtempSync(join(tmpdir(), "shippable-e2e-wt-"));
+  // `realpathSync` resolves symlinks in the temp root so this matches what git
+  // reports. On macOS `os.tmpdir()` lives under `/var/folders/...` and `/var`
+  // is a symlink to `/private/var`; `git rev-parse --show-toplevel` (and the
+  // server's `git worktree list`) return the canonical `/private/var/...` form.
+  // Tests that POST to `/api/agent/interactions` with this path must use the
+  // same string the UI adopts after scanning, or the worktree-keyed store
+  // never matches. Linux CI has no such symlink, so this is a no-op there.
+  const path = realpathSync(mkdtempSync(join(tmpdir(), "shippable-e2e-wt-")));
   const git = (...args: string[]) =>
     execFileSync("git", args, { cwd: path, stdio: "pipe" });
 

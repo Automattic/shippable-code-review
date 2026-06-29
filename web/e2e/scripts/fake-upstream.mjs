@@ -41,8 +41,13 @@ const json = (res, status, body) => {
 // `messages.parse()` (used by /api/plan) JSON-parses `content[0].text` against
 // the caller's zod schema — so the non-streaming response just needs a text
 // block whose text is the structured JSON. plan.ts's PlanResponseSchema is
-// { intent, entryPoints }; the claim carries {kind:"description"} evidence,
-// which survives assemblePlan's evidence check because cs-42 has a description.
+// { intent, entryPoints, questions }; the claim carries {kind:"description"}
+// evidence, which survives assemblePlan's evidence check because cs-42 has a
+// description. `questions` is required (added with the comprehension-quiz
+// feature), so it must be present even though we leave it empty here — the
+// quiz path has its own coverage in journey-quiz.spec.ts, which mocks
+// /api/plan directly. An empty array keeps the J5 plan assertions
+// deterministic (no quiz overlay is triggered off the back of this response).
 
 const PLAN_OUTPUT = {
   intent: [
@@ -58,6 +63,7 @@ const PLAN_OUTPUT = {
     },
   ],
   entryPoints: [],
+  questions: [],
 };
 
 function anthropicJsonResponse() {

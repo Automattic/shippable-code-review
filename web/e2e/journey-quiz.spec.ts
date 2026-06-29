@@ -3,7 +3,12 @@
 // the full lifecycle: Shift+M → quiz appears → answer → reveal → "Got it" →
 // reload → counter sticks and the active textarea is gone.
 
-import { test, expect } from "./_lib/fixtures";
+import {
+  test,
+  expect,
+  dismissPlanOverlay,
+  expectWorkspaceLoaded,
+} from "./_lib/fixtures";
 import { mockAuthList } from "./_lib/mocks";
 
 test("comprehension quiz: full submit → reveal → self-eval cycle", async ({
@@ -17,7 +22,7 @@ test("comprehension quiz: full submit → reveal → self-eval cycle", async ({
   });
 
   // Pretend the server already has an Anthropic key so the boot panel is
-  // skipped and "Send to Claude" goes straight through to the mocked /api/plan.
+  // skipped and the plan auto-fires through to the mocked /api/plan.
   await mockAuthList(page, [{ kind: "anthropic" }]);
 
   // First file in cs-42 is src/types/user.ts — the question targets that path.
@@ -49,17 +54,20 @@ test("comprehension quiz: full submit → reveal → self-eval cycle", async ({
 
   await visit("/?cs=42");
 
-  // Land in the workspace, then send the diff so /api/plan fires and stores
-  // the mocked question.
+  // Land in the workspace. With a key configured the plan auto-fires through
+  // to the mocked /api/plan, storing the mocked question — no explicit gesture.
   await expect(page.locator(".diff")).toBeVisible({ timeout: 10_000 });
-  await page.getByRole("button", { name: "Send to Claude" }).click();
 
   // Resting state: panel shows up in the sidebar with "Comprehension" header
-  // and a 0 / 1 counter.
+  // and a 0 / 1 counter (gates on the question being stored).
   const quizPanel = page.locator(".quiz-panel");
   await expect(quizPanel).toBeVisible();
   await expect(quizPanel.getByText("Comprehension")).toBeVisible();
   await expect(quizPanel.locator(".quiz-panel__count")).toHaveText("0 / 1");
+
+  // The plan overlay is open by default and swallows global keys; dismiss it so
+  // Shift+M reaches the keymap.
+  await dismissPlanOverlay(page);
 
   // Cursor lands on the first file (src/types/user.ts). Shift+M triggers
   // MAYBE_TRIGGER_QUIZ with a forced 0 roll → the question becomes active.
@@ -76,9 +84,11 @@ test("comprehension quiz: full submit → reveal → self-eval cycle", async ({
   await expect(
     quizPanel.getByText("It defines the User and Preferences types."),
   ).toBeVisible();
-  const gotIt = quizPanel.getByRole("button", { name: "Got it" });
-  await gotIt.click();
-  await expect(gotIt).toHaveAttribute("aria-pressed", "true");
+  // Self-eval collapses the panel back to its resting state (a62238c): the
+  // reveal and its buttons unmount, and the counter advances to 1 / 1.
+  await quizPanel.getByRole("button", { name: "Got it" }).click();
+  await expect(quizPanel.getByRole("button", { name: "Got it" })).toHaveCount(0);
+  await expect(quizPanel.locator(".quiz-panel__count")).toHaveText("1 / 1");
 
   // The session-save effect is debounced. Wait until the snapshot reflects the
   // self-eval before reloading, otherwise the assertion below races the save.
@@ -97,10 +107,14 @@ test("comprehension quiz: full submit → reveal → self-eval cycle", async ({
     }
   });
 
-  // Reload: questions + answers survive, counter reads 1 / 1, the active
-  // textarea is gone (Reveal stays visible until the next quiz fires).
-  await page.reload();
-  await expect(page.locator(".diff")).toBeVisible({ timeout: 10_000 });
+  // Reload via the bare `/` path — NOT `?cs=42`. An explicit `?cs=` URL always
+  // loads the fixture fresh (App.tsx resolveBoot → applyPersisted: false);
+  // booting `/` falls through to peekSession() and resumes the persisted
+  // snapshot, which is how a real reload restores progress. Questions + answers
+  // survive, counter reads 1 / 1, and the panel is back in its collapsed
+  // resting state (no active textarea).
+  await visit("/");
+  await expectWorkspaceLoaded(page);
   const quizPanelAfter = page.locator(".quiz-panel");
   await expect(quizPanelAfter).toBeVisible();
   await expect(quizPanelAfter.locator(".quiz-panel__count")).toHaveText("1 / 1");

@@ -19,17 +19,17 @@ test.describe("Journey 5 — AI features", () => {
     visit,
     page,
   }) => {
-    // Real path: a key in the server's auth store, then let "Send to Claude"
-    // hit the real /api/plan — which calls the fake upstream and feeds its
+    // Real path: a key in the server's auth store makes the plan auto-fire,
+    // hitting the real /api/plan — which calls the fake upstream and feeds its
     // structured output back through the server's assemblePlan.
     await ensureAnthropicConfigured(page, visit);
 
-    // The rule-based plan is open by default; Send to Claude swaps in the AI
-    // plan, whose intent claim carries the fake upstream's marker text.
+    // The plan overlay is open by default. With a key configured the AI plan
+    // auto-fires (no explicit gesture) and replaces the rule-based plan; its
+    // intent claim carries the fake upstream's marker text.
     await expect(
       page.getByRole("heading", { name: /Add user preferences panel/ }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Send to Claude" }).click();
     await expect(page.getByText(/FAKE-PLAN:/)).toBeVisible();
   });
 
@@ -152,7 +152,7 @@ test.describe("Journey 5 — AI features", () => {
     page,
   }) => {
     await ensureAnthropicConfigured(page, visit);
-    await page.getByRole("button", { name: "Send to Claude" }).click();
+    // The AI plan auto-fires once the key is configured; wait for its marker.
     await expect(page.getByText(/FAKE-PLAN:/)).toBeVisible();
 
     // The fake plan's claim cites src/utils/storage.ts — clicking that
@@ -218,8 +218,12 @@ test.describe("Journey 5 — AI features", () => {
     page,
   }) => {
     await ensureAnthropicConfigured(page, visit);
-    // The plan overlay offers a "generate diagram" affordance.
-    await page.getByRole("button", { name: "generate diagram" }).click();
+    // Once the AI plan is ready the static file map collapses under "all files"
+    // (ReviewPlanView's CollapsedMapSection); expand it to reach the diagram
+    // affordance, then generate.
+    const planDialog = page.getByRole("dialog", { name: "review plan" });
+    await planDialog.getByText(/all files \(\d+\)/).click();
+    await planDialog.getByRole("button", { name: "generate diagram" }).click();
     await expect(
       page.getByRole("tablist", { name: "Diagram types" }),
     ).toBeVisible();
