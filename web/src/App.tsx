@@ -340,6 +340,15 @@ export default function App() {
     return { path: src.worktreePath, branch: src.branch, state: src.state };
   }, [activeCs]);
 
+  // Which drift the loaded slice would actually reflect on reload. A range
+  // tracks new commits only when it ends at HEAD, and uncommitted edits only
+  // when it was loaded with "include uncommitted". Branch and dirty-only views
+  // track both. Surfacing drift the reload can't show just nudges to load
+  // nothing.
+  const wsrc = activeCs?.worktreeSource;
+  const watchSha = wsrc ? (wsrc.range ? wsrc.range.toRef === "HEAD" : true) : false;
+  const watchDirty = wsrc ? (wsrc.range ? wsrc.range.includeDirty : true) : false;
+
   const [liveReloadEnabled, setLiveReloadEnabledState] = useState(true);
   const [staleNext, setStaleNext] = useState<WorktreeState | null>(null);
   const [worktreeGone, setWorktreeGone] = useState(false);
@@ -365,6 +374,8 @@ export default function App() {
   useWorktreeLiveReload({
     provenance,
     enabled: liveReloadEnabled && !worktreeGone,
+    watchSha,
+    watchDirty,
     onDrift: (next) => setStaleNext(next),
     onWorktreeGone: () => setWorktreeGone(true),
   });
