@@ -184,6 +184,7 @@ export default function App() {
       reviewedFiles: persisted.reviewedFiles,
       reviewedChangesets: persisted.reviewedChangesets,
       dismissedGuides: persisted.dismissedGuides,
+      quiz: persisted.quiz,
     };
   });
   const [recents, setRecents] = useState<RecentEntry[]>(() => {
