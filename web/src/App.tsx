@@ -15,6 +15,7 @@ import {
   setWindowTitle,
 } from "./multiWindow";
 import { useRegisterMcp } from "./useRegisterMcp";
+import { isTauri } from "./keychain";
 import { NoticeModal } from "./components/NoticeModal";
 import { RegisterMcpModal } from "./components/RegisterMcpModal";
 import type {
@@ -480,7 +481,7 @@ export default function App() {
         onLoadChangeset={handleLoadChangeset}
         currentSource={currentSource}
         liveReloadBar={liveReloadBar}
-        onMcpSetUp={openMcpSetUp}
+        onMcpSetUp={isTauri() ? openMcpSetUp : undefined}
       />
       <FindBar open={findOpen} onClose={closeFind} />
       {toast && <Toast message={toast} onClose={dismissToast} />}
