@@ -801,14 +801,21 @@ export async function rangeChangeset(
     diffBase = EMPTY_TREE_SHA;
   }
 
+  const dirtyApplies = includeDirty && toRef === "HEAD";
+
+  // When folding in the working tree, diff `diffBase` straight to it (no
+  // `..toSha`) so committed range + uncommitted edits land in one diff per
+  // file — same shape changesetFor uses. Concatenating `diffBase..toSha` with
+  // `git diff HEAD` would emit a second `diff --git` block for every file
+  // touched in both, with conflicting line numbers downstream.
   let trackedDiff = await safeGitDiff(
-    ["diff", "--end-of-options", diffBase, toSha],
+    dirtyApplies
+      ? ["diff", "--end-of-options", diffBase]
+      : ["diff", "--end-of-options", diffBase, toSha],
     worktreePath,
   );
 
-  const dirtyApplies = includeDirty && toRef === "HEAD";
   if (dirtyApplies) {
-    trackedDiff += await safeGitDiff(["diff", "HEAD"], worktreePath);
     try {
       const { stdout: untrackedList } = await execFileAsync(
         GIT,

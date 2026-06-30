@@ -120,6 +120,17 @@ describe("rangeChangeset", () => {
     expect(out.sha.startsWith("dirty:")).toBe(true);
   });
 
+  it("emits one block for a file changed in both the range and the working tree", async () => {
+    const a = await commit("f.txt", "one\ntwo\nthree\n", "add f");
+    await commit("f.txt", "one\nTWO\nthree\n", "edit f line 2");
+    await fs.writeFile(path.join(repo, "f.txt"), "one\nTWO\nthree\nFOUR\n");
+    const out = await rangeChangeset(repo, a, "HEAD", true);
+    const blocks = out.diff.match(/^diff --git a\/f\.txt /gm) ?? [];
+    expect(blocks).toHaveLength(1);
+    expect(out.diff).toContain("+TWO");
+    expect(out.diff).toContain("+FOUR");
+  });
+
   it("ignores includeDirty when toRef is a specific sha (not HEAD)", async () => {
     const a = await commit("a.txt", "a\n", "add a");
     const b = await commit("b.txt", "b\n", "add b");
