@@ -433,6 +433,7 @@ export default function App() {
       provenance={provenance}
       enabled={liveReloadEnabled}
       staleNext={staleNext}
+      watchDirty={watchDirty}
       worktreeGone={worktreeGone}
       busyReloading={busyReloading}
       onToggleEnabled={toggleLiveReload}

@@ -5,6 +5,10 @@ interface Props {
   provenance: WorktreeProvenance;
   enabled: boolean;
   staleNext: WorktreeState | null;
+  /** Whether the loaded slice includes uncommitted edits. Gates the dirty
+   *  part of the drift message — a slice that excludes them won't load them
+   *  on reload, so naming them would mislead. */
+  watchDirty: boolean;
   worktreeGone: boolean;
   busyReloading: boolean;
   onToggleEnabled: () => void;
@@ -23,6 +27,7 @@ export function LiveReloadBar({
   provenance,
   enabled,
   staleNext,
+  watchDirty,
   worktreeGone,
   busyReloading,
   onToggleEnabled,
@@ -52,7 +57,7 @@ export function LiveReloadBar({
       <div className="livebar livebar--stale" role="status" aria-label="live reload">
         <span className="livebar__icon">●</span>
         <span className="livebar__msg">
-          {describeDrift(provenance.state, staleNext)}
+          {describeDrift(provenance.state, staleNext, watchDirty)}
         </span>
         <button
           type="button"
@@ -95,9 +100,13 @@ export function LiveReloadBar({
   );
 }
 
-function describeDrift(was: WorktreeState, now: WorktreeState): string {
+function describeDrift(
+  was: WorktreeState,
+  now: WorktreeState,
+  watchDirty: boolean,
+): string {
   if (was.sha !== now.sha) {
-    return now.dirty
+    return watchDirty && now.dirty
       ? "New commit + uncommitted edits"
       : "New commit on this worktree";
   }
