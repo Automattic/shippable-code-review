@@ -515,6 +515,82 @@ describe("buildCommentStops", () => {
     // The empty user:cs1/f1#h1:2 must NOT appear.
     expect(stops.some((s) => s.hunkId === "cs1/f1#h1" && s.lineIdx === 2)).toBe(false);
   });
+
+  it("adds a stop on the first hunk of a file that only has a detached thread", () => {
+    // f1 has no live comments; f2 has one at h1:0.
+    const cs = makeChangeset("cs1", [
+      makeFile("cs1/f1", [makeHunk("cs1/f1#h1", 3)]),
+      makeFile("cs1/f2", [makeHunk("cs1/f2#h1", 2)]),
+    ]);
+    const interactions = mkUserInteractionMap({
+      [userCommentKey("cs1/f2#h1", 0, "c1")]: [
+        { id: "r1", author: "you", body: "x", createdAt: "2026-04-30T00:00:00.000Z" },
+      ],
+    });
+    const detached = mkDetachedInteractions([
+      {
+        literal: {
+          id: "d1",
+          author: "you",
+          body: "orphaned",
+          createdAt: "2026-04-30T00:00:00.000Z",
+          anchorPath: "cs1/f1.ts",
+          anchorLineNo: 2,
+        },
+        threadKey: "user:cs1/f1#hGONE:1:c1",
+      },
+    ]);
+    expect(buildCommentStops(cs, interactions, detached)).toEqual([
+      { fileId: "cs1/f1", hunkId: "cs1/f1#h1", lineIdx: 0 }, // detached-only file
+      { fileId: "cs1/f2", hunkId: "cs1/f2#h1", lineIdx: 0 }, // live comment
+    ]);
+  });
+
+  it("dedups a detached stop that coincides with a live comment", () => {
+    const cs = makeChangeset("cs1", [makeFile("cs1/f1", [makeHunk("cs1/f1#h1", 3)])]);
+    const interactions = mkUserInteractionMap({
+      [userCommentKey("cs1/f1#h1", 0, "c1")]: [
+        { id: "r1", author: "you", body: "x", createdAt: "2026-04-30T00:00:00.000Z" },
+      ],
+    });
+    const detached = mkDetachedInteractions([
+      {
+        literal: {
+          id: "d1",
+          author: "you",
+          body: "orphaned",
+          createdAt: "2026-04-30T00:00:00.000Z",
+          anchorPath: "cs1/f1.ts",
+        },
+        threadKey: "user:cs1/f1#hGONE:1:c1",
+      },
+    ]);
+    // Live comment already sits at h1:0; the detached stop dedups into it.
+    expect(buildCommentStops(cs, interactions, detached)).toEqual([
+      { fileId: "cs1/f1", hunkId: "cs1/f1#h1", lineIdx: 0 },
+    ]);
+  });
+
+  it("skips detached threads that are anchorless or point at a missing file", () => {
+    const cs = makeChangeset("cs1", [makeFile("cs1/f1", [makeHunk("cs1/f1#h1", 3)])]);
+    const detached = mkDetachedInteractions([
+      {
+        literal: { id: "d1", author: "you", body: "no path", createdAt: "2026-04-30T00:00:00.000Z" },
+        threadKey: "user:cs1/f1#hGONE:1:c1",
+      },
+      {
+        literal: {
+          id: "d2",
+          author: "you",
+          body: "gone file",
+          createdAt: "2026-04-30T00:00:00.000Z",
+          anchorPath: "cs1/deleted.ts",
+        },
+        threadKey: "user:cs1/deleted#h1:1:c1",
+      },
+    ]);
+    expect(buildCommentStops(cs, {}, detached)).toEqual([]);
+  });
 });
 
 describe("MOVE_TO_COMMENT", () => {
@@ -545,13 +621,70 @@ describe("MOVE_TO_COMMENT", () => {
     expect(c.cursor.lineIdx).toBe(0);
   });
 
-  it("clamps at the last comment (no further next)", () => {
+  it("wraps forward from the last comment back to the first", () => {
     const { cs, interactions } = csWithComments();
     const seeded: ReviewState = { ...initialState([cs]), interactions };
+    // Three stops; walk to the last one, then one more wraps to the first.
     let s = seeded;
-    for (let i = 0; i < 5; i++) s = reducer(s, { type: "MOVE_TO_COMMENT", delta: 1 });
-    const stuck = reducer(s, { type: "MOVE_TO_COMMENT", delta: 1 });
-    expect(stuck).toBe(s);
+    for (let i = 0; i < 3; i++) s = reducer(s, { type: "MOVE_TO_COMMENT", delta: 1 });
+    // On the last stop now (f2#h1:0). Next wraps.
+    expect(s.cursor).toMatchObject({ fileId: "cs1/f2", hunkId: "cs1/f2#h1", lineIdx: 0 });
+    const wrapped = reducer(s, { type: "MOVE_TO_COMMENT", delta: 1 });
+    expect(wrapped.cursor).toMatchObject({
+      fileId: "cs1/f1",
+      hunkId: "cs1/f1#h1",
+      lineIdx: 1,
+    });
+  });
+
+  it("wraps backward from the first comment to the last", () => {
+    const { cs, interactions } = csWithComments();
+    const seeded: ReviewState = { ...initialState([cs]), interactions };
+    // Land on the first comment, then prev wraps to the last.
+    const first = reducer(seeded, { type: "MOVE_TO_COMMENT", delta: 1 });
+    expect(first.cursor).toMatchObject({ hunkId: "cs1/f1#h1", lineIdx: 1 });
+    const wrapped = reducer(first, { type: "MOVE_TO_COMMENT", delta: -1 });
+    expect(wrapped.cursor).toMatchObject({
+      fileId: "cs1/f2",
+      hunkId: "cs1/f2#h1",
+      lineIdx: 0,
+    });
+  });
+
+  it("reaches a detached comment whose file is still in the diff", () => {
+    const { cs, interactions } = csWithComments();
+    // A thread that failed to re-anchor, anchored to file f2 (path cs1/f2.ts).
+    const detachedInteractions = mkDetachedInteractions([
+      {
+        literal: {
+          id: "d1",
+          author: "you",
+          body: "still relevant",
+          createdAt: "2026-04-30T00:00:00.000Z",
+          anchorPath: "cs1/f2.ts",
+          anchorLineNo: 2,
+        },
+        threadKey: "user:cs1/f2#hGONE:1:c1",
+      },
+    ]);
+    const seeded: ReviewState = {
+      ...initialState([cs]),
+      interactions,
+      detachedInteractions,
+    };
+    // f2 already has a live comment at h1:0, so the detached stop dedups into
+    // it — landing the cursor on f2 surfaces the Inspector's Detached section.
+    // Add a detached-only file to prove a brand-new stop appears.
+    const stops = buildCommentStops(cs, interactions, detachedInteractions);
+    expect(stops).toContainEqual({
+      fileId: "cs1/f2",
+      hunkId: "cs1/f2#h1",
+      lineIdx: 0,
+    });
+    // Walking forward eventually seats on f2 (where the detached thread lives).
+    let s = seeded;
+    for (let i = 0; i < 3; i++) s = reducer(s, { type: "MOVE_TO_COMMENT", delta: 1 });
+    expect(s.cursor.fileId).toBe("cs1/f2");
   });
 
   it("walks backwards", () => {

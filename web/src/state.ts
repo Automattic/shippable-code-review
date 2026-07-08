@@ -1027,10 +1027,17 @@ export interface CommentStop {
  * Order: changeset file order → hunk order → line index. Stops come from
  * `user:` and `block:` interaction keys; `parseReplyKey` handles the
  * colon-bearing hunk ids that PR csIds introduce.
+ *
+ * Detached threads (ones that failed to re-anchor on the last reload) have no
+ * live line, so a file carrying any is given a single stop on its first hunk.
+ * Landing the cursor there surfaces the Inspector's "Detached" section, which
+ * is file-scoped. Detached threads that are anchorless or whose file is no
+ * longer in the diff can't seat a cursor and are skipped.
  */
 export function buildCommentStops(
   cs: ChangeSet,
   interactions: Record<string, Interaction[]>,
+  detached: DetachedInteraction[] = [],
 ): CommentStop[] {
   const userIdxByHunk = new Map<string, Set<number>>();
   const addIdx = (hunkId: string, idx: number) => {
@@ -1062,14 +1069,30 @@ export function buildCommentStops(
     addIdx(tail.slice(0, cut), idx);
   }
 
+  const detachedPaths = new Set<string>();
+  for (const d of detached) {
+    const p = d.interaction.anchorPath;
+    if (p) detachedPaths.add(p);
+  }
+
   const stops: CommentStop[] = [];
   for (const f of cs.files) {
-    for (const h of f.hunks) {
-      const idxs = userIdxByHunk.get(h.id);
+    const perFile: Array<{ hunkIdx: number; hunkId: string; lineIdx: number }> = [];
+    for (let hi = 0; hi < f.hunks.length; hi++) {
+      const idxs = userIdxByHunk.get(f.hunks[hi].id);
       if (!idxs) continue;
-      [...idxs]
-        .sort((a, b) => a - b)
-        .forEach((idx) => stops.push({ fileId: f.id, hunkId: h.id, lineIdx: idx }));
+      for (const idx of idxs) perFile.push({ hunkIdx: hi, hunkId: f.hunks[hi].id, lineIdx: idx });
+    }
+    if (detachedPaths.has(f.path) && f.hunks.length > 0) {
+      perFile.push({ hunkIdx: 0, hunkId: f.hunks[0].id, lineIdx: 0 });
+    }
+    perFile.sort((a, b) => a.hunkIdx - b.hunkIdx || a.lineIdx - b.lineIdx);
+    const seen = new Set<string>();
+    for (const p of perFile) {
+      const k = `${p.hunkId}:${p.lineIdx}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      stops.push({ fileId: f.id, hunkId: p.hunkId, lineIdx: p.lineIdx });
     }
   }
   return stops;
@@ -1077,7 +1100,7 @@ export function buildCommentStops(
 
 function moveToComment(state: ReviewState, delta: number): ReviewState {
   const cs = state.changesets.find((c) => c.id === state.cursor.changesetId)!;
-  const stops = buildCommentStops(cs, state.interactions);
+  const stops = buildCommentStops(cs, state.interactions, state.detachedInteractions);
   if (stops.length === 0) return state;
 
   const cur = state.cursor;
@@ -1096,9 +1119,11 @@ function moveToComment(state: ReviewState, delta: number): ReviewState {
     return s.lineIdx - cur.lineIdx;
   };
 
+  // Wrap around the ends: n from the last comment lands on the first, N from
+  // the first lands on the last. Nothing is ever unreachable.
   let target: CommentStop | undefined;
   if (delta > 0) {
-    target = stops.find((s) => cmpToCursor(s) > 0);
+    target = stops.find((s) => cmpToCursor(s) > 0) ?? stops[0];
   } else {
     for (let i = stops.length - 1; i >= 0; i--) {
       if (cmpToCursor(stops[i]) < 0) {
@@ -1106,8 +1131,8 @@ function moveToComment(state: ReviewState, delta: number): ReviewState {
         break;
       }
     }
+    target ??= stops[stops.length - 1];
   }
-  if (!target) return state;
 
   return applyCursor(
     state,
