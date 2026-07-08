@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listCommits, rangeChangeset } from "./worktrees.ts";
+import { listCommits, rangeChangeset, stateFor } from "./worktrees.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -166,5 +166,46 @@ describe("rangeChangeset", () => {
     expect(aCommit.subject).toBe("add a");
     expect(aCommit.body).toBe("");
     expect(aCommit.files).toEqual(["a.txt"]);
+  });
+});
+
+describe("stateFor dirtyHash", () => {
+  it("is null and dirty:false on a clean tree", async () => {
+    await commit("a.txt", "a\n", "add a");
+    const state = await stateFor(repo);
+    expect(state.dirty).toBe(false);
+    expect(state.dirtyHash).toBeNull();
+  });
+
+  it("flips when an already-modified file is edited again", async () => {
+    await commit("a.txt", "one\n", "add a");
+    await fs.writeFile(path.join(repo, "a.txt"), "two\n");
+    const first = await stateFor(repo);
+    await fs.writeFile(path.join(repo, "a.txt"), "three-longer\n");
+    const second = await stateFor(repo);
+    expect(first.dirtyHash).not.toBeNull();
+    expect(second.dirtyHash).not.toBe(first.dirtyHash);
+  });
+
+  it("flips on a same-length edit via mtime, not just size", async () => {
+    await commit("a.txt", "orig\n", "add a");
+    const file = path.join(repo, "a.txt");
+    await fs.writeFile(file, "AAAA\n");
+    await fs.utimes(file, new Date(1000), new Date(1000));
+    const first = await stateFor(repo);
+    await fs.writeFile(file, "BBBB\n"); // same length, different content
+    await fs.utimes(file, new Date(2000), new Date(2000));
+    const second = await stateFor(repo);
+    expect(second.dirtyHash).not.toBe(first.dirtyHash);
+  });
+
+  it("flips when an already-untracked file is edited again", async () => {
+    await commit("a.txt", "a\n", "add a");
+    await fs.writeFile(path.join(repo, "new.txt"), "one\n");
+    const first = await stateFor(repo);
+    await fs.writeFile(path.join(repo, "new.txt"), "two-longer\n");
+    const second = await stateFor(repo);
+    expect(first.dirtyHash).not.toBeNull();
+    expect(second.dirtyHash).not.toBe(first.dirtyHash);
   });
 });

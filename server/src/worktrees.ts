@@ -294,13 +294,18 @@ const lastFingerprint = new Map<string, string>();
 
 export async function stateFor(worktreePath: string): Promise<WorktreeState> {
   await assertGitDir(worktreePath);
-  const [sha, statusBuf] = await Promise.all([
+  const [sha, statusBuf, contentBuf] = await Promise.all([
     revParseHead(worktreePath),
     statusPorcelainV2(worktreePath),
+    worktreeContentDigest(worktreePath),
   ]);
+  // `statusBuf` catches set/staging changes (add, delete, rename, new
+  // untracked); `contentBuf` catches content edits to files already listed as
+  // changed — porcelain v2 is content-blind for those, so on its own the hash
+  // wouldn't move when you re-edit a file you're already reviewing.
   const dirtyHash = statusBuf.length === 0
     ? null
-    : createHash("sha1").update(statusBuf).digest("hex").slice(0, 16);
+    : createHash("sha1").update(statusBuf).update(contentBuf).digest("hex").slice(0, 16);
   const fingerprint = `${sha}:${dirtyHash ?? ""}`;
   const previous = lastFingerprint.get(worktreePath);
   if (previous !== undefined && previous !== fingerprint) {
@@ -330,6 +335,33 @@ async function statusPorcelainV2(worktreePath: string): Promise<Buffer> {
     { cwd: worktreePath, maxBuffer: 8 * 1024 * 1024, encoding: "buffer" },
   );
   return stdout;
+}
+
+/**
+ * Digest of `size + mtime` for each worktree-changed file (modified-unstaged
+ * plus untracked). Any save bumps a file's mtime, so this flips whenever
+ * content changes — without reading file bodies or running a diff. Deleted
+ * files are skipped: `ls-files -m` still lists a just-removed path, but the
+ * porcelain buffer already reflects the deletion, so the overall hash moves.
+ */
+async function worktreeContentDigest(worktreePath: string): Promise<string> {
+  const { stdout } = await execFileAsync(
+    GIT,
+    ["ls-files", "-m", "-o", "--exclude-standard", "-z"],
+    { cwd: worktreePath, maxBuffer: 8 * 1024 * 1024 },
+  );
+  const paths = stdout.split("\0").filter(Boolean);
+  const parts = await Promise.all(
+    paths.map(async (rel) => {
+      try {
+        const st = await fs.stat(path.join(worktreePath, rel), { bigint: true });
+        return `${rel}\0${st.size}\0${st.mtimeNs}`;
+      } catch {
+        return "";
+      }
+    }),
+  );
+  return parts.join("\0");
 }
 
 /**
