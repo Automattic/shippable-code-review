@@ -22,6 +22,7 @@ import {
   getStoredInlineComments,
   persistInlineComments,
 } from "../inlineComments";
+import { useLigatures } from "../useLigatures";
 import {
   getStoredHideNonActiveComments,
   persistHideNonActiveComments,
@@ -48,6 +49,7 @@ export function Welcome({ recents, onLoad, onRecentsChange }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [inlineComments, setInlineComments] = useState(getStoredInlineComments);
+  const [ligatures, setLigatures] = useLigatures();
   function handleChangeInlineComments(value: boolean) {
     setInlineComments(value);
     persistInlineComments(value);
@@ -619,6 +621,8 @@ export function Welcome({ recents, onLoad, onRecentsChange }: Props) {
           onChangeInlineComments={handleChangeInlineComments}
           hideNonActiveComments={hideNonActiveComments}
           onChangeHideNonActiveComments={handleChangeHideNonActiveComments}
+          ligatures={ligatures}
+          onChangeLigatures={setLigatures}
         />
       )}
     </div>

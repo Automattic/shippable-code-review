@@ -137,6 +137,7 @@ import {
   getStoredInlineComments,
   persistInlineComments,
 } from "../inlineComments";
+import { useLigatures } from "../useLigatures";
 import {
   getStoredHideNonActiveComments,
   persistHideNonActiveComments,
@@ -232,6 +233,7 @@ function ReviewWorkspaceInner({
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showInspector, setShowInspector] = useState(getStoredShowInspector);
   const [inlineComments, setInlineComments] = useState(getStoredInlineComments);
+  const [ligatures, setLigatures] = useLigatures();
   const [hideNonActiveComments, setHideNonActiveComments] = useState(
     getStoredHideNonActiveComments,
   );
@@ -2333,6 +2335,8 @@ function ReviewWorkspaceInner({
           onChangeInlineComments={selectInlineComments}
           hideNonActiveComments={hideNonActiveComments}
           onChangeHideNonActiveComments={selectHideNonActiveComments}
+          ligatures={ligatures}
+          onChangeLigatures={setLigatures}
         />
       )}
       <StatusBar

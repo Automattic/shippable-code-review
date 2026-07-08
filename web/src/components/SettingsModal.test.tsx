@@ -27,6 +27,8 @@ const defaultModeProps = {
   onChangeInlineComments: vi.fn(),
   hideNonActiveComments: false,
   onChangeHideNonActiveComments: vi.fn(),
+  ligatures: true,
+  onChangeLigatures: vi.fn(),
 };
 
 describe("SettingsModal", () => {
@@ -183,6 +185,46 @@ describe("SettingsModal — hide non-active comments", () => {
     renderWithHide(true, onChange);
     fireEvent.click(
       await screen.findByRole("button", { name: /hide non-active comments/i }),
+    );
+    expect(onChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("SettingsModal — font ligatures", () => {
+  function renderWithLigatures(ligatures: boolean, onChange = vi.fn()) {
+    return render(
+      <CredentialsProvider>
+        <SettingsModal
+          {...defaultModeProps}
+          onClose={vi.fn()}
+          ligatures={ligatures}
+          onChangeLigatures={onChange}
+        />
+      </CredentialsProvider>,
+    );
+  }
+
+  it("reflects ligatures=true as on", async () => {
+    renderWithLigatures(true);
+    const toggle = await screen.findByRole("button", {
+      name: /font ligatures/i,
+    });
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("reflects ligatures=false as off", async () => {
+    renderWithLigatures(false);
+    const toggle = await screen.findByRole("button", {
+      name: /font ligatures/i,
+    });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("calls onChangeLigatures(false) when toggled while on", async () => {
+    const onChange = vi.fn();
+    renderWithLigatures(true, onChange);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /font ligatures/i }),
     );
     expect(onChange).toHaveBeenCalledWith(false);
   });

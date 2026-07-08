@@ -13,6 +13,8 @@ interface Props {
   onChangeInlineComments: (value: boolean) => void;
   hideNonActiveComments: boolean;
   onChangeHideNonActiveComments: (value: boolean) => void;
+  ligatures: boolean;
+  onChangeLigatures: (value: boolean) => void;
 }
 
 export function SettingsModal({
@@ -21,6 +23,8 @@ export function SettingsModal({
   onChangeInlineComments,
   hideNonActiveComments,
   onChangeHideNonActiveComments,
+  ligatures,
+  onChangeLigatures,
 }: Props) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -77,6 +81,22 @@ export function SettingsModal({
             onClick={() => onChangeHideNonActiveComments(!hideNonActiveComments)}
           >
             Hide non-active comments
+          </button>
+        </section>
+        <section className="modal__sec">
+          <p className="modal__sec-h">display</p>
+          <p className="modal__hint">
+            Turn off if <code>=&gt;</code>, <code>!=</code>, <code>-&gt;</code>{" "}
+            etc. render as merged glyphs and you'd rather see plain characters.
+          </p>
+          <button
+            className={
+              ligatures ? "modal__btn modal__btn--primary" : "modal__btn"
+            }
+            aria-pressed={ligatures}
+            onClick={() => onChangeLigatures(!ligatures)}
+          >
+            Font ligatures
           </button>
         </section>
         <section className="modal__sec">
