@@ -1738,7 +1738,7 @@ function WorkspaceStage({
               });
             }}
             onJumpToFirstComment={(fileId) => {
-              const stop = buildCommentStops(cs, state.interactions).find(
+              const stop = buildCommentStops(cs, state.interactions, state.detachedInteractions).find(
                 (s) => s.fileId === fileId,
               );
               if (!stop) return;
@@ -1799,7 +1799,7 @@ function WorkspaceStage({
               signals: demoIngestSignals,
               detachedInteractions: state.detachedInteractions,
             })}
-            commentCount={buildCommentStops(cs, state.interactions).length}
+            commentCount={buildCommentStops(cs, state.interactions, state.detachedInteractions).length}
             onPrevComment={() => dispatch({ type: "MOVE_TO_COMMENT", delta: -1 })}
             onNextComment={() => dispatch({ type: "MOVE_TO_COMMENT", delta: 1 })}
             lineHasAiNote={demoLineHasAiNote}

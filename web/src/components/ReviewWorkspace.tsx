@@ -1082,7 +1082,7 @@ function ReviewWorkspaceInner({
         break;
       }
       case "jump-to-first-comment": {
-        const stop = buildCommentStops(cs, state.interactions).find(
+        const stop = buildCommentStops(cs, state.interactions, state.detachedInteractions).find(
           (s) => s.fileId === action.fileId,
         );
         if (!stop) return;
@@ -1124,7 +1124,7 @@ function ReviewWorkspaceInner({
     signals: ingestSignals,
     detachedInteractions: state.detachedInteractions,
   });
-  const commentStops = buildCommentStops(cs, state.interactions);
+  const commentStops = buildCommentStops(cs, state.interactions, state.detachedInteractions);
 
   // Mirror Inspector's own derivation: delivered comments indexed by id,
   // undefined when no worktree backs the changeset.
@@ -1905,7 +1905,7 @@ function ReviewWorkspaceInner({
               });
             }}
             onJumpToFirstComment={(fileId) => {
-              const stop = buildCommentStops(cs, state.interactions).find(
+              const stop = buildCommentStops(cs, state.interactions, state.detachedInteractions).find(
                 (s) => s.fileId === fileId,
               );
               if (!stop) return;
