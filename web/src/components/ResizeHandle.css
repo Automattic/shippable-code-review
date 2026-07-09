@@ -1,0 +1,33 @@
+.resize-handle {
+  position: relative;
+  cursor: col-resize;
+  z-index: 3;
+  touch-action: none;
+  align-self: stretch;
+}
+.resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.resize-handle:hover::after,
+.resize-handle:focus-visible::after,
+.resize-handle--active::after {
+  background: var(--accent);
+}
+.resize-handle:focus-visible {
+  outline: none;
+}
+body.resizing-col {
+  cursor: col-resize;
+}
+body.resizing-col,
+body.resizing-col * {
+  user-select: none;
+}
