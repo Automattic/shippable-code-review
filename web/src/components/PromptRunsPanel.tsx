@@ -15,16 +15,12 @@ export interface PromptRunView {
 interface Props {
   runs: PromptRunView[];
   onClose: (id: string) => void;
-  wide: boolean;
-  onToggleWide: () => void;
   initialExpandedIds?: string[];
 }
 
 export function PromptRunsPanel({
   runs,
   onClose,
-  wide,
-  onToggleWide,
   initialExpandedIds,
 }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(
@@ -42,14 +38,6 @@ export function PromptRunsPanel({
     <section className="panel promptruns">
       <header className="panel__h promptruns__h">
         <span>Prompts · {runs.length}</span>
-        <button
-          className="promptruns__widebtn"
-          onClick={onToggleWide}
-          title={wide ? "narrow the sidebar" : "widen the sidebar"}
-          aria-label={wide ? "narrow the sidebar" : "widen the sidebar"}
-        >
-          {wide ? "›" : "‹"}
-        </button>
       </header>
       <ul className="panel__list promptruns__list">
         {runs.map((r) => (

@@ -47,6 +47,17 @@ import { PromptPicker } from "./PromptPicker";
 import { CommandPalette } from "./CommandPalette";
 import { ConfirmModal } from "./ConfirmModal";
 import { type PromptRunView } from "./PromptRunsPanel";
+import { ResizeHandle } from "./ResizeHandle";
+import {
+  getStoredSidebarWidth,
+  getStoredInspectorWidth,
+  clampSidebarWidth,
+  clampInspectorWidth,
+  persistSidebarWidth,
+  persistInspectorWidth,
+  DEFAULT_SIDEBAR_WIDTH,
+  DEFAULT_INSPECTOR_WIDTH,
+} from "../sidebarWidths";
 import { buildAutoFillContext, type Prompt } from "../promptStore";
 import { runPrompt } from "../promptRun";
 import { buildSymbolIndex } from "../symbols";
@@ -295,7 +306,21 @@ function ReviewWorkspaceInner({
     void currentWindowLabel().then(setSelfLabel);
   }, []);
   const [runs, setRuns] = useState<PromptRunView[]>([]);
-  const [sidebarWide, setSidebarWide] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(getStoredSidebarWidth);
+  const [inspectorWidth, setInspectorWidth] = useState(getStoredInspectorWidth);
+  const resizeSidebar = (px: number) => setSidebarWidth(clampSidebarWidth(px));
+  const commitSidebarWidth = (px: number) => {
+    const next = clampSidebarWidth(px);
+    setSidebarWidth(next);
+    persistSidebarWidth(next);
+  };
+  const resizeInspector = (px: number) =>
+    setInspectorWidth(clampInspectorWidth(px));
+  const commitInspectorWidth = (px: number) => {
+    const next = clampInspectorWidth(px);
+    setInspectorWidth(next);
+    persistInspectorWidth(next);
+  };
   const [definitionCapabilities, setDefinitionCapabilities] =
     useState<DefinitionCapabilities | null>(null);
   const [definitionCapabilitiesError, setDefinitionCapabilitiesError] =
@@ -1061,7 +1086,6 @@ function ReviewWorkspaceInner({
   const sidebarSnapshot: SidebarSnapshot = {
     viewModel: sidebarViewModel,
     runs,
-    wide: sidebarWide,
     parentTitle,
   };
 
@@ -1099,9 +1123,6 @@ function ReviewWorkspaceInner({
       }
       case "close-run":
         closePromptRun(action.id);
-        break;
-      case "toggle-wide":
-        setSidebarWide((v) => !v);
         break;
     }
   };
@@ -1882,12 +1903,16 @@ function ReviewWorkspaceInner({
         className={[
           "main",
           showInspector && !isInspectorDetached && "main--with-inspector",
-          !showSidebar || isSidebarDetached
-            ? "main--no-sidebar"
-            : sidebarWide && "main--wide-sidebar",
+          (!showSidebar || isSidebarDetached) && "main--no-sidebar",
         ]
           .filter(Boolean)
           .join(" ")}
+        style={
+          {
+            "--sidebar-width": `${sidebarWidth}px`,
+            "--inspector-width": `${inspectorWidth}px`,
+          } as React.CSSProperties
+        }
       >
         {showSidebar && !isSidebarDetached && (
           <Sidebar
@@ -1921,8 +1946,6 @@ function ReviewWorkspaceInner({
             }}
             runs={runs}
             onCloseRun={closePromptRun}
-            wide={sidebarWide}
-            onToggleWide={() => setSidebarWide((v) => !v)}
             onDetach={
               isTauri() ? () => void openDetachedWindow("sidebar") : undefined
             }
@@ -1931,6 +1954,16 @@ function ReviewWorkspaceInner({
             onQuizDismiss={() => dispatch({ type: "DISMISS_QUIZ" })}
             onQuizSelfEval={(id, e) =>
               dispatch({ type: "SET_QUIZ_SELF_EVAL", questionId: id, selfEval: e })}
+          />
+        )}
+        {showSidebar && !isSidebarDetached && (
+          <ResizeHandle
+            edge="right"
+            width={sidebarWidth}
+            onResize={resizeSidebar}
+            onCommit={commitSidebarWidth}
+            onReset={() => commitSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
+            ariaLabel="Resize file list"
           />
         )}
         <div className="reviewpane">
@@ -2067,6 +2100,16 @@ function ReviewWorkspaceInner({
             lineThreads={inlineComments ? lineThreads : undefined}
           />
         </div>
+        {showInspector && !isInspectorDetached && (
+          <ResizeHandle
+            edge="left"
+            width={inspectorWidth}
+            onResize={resizeInspector}
+            onCommit={commitInspectorWidth}
+            onReset={() => commitInspectorWidth(DEFAULT_INSPECTOR_WIDTH)}
+            ariaLabel="Resize inspector"
+          />
+        )}
         {showInspector && !isInspectorDetached && (
           <Inspector
             viewModel={inspectorViewModel}

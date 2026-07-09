@@ -342,8 +342,6 @@ function WorkspaceFrame({
             onJumpToFirstComment={() => {}}
             runs={[]}
             onCloseRun={() => {}}
-            wide={false}
-            onToggleWide={() => {}}
           />
           <DiffView
             viewModel={buildDiffViewModel({
@@ -564,8 +562,6 @@ function App() {
             <PromptRunsPanel
               runs={RUNS}
               onClose={() => {}}
-              wide={false}
-              onToggleWide={() => {}}
               initialExpandedIds={["run-2"]}
             />
           </aside>

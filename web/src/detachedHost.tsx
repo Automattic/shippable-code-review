@@ -169,7 +169,6 @@ function SidebarBody({ parent, onParentTitle }: SidebarBodyProps) {
     <Sidebar
       viewModel={snapshot.viewModel}
       runs={snapshot.runs}
-      wide={snapshot.wide}
       onPickFile={(fileId) =>
         void emitSidebarAction(parent, { type: "pick-file", fileId })
       }
@@ -181,9 +180,6 @@ function SidebarBody({ parent, onParentTitle }: SidebarBodyProps) {
       }
       onCloseRun={(id) =>
         void emitSidebarAction(parent, { type: "close-run", id })
-      }
-      onToggleWide={() =>
-        void emitSidebarAction(parent, { type: "toggle-wide" })
       }
     />
   );

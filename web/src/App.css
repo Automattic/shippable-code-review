@@ -227,23 +227,18 @@ html[data-ligatures="off"] {
 /* main -------------------------------------------------------------------- */
 .main {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: var(--sidebar-width, 320px) 6px 1fr;
   min-height: 0;
 }
 .main--with-inspector {
-  grid-template-columns: 320px 1fr 340px;
-}
-.main--wide-sidebar {
-  grid-template-columns: 520px 1fr;
-}
-.main--wide-sidebar.main--with-inspector {
-  grid-template-columns: 520px 1fr 340px;
+  grid-template-columns:
+    var(--sidebar-width, 320px) 6px 1fr 6px var(--inspector-width, 340px);
 }
 .main--no-sidebar {
   grid-template-columns: 1fr;
 }
 .main--no-sidebar.main--with-inspector {
-  grid-template-columns: 1fr 340px;
+  grid-template-columns: 1fr 6px var(--inspector-width, 340px);
 }
 .reviewpane {
   min-width: 0;

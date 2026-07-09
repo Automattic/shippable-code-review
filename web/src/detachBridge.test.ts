@@ -42,7 +42,7 @@ const files = [
 
 const interactions: Record<string, Interaction[]> = {};
 
-function makeSnapshot(wide: boolean, runs: PromptRunView[]): SidebarSnapshot {
+function makeSnapshot(runs: PromptRunView[]): SidebarSnapshot {
   return {
     viewModel: buildSidebarViewModel({
       files,
@@ -54,7 +54,6 @@ function makeSnapshot(wide: boolean, runs: PromptRunView[]): SidebarSnapshot {
       interactions,
     }),
     runs,
-    wide,
     parentTitle: "feat/example",
   };
 }
@@ -83,22 +82,16 @@ describe("detach bridge — sidebar snapshot stability", () => {
   });
 
   it("structural equality survives a JSON round-trip", () => {
-    const snap = makeSnapshot(false, [
+    const snap = makeSnapshot([
       { id: "r1", promptName: "x", text: "", status: "streaming" },
     ]);
     const wire = JSON.parse(JSON.stringify(snap));
     expect(wire).toEqual(snap);
   });
 
-  it("differs when content differs (wide toggle)", () => {
-    const a = makeSnapshot(false, []);
-    const b = makeSnapshot(true, []);
-    expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
-  });
-
   it("differs when runs change", () => {
-    const a = makeSnapshot(false, []);
-    const b = makeSnapshot(false, [
+    const a = makeSnapshot([]);
+    const b = makeSnapshot([
       { id: "r1", promptName: "x", text: "", status: "done" },
     ]);
     expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
@@ -216,7 +209,6 @@ describe("detach bridge — action round-trip", () => {
       { type: "pick-file", fileId: "f-a" },
       { type: "jump-to-first-comment", fileId: "f-b" },
       { type: "close-run", id: "run-1" },
-      { type: "toggle-wide" },
     ];
     for (const action of cases) {
       const got = routeOne({ kind: "sidebar", action });

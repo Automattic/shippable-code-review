@@ -35,7 +35,6 @@ import type {
 export interface SidebarSnapshot {
   viewModel: SidebarViewModel;
   runs: PromptRunView[];
-  wide: boolean;
   /** PR title / changeset title / branch — whatever's most identifying
    *  for the parent review. Rendered in the detached chrome so the user
    *  knows which window this child belongs to when many are open. */
@@ -45,8 +44,7 @@ export interface SidebarSnapshot {
 export type SidebarAction =
   | { type: "pick-file"; fileId: string }
   | { type: "jump-to-first-comment"; fileId: string }
-  | { type: "close-run"; id: string }
-  | { type: "toggle-wide" };
+  | { type: "close-run"; id: string };
 
 /** The data half of the docked Inspector's AgentContextProps. Callbacks
  *  (onPickSession, onRefresh) are reconstructed in the child to emit

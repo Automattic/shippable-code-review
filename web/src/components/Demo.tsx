@@ -1365,7 +1365,7 @@ function WorkspaceStage({
         ]
       : (frame.seedRuns ?? []),
   );
-  const [sidebarWide, setSidebarWide] = useState(frame.sidebarWide ?? false);
+  const sidebarWide = frame.sidebarWide ?? false;
   const runControllersRef = useRef<Map<string, AbortController>>(new Map());
   useEffect(() => {
     if (frame.overlay.kind !== "promptPicker") return;
@@ -1706,12 +1706,15 @@ function WorkspaceStage({
         className={[
           "main",
           showInspector && "main--with-inspector",
-          !showSidebar
-            ? "main--no-sidebar"
-            : sidebarWide && "main--wide-sidebar",
+          !showSidebar && "main--no-sidebar",
         ]
           .filter(Boolean)
           .join(" ")}
+        style={
+          sidebarWide
+            ? ({ "--sidebar-width": "520px" } as React.CSSProperties)
+            : undefined
+        }
       >
         {showSidebar && (
           <Sidebar
@@ -1754,8 +1757,6 @@ function WorkspaceStage({
             }}
             runs={runs}
             onCloseRun={closePromptRun}
-            wide={sidebarWide}
-            onToggleWide={() => setSidebarWide((v) => !v)}
           />
         )}
         <DiffView

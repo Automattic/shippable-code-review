@@ -7,22 +7,6 @@
   justify-content: space-between;
   gap: 8px;
 }
-.promptruns__widebtn {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  color: var(--fg-mute);
-  font: inherit;
-  font-size: 11px;
-  line-height: 1;
-  padding: 1px 6px;
-  margin-right: 8px;
-  cursor: pointer;
-}
-.promptruns__widebtn:hover {
-  color: var(--fg);
-  border-color: var(--border-active);
-}
 .promptruns__list {
   display: flex;
   flex-direction: column;

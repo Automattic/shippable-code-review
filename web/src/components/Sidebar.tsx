@@ -11,8 +11,6 @@ interface Props {
   onJumpToFirstComment: (fileId: string) => void;
   runs: PromptRunView[];
   onCloseRun: (id: string) => void;
-  wide: boolean;
-  onToggleWide: () => void;
   /** When set, renders a ↗ button that pops this panel into its own OS
    *  window. Undefined hides the affordance — browser mode and the gallery
    *  preview both rely on that to keep the chrome out of contexts where it
@@ -29,8 +27,6 @@ export function Sidebar({
   onJumpToFirstComment,
   runs,
   onCloseRun,
-  wide,
-  onToggleWide,
   onDetach,
   onQuizSubmit,
   onQuizDismiss,
@@ -58,12 +54,7 @@ export function Sidebar({
         onDismiss={onQuizDismiss ?? (() => {})}
         onSelfEval={onQuizSelfEval ?? (() => {})}
       />
-      <PromptRunsPanel
-        runs={runs}
-        onClose={onCloseRun}
-        wide={wide}
-        onToggleWide={onToggleWide}
-      />
+      <PromptRunsPanel runs={runs} onClose={onCloseRun} />
       <section className="panel">
         <header className="panel__h">Files</header>
         {viewModel.files.length === 0 && (
