@@ -57,6 +57,10 @@ import {
   persistInspectorWidth,
   DEFAULT_SIDEBAR_WIDTH,
   DEFAULT_INSPECTOR_WIDTH,
+  SIDEBAR_MIN,
+  SIDEBAR_MAX,
+  INSPECTOR_MIN,
+  INSPECTOR_MAX,
 } from "../sidebarWidths";
 import { buildAutoFillContext, type Prompt } from "../promptStore";
 import { runPrompt } from "../promptRun";
@@ -1960,6 +1964,8 @@ function ReviewWorkspaceInner({
           <ResizeHandle
             edge="right"
             width={sidebarWidth}
+            min={SIDEBAR_MIN}
+            max={SIDEBAR_MAX}
             onResize={resizeSidebar}
             onCommit={commitSidebarWidth}
             onReset={() => commitSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
@@ -2104,6 +2110,8 @@ function ReviewWorkspaceInner({
           <ResizeHandle
             edge="left"
             width={inspectorWidth}
+            min={INSPECTOR_MIN}
+            max={INSPECTOR_MAX}
             onResize={resizeInspector}
             onCommit={commitInspectorWidth}
             onReset={() => commitInspectorWidth(DEFAULT_INSPECTOR_WIDTH)}

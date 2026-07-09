@@ -8,6 +8,8 @@ interface Props {
    *  inspector). */
   edge: "left" | "right";
   width: number;
+  min: number;
+  max: number;
   /** Live width while dragging or on an arrow-key step. */
   onResize: (px: number) => void;
   /** Final width once the drag ends — the caller persists this. */
@@ -22,6 +24,8 @@ const KEY_STEP_LARGE = 48;
 export function ResizeHandle({
   edge,
   width,
+  min,
+  max,
   onResize,
   onCommit,
   onReset,
@@ -81,6 +85,9 @@ export function ResizeHandle({
       role="separator"
       aria-orientation="vertical"
       aria-label={ariaLabel}
+      aria-valuenow={width}
+      aria-valuemin={min}
+      aria-valuemax={max}
       tabIndex={0}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

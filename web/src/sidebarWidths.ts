@@ -1,10 +1,10 @@
 export const DEFAULT_SIDEBAR_WIDTH = 320;
 export const DEFAULT_INSPECTOR_WIDTH = 340;
 
-const SIDEBAR_MIN = 240;
-const SIDEBAR_MAX = 640;
-const INSPECTOR_MIN = 260;
-const INSPECTOR_MAX = 560;
+export const SIDEBAR_MIN = 240;
+export const SIDEBAR_MAX = 640;
+export const INSPECTOR_MIN = 260;
+export const INSPECTOR_MAX = 560;
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "shippable:sidebar-width";
 const INSPECTOR_WIDTH_STORAGE_KEY = "shippable:inspector-width";
