@@ -31,9 +31,7 @@ export function ResizeHandle({
   onReset,
   ariaLabel,
 }: Props) {
-  const drag = useRef<{ startX: number; startWidth: number; last: number } | null>(
-    null,
-  );
+  const drag = useRef<{ startX: number; startWidth: number } | null>(null);
   const [active, setActive] = useState(false);
 
   // If the handle unmounts mid-drag (e.g. the `f` keybinding hides the
@@ -47,7 +45,7 @@ export function ResizeHandle({
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    drag.current = { startX: e.clientX, startWidth: width, last: width };
+    drag.current = { startX: e.clientX, startWidth: width };
     e.currentTarget.setPointerCapture(e.pointerId);
     document.body.classList.add("resizing-col");
     setActive(true);
@@ -55,14 +53,12 @@ export function ResizeHandle({
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!drag.current) return;
-    const next = widthFor(e.clientX - drag.current.startX);
-    drag.current.last = next;
-    onResize(next);
+    onResize(widthFor(e.clientX - drag.current.startX));
   };
 
   const end = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!drag.current) return;
-    onCommit(drag.current.last);
+    onCommit(widthFor(e.clientX - drag.current.startX));
     drag.current = null;
     e.currentTarget.releasePointerCapture(e.pointerId);
     document.body.classList.remove("resizing-col");
