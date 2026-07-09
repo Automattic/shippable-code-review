@@ -240,6 +240,24 @@ html[data-ligatures="off"] {
 .main--no-sidebar.main--with-inspector {
   grid-template-columns: 1fr 6px var(--inspector-width, 340px);
 }
+/* The demo and feature-docs catalogs render panels straight into `.main`
+   without the ResizeHandle elements the live workspace inserts between them,
+   so the 6px handle tracks would swallow the diff. Drop the tracks here. */
+.demo__app .main,
+.feature-docs__workspace .main {
+  grid-template-columns: var(--sidebar-width, 320px) 1fr;
+}
+.demo__app .main--with-inspector,
+.feature-docs__workspace .main--with-inspector {
+  grid-template-columns:
+    var(--sidebar-width, 320px) 1fr var(--inspector-width, 340px);
+}
+.demo__app .main--no-sidebar {
+  grid-template-columns: 1fr;
+}
+.demo__app .main--no-sidebar.main--with-inspector {
+  grid-template-columns: 1fr var(--inspector-width, 340px);
+}
 .reviewpane {
   min-width: 0;
   min-height: 0;
