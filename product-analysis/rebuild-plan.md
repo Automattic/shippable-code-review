@@ -1,5 +1,11 @@
 # Shippable rebuild — working plan & handoff
 
+> **⚠️ SUPERSEDED by [`v1-architecture.md`](./v1-architecture.md).** This is the
+> grilling decision log (#1–#15) and is kept for its *rationale*, not as current
+> design. Where it disagrees with `v1-architecture.md`, that doc wins. The
+> "in progress" note below reflects the state when this was retired. See
+> [`README.md`](./README.md) for the full document hierarchy.
+
 **Status:** in progress. This captures a grilling session that turns the
 `product-analysis/` feature outline into a concrete rebuild plan. It is a
 *living* decision log, not a finished spec.

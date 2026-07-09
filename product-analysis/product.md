@@ -1,5 +1,11 @@
 # Shippable — Product Analysis
 
+> **ℹ️ Reference doc.** The feature inventory and per-feature acceptance criteria
+> here are still useful input to the rebuild. **§5 (rebuild sequence) is stale** —
+> the authoritative build order is [`rebuild-sequence.md`](./rebuild-sequence.md),
+> derived against the final design in [`v1-architecture.md`](./v1-architecture.md).
+> See [`README.md`](./README.md).
+
 A product-level read of the current prototype, distilled from per-feature
 analyses under this folder. Each feature has its own file (`<feature>.md`)
 with the full breakdown — acceptance criteria, current architecture, gaps,
@@ -245,6 +251,11 @@ A rebuild that doesn't close these out re-imports the same drift.
 ---
 
 ## 5. Suggested rebuild sequence
+
+> **⚠️ STALE — do not follow this ordering.** This phasing predates the final
+> data model (it assumes the old `Interaction`-with-status shape). The
+> authoritative build order is [`rebuild-sequence.md`](./rebuild-sequence.md),
+> re-derived against the four-primitive design in `v1-architecture.md`.
 
 A read of the per-feature acceptance criteria and the unification work
 above. Ordered for a clean cut, not a port.
