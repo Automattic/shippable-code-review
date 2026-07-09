@@ -1,5 +1,5 @@
 import "./ResizeHandle.css";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface Props {
   /** Which edge of its neighbouring panel the handle sits on. "right" means
@@ -31,6 +31,11 @@ export function ResizeHandle({
     null,
   );
   const [active, setActive] = useState(false);
+
+  // If the handle unmounts mid-drag (e.g. the `f` keybinding hides the
+  // sidebar), pointerup never fires — clear the global drag class so the
+  // resize cursor and user-select lock don't stick app-wide.
+  useEffect(() => () => document.body.classList.remove("resizing-col"), []);
 
   const widthFor = (dx: number) =>
     drag.current!.startWidth + (edge === "right" ? dx : -dx);
