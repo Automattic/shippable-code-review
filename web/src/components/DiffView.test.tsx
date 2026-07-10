@@ -918,6 +918,46 @@ describe("DiffView inline threads", () => {
     }
   });
 
+  it("renders comment threads inline on their line in full-file mode", () => {
+    const vm = inlineViewModel();
+    vm.canExpandFile = true;
+    vm.fileFullyExpanded = true;
+    vm.fullFileLines = [
+      { kind: "context", text: "const x = 1;", newNo: 1, oldNo: 1, sign: " ", threads: [] },
+      {
+        kind: "context",
+        text: "const y = 2;",
+        newNo: 2,
+        oldNo: 2,
+        sign: " ",
+        threads: [
+          {
+            threadKey: "userFile:f1:2",
+            messages: [
+              { id: "ag1", author: "claude", authorRole: "agent", body: "unchanged-line finding" },
+            ],
+          },
+        ],
+      },
+    ];
+    const { container } = render(
+      <DiffView
+        viewModel={vm}
+        onSetExpandLevel={() => undefined}
+        onToggleExpandFile={() => undefined}
+        onTogglePreviewFile={() => undefined}
+        inlineThreads={inlineThreads()}
+      />,
+    );
+    const card = container.querySelector(".fullfile-thread");
+    expect(card).not.toBeNull();
+    expect(card!.textContent).toContain("unchanged-line finding");
+    expect(card!.textContent).toContain("claude");
+    // The commented line is flagged; the uncommented one is not.
+    const flagged = container.querySelectorAll(".line--has-comment");
+    expect(flagged.length).toBe(1);
+  });
+
   it("does not turn a pointer gesture inside the inline region into a line drag", () => {
     const onLineFocus = vi.fn();
     const onLineSelectRange = vi.fn();
