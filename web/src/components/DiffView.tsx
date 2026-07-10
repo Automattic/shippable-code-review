@@ -16,6 +16,7 @@ import type {
   DiffViewModel,
   ExpandBarViewModel,
   FullFileLineViewModel,
+  FullFileThreadViewModel,
   HunkViewModel,
   LineThreadsEntry,
   LineThreadsProjection,
@@ -800,29 +801,55 @@ function FullFileView({
         className={`hunk__body ${commentColOn ? "hunk__body--comment-col" : ""}`}
       >
         {lines.map((line, i) => (
-          <div
-            key={i}
-            className={`line line--${line.kind} ${
-              line.kind !== "context" ? "" : "line--ctx-expand"
-            }`}
-          >
-            <span className="line__old">{line.oldNo ?? ""}</span>
-            <span className="line__new">{line.newNo ?? ""}</span>
-            <span className="line__ai" aria-hidden="true">{" "}</span>
-            <span className="line__sign">{line.sign}</span>
-            <LineText
-              filePath={path}
-              language={language}
-              text={line.text}
-              sourceLine={line.newNo ?? null}
-              highlightedNode={highlightedLines?.[i]}
-              onSymbolClick={onSymbolClick}
-            />
-            {commentColOn && <span className="line__comment" />}
-          </div>
+          <Fragment key={i}>
+            <div
+              className={`line line--${line.kind} ${
+                line.kind !== "context" ? "" : "line--ctx-expand"
+              } ${line.threads.length > 0 ? "line--has-comment" : ""}`}
+            >
+              <span className="line__old">{line.oldNo ?? ""}</span>
+              <span className="line__new">{line.newNo ?? ""}</span>
+              <span className="line__ai" aria-hidden="true">
+                {line.threads.length > 0 ? "“" : " "}
+              </span>
+              <span className="line__sign">{line.sign}</span>
+              <LineText
+                filePath={path}
+                language={language}
+                text={line.text}
+                sourceLine={line.newNo ?? null}
+                highlightedNode={highlightedLines?.[i]}
+                onSymbolClick={onSymbolClick}
+              />
+              {commentColOn && <span className="line__comment" />}
+            </div>
+            {line.threads.map((thread) => (
+              <FullFileThreadCard key={thread.threadKey} thread={thread} />
+            ))}
+          </Fragment>
         ))}
       </div>
     </section>
+  );
+}
+
+/** Read-only thread card shown under a line in full-file view. Authoring and
+ *  replies stay in hunk mode / the Inspector; this surface is for reading the
+ *  full picture (including AI findings on unchanged lines) in one place. */
+function FullFileThreadCard({ thread }: { thread: FullFileThreadViewModel }) {
+  return (
+    <div className="fullfile-thread">
+      {thread.messages.map((m) => (
+        <div key={m.id} className="fullfile-thread__msg">
+          <span
+            className={`fullfile-thread__author fullfile-thread__author--${m.authorRole}`}
+          >
+            {m.author}
+          </span>
+          <span className="fullfile-thread__body">{m.body}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 

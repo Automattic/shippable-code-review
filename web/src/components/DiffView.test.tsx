@@ -886,8 +886,8 @@ describe("DiffView inline threads", () => {
     vm.canExpandFile = true;
     vm.fileFullyExpanded = true;
     vm.fullFileLines = [
-      { kind: "context", text: "const x = 1;", newNo: 1, oldNo: 1, sign: " " },
-      { kind: "add", text: "const y = 2;", newNo: 2, sign: "+" },
+      { kind: "context", text: "const x = 1;", newNo: 1, oldNo: 1, sign: " ", threads: [] },
+      { kind: "add", text: "const y = 2;", newNo: 2, sign: "+", threads: [] },
     ];
     const { container } = render(
       <DiffView

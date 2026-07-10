@@ -523,3 +523,34 @@ body:not(:focus-within) .line--cursor::after {
 @keyframes blink {
   50% { opacity: 0; }
 }
+
+/* Read-only comment threads shown inline in full-file view. */
+.fullfile-thread {
+  margin: 2px 0 6px calc(var(--gutter, 6ch) + 2ch);
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent);
+  background: var(--bg-2);
+  border-radius: 0 4px 4px 0;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  white-space: normal;
+}
+.fullfile-thread__msg {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+}
+.fullfile-thread__msg + .fullfile-thread__msg {
+  border-top: 1px dashed var(--border);
+}
+.fullfile-thread__author {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--fg-dim);
+}
+.fullfile-thread__author--agent {
+  color: var(--accent);
+}
+.fullfile-thread__body {
+  color: var(--fg);
+}

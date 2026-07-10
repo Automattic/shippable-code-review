@@ -128,6 +128,16 @@ export interface HunkViewModel {
 
 // ─── File-level view model ────────────────────────────────────────────────────
 
+export interface FullFileThreadViewModel {
+  threadKey: string;
+  messages: {
+    id: string;
+    author: string;
+    authorRole: string;
+    body: string;
+  }[];
+}
+
 export interface FullFileLineViewModel {
   kind: LineKind;
   text: string;
@@ -135,6 +145,10 @@ export interface FullFileLineViewModel {
   newNo?: number;
   /** Pre-computed sign glyph ("+" | "-" | " "). */
   sign: string;
+  /** Comment threads anchored to this line, shown inline in full-file view.
+   *  Covers hunk-anchored `user:`/`block:` threads (mapped via the line's
+   *  newNo) and file-line `userFile:` threads. Empty for most lines. */
+  threads: FullFileThreadViewModel[];
 }
 
 export interface DiffViewModel {
@@ -206,6 +220,52 @@ export interface BuildDiffViewModelArgs {
   canHydrateExpansion?: boolean;
 }
 
+/**
+ * Group comment threads by the post-change line they sit on, for full-file
+ * rendering. Hunk-anchored `user:`/`block:` threads map through the hunk line's
+ * `newNo`; `userFile:` threads carry it directly. Del-line and cross-file
+ * threads (no `newNo` on this file) drop out — they stay visible in hunk mode.
+ * AI-note annotations (`note:`) keep their existing glyph rendering and aren't
+ * repeated here.
+ */
+function fullFileThreadsByNewNo(
+  file: DiffFile,
+  replies: Record<string, Interaction[]> | Record<string, string[]> | Record<string, unknown[]>,
+): Map<number, FullFileThreadViewModel[]> {
+  const hunkLineNewNo = new Map<string, number>();
+  for (const h of file.hunks) {
+    h.lines.forEach((l, i) => {
+      if (l.newNo !== undefined) hunkLineNewNo.set(`${h.id}:${i}`, l.newNo);
+    });
+  }
+  const out = new Map<number, FullFileThreadViewModel[]>();
+  for (const [key, list] of Object.entries(replies)) {
+    if (!list || list.length === 0) continue;
+    const parsed = parseReplyKey(key);
+    if (!parsed) continue;
+    let newNo: number | undefined;
+    if (parsed.kind === "userFile") {
+      if (parsed.fileId !== file.id) continue;
+      newNo = parsed.newNo;
+    } else if (parsed.kind === "user") {
+      newNo = hunkLineNewNo.get(`${parsed.hunkId}:${parsed.lineIdx}`);
+    } else if (parsed.kind === "block") {
+      newNo = hunkLineNewNo.get(`${parsed.hunkId}:${parsed.lo}`);
+    }
+    if (newNo === undefined) continue;
+    const messages = (list as Interaction[]).map((ix) => ({
+      id: ix.id,
+      author: ix.author,
+      authorRole: ix.authorRole,
+      body: ix.body,
+    }));
+    const arr = out.get(newNo);
+    if (arr) arr.push({ threadKey: key, messages });
+    else out.set(newNo, [{ threadKey: key, messages }]);
+  }
+  return out;
+}
+
 export function buildDiffViewModel({
   file,
   currentHunkId,
@@ -242,6 +302,10 @@ export function buildDiffViewModel({
     : "";
 
   // Pre-compute full-file lines only when needed.
+  const threadsByNewNo =
+    fileFullyExpanded && !previewing && file.fullContent
+      ? fullFileThreadsByNewNo(file, replies)
+      : new Map<number, FullFileThreadViewModel[]>();
   const fullFileLines: FullFileLineViewModel[] =
     fileFullyExpanded && !previewing && file.fullContent
       ? file.fullContent.map((line) => ({
@@ -251,6 +315,10 @@ export function buildDiffViewModel({
           newNo: line.newNo,
           sign:
             line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ",
+          threads:
+            line.newNo !== undefined
+              ? (threadsByNewNo.get(line.newNo) ?? [])
+              : [],
         }))
       : [];
 

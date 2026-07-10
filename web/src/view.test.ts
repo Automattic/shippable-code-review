@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDiffViewModel,
   buildInspectorViewModel,
   buildLineThreadsProjection,
   buildSidebarViewModel,
@@ -14,6 +15,7 @@ import {
   lineNoteReplyKey,
   teammateReplyKey,
   userCommentKey,
+  userFileCommentKey,
 } from "./types";
 
 function reply(id: string): Interaction {
@@ -430,5 +432,97 @@ describe("filterActiveLineThreads", () => {
       draftingKey: null,
     });
     expect(filterActiveLineThreads(projection)).toEqual([]);
+  });
+});
+
+describe("buildDiffViewModel — full-file comment threads", () => {
+  function fileWithFullContent(): DiffFile {
+    const hunk: Hunk = {
+      id: "f1#h1",
+      header: "@@",
+      oldStart: 5,
+      oldCount: 3,
+      newStart: 5,
+      newCount: 3,
+      lines: [
+        { kind: "context", text: "e", oldNo: 5, newNo: 5 },
+        { kind: "add", text: "f", newNo: 6 },
+        { kind: "context", text: "g", oldNo: 6, newNo: 7 },
+      ],
+    };
+    const fullContent: DiffLine[] = Array.from({ length: 8 }, (_, i) => ({
+      kind: "context",
+      text: `L${i + 1}`,
+      oldNo: i + 1,
+      newNo: i + 1,
+    }));
+    return { id: "f1", path: "a.ts", language: "ts", status: "modified", hunks: [hunk], fullContent };
+  }
+
+  function agentReply(id: string): Interaction {
+    return {
+      id,
+      threadKey: "x",
+      target: "line",
+      intent: "comment",
+      author: "claude",
+      authorRole: "agent",
+      body: "issue here",
+      createdAt: "2026-05-11T00:00:00Z",
+    };
+  }
+
+  it("attaches userFile and hunk-anchored threads to full-file lines by newNo", () => {
+    const file = fileWithFullContent();
+    const vm = buildDiffViewModel({
+      file,
+      currentHunkId: "f1#h1",
+      cursorLineIdx: 0,
+      read: {},
+      isFileReviewed: false,
+      acked: new Set(),
+      replies: {
+        [userFileCommentKey("f1", 2)]: [agentReply("ag_fl")],
+        [userCommentKey("f1#h1", 1, "c1")]: [reply("u1")],
+      },
+      expandLevelAbove: {},
+      expandLevelBelow: {},
+      fileFullyExpanded: true,
+      filePreviewing: false,
+    });
+
+    const byNewNo = new Map(vm.fullFileLines.map((l) => [l.newNo, l]));
+    // userFile thread on the unchanged line 2.
+    expect(byNewNo.get(2)!.threads.map((t) => t.threadKey)).toEqual([
+      userFileCommentKey("f1", 2),
+    ]);
+    expect(byNewNo.get(2)!.threads[0].messages[0]).toMatchObject({
+      author: "claude",
+      authorRole: "agent",
+    });
+    // Hunk-anchored user comment on hunk line idx 1 → newNo 6.
+    expect(byNewNo.get(6)!.threads.map((t) => t.threadKey)).toEqual([
+      userCommentKey("f1#h1", 1, "c1"),
+    ]);
+    // A line with no comment has an empty threads array.
+    expect(byNewNo.get(1)!.threads).toEqual([]);
+  });
+
+  it("emits no full-file threads when not fully expanded", () => {
+    const file = fileWithFullContent();
+    const vm = buildDiffViewModel({
+      file,
+      currentHunkId: "f1#h1",
+      cursorLineIdx: 0,
+      read: {},
+      isFileReviewed: false,
+      acked: new Set(),
+      replies: { [userFileCommentKey("f1", 2)]: [agentReply("ag_fl")] },
+      expandLevelAbove: {},
+      expandLevelBelow: {},
+      fileFullyExpanded: false,
+      filePreviewing: false,
+    });
+    expect(vm.fullFileLines).toEqual([]);
   });
 });
