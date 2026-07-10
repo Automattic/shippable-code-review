@@ -955,6 +955,15 @@ export interface InspectorViewModel {
    * together. Empty when nothing on this file is detached.
    */
   detachedThreads: DetachedThreadRowItem[];
+
+  // ── File-line threads (unchanged lines) ────────────────────────────────
+  /**
+   * `userFile:` threads on this file — comments anchored to a line outside
+   * every hunk (e.g. an AI finding on an unchanged line). Same card shape as
+   * detached threads, but these are current, not lost anchors. Empty when the
+   * file has none.
+   */
+  fileLineThreads: DetachedThreadRowItem[];
 }
 
 /**
@@ -1294,6 +1303,40 @@ export function buildInspectorViewModel({
     );
   });
 
+  // `userFile:` threads on this file — file-line comments (AI findings on
+  // unchanged lines). Reuse the detached card shape; these carry a live line.
+  const fileLineThreads: DetachedThreadRowItem[] = [];
+  for (const [threadKey, list] of Object.entries(replies)) {
+    if (!list || list.length === 0) continue;
+    const parsed = parseReplyKey(threadKey);
+    if (parsed?.kind !== "userFile" || parsed.fileId !== file.id) continue;
+    const merged = [...list].sort((a, b) =>
+      a.createdAt.localeCompare(b.createdAt),
+    );
+    const head = merged[0];
+    const snippetLines = (head.anchorContext ?? []).map((l) => ({
+      kind: l.kind,
+      text: l.text,
+      sign: l.kind === "add" ? "+" : l.kind === "del" ? "-" : " ",
+    }));
+    fileLineThreads.push({
+      threadKey,
+      replies: merged,
+      anchorPath: head.anchorPath ?? file.path,
+      anchorLineNo: head.anchorLineNo ?? parsed.newNo,
+      snippetLines,
+      originType: head.originType ?? "committed",
+      originSha: head.originSha ?? "",
+      originSha7: head.originSha ? head.originSha.slice(0, 7) : "",
+      isDrafting: draftingKey === threadKey,
+    });
+  }
+  fileLineThreads.sort(
+    (a, b) =>
+      (a.anchorLineNo ?? 0) - (b.anchorLineNo ?? 0) ||
+      a.threadKey.localeCompare(b.threadKey),
+  );
+
   return {
     locationLabel,
     language: file.language,
@@ -1324,6 +1367,7 @@ export function buildInspectorViewModel({
     draftStubRow,
 
     detachedThreads,
+    fileLineThreads,
   };
 }
 

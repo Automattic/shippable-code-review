@@ -478,6 +478,7 @@ describe("DiffView inline threads", () => {
       showDraftStub: false,
       draftStubRow: null,
       detachedThreads: [],
+      fileLineThreads: [],
     };
   }
 

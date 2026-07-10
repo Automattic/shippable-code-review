@@ -526,3 +526,74 @@ describe("buildDiffViewModel — full-file comment threads", () => {
     expect(vm.fullFileLines).toEqual([]);
   });
 });
+
+describe("buildInspectorViewModel fileLineThreads", () => {
+  const HUNK_ID = "cs1/a.ts#h1";
+  const diffLine: DiffLine = { kind: "add", text: "x", newNo: 10 };
+  const hunk: Hunk = {
+    id: HUNK_ID,
+    header: "@@",
+    oldStart: 1,
+    oldCount: 3,
+    newStart: 1,
+    newCount: 3,
+    lines: [diffLine, diffLine, diffLine],
+  };
+  const file: DiffFile = {
+    id: "f1",
+    path: "a.ts",
+    language: "ts",
+    status: "modified",
+    hunks: [hunk],
+  };
+  const cursor: Cursor = { changesetId: "cs1", fileId: "f1", hunkId: HUNK_ID, lineIdx: 0 };
+
+  function agentFileReply(id: string): Interaction {
+    return {
+      id,
+      threadKey: userFileCommentKey("f1", 2),
+      target: "line",
+      intent: "comment",
+      author: "claude",
+      authorRole: "agent",
+      body: "unchanged-line finding",
+      createdAt: "2026-05-11T00:00:00Z",
+      anchorPath: "a.ts",
+      anchorLineNo: 2,
+    };
+  }
+
+  it("surfaces userFile threads on the current file, not in the detached bucket", () => {
+    const vm = buildInspectorViewModel({
+      file,
+      hunk,
+      line: diffLine,
+      cursor,
+      symbols: new Map(),
+      acked: new Set(),
+      replies: { [userFileCommentKey("f1", 2)]: [agentFileReply("ag1")] },
+      draftingKey: null,
+    });
+    expect(vm.detachedThreads).toEqual([]);
+    expect(vm.fileLineThreads).toHaveLength(1);
+    expect(vm.fileLineThreads[0]).toMatchObject({
+      threadKey: userFileCommentKey("f1", 2),
+      anchorPath: "a.ts",
+      anchorLineNo: 2,
+    });
+  });
+
+  it("ignores userFile threads anchored to a different file", () => {
+    const vm = buildInspectorViewModel({
+      file,
+      hunk,
+      line: diffLine,
+      cursor,
+      symbols: new Map(),
+      acked: new Set(),
+      replies: { [userFileCommentKey("other", 2)]: [agentFileReply("ag2")] },
+      draftingKey: null,
+    });
+    expect(vm.fileLineThreads).toEqual([]);
+  });
+});

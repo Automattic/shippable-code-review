@@ -70,6 +70,7 @@ function minimalViewModel() {
     showDraftStub: false,
     draftStubRow: null,
     detachedThreads: [],
+    fileLineThreads: [],
   };
 }
 

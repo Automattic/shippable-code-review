@@ -92,6 +92,8 @@ function vmWith(over: Partial<InspectorViewModel>): InspectorViewModel {
     draftStubRow: null,
 
     detachedThreads: [],
+
+    fileLineThreads: [],
     ...over,
   };
 }

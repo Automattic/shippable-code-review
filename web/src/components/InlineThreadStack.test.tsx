@@ -144,6 +144,7 @@ function richViewModel(): InspectorViewModel {
         isDrafting: false,
       },
     ],
+    fileLineThreads: [],
   };
 }
 

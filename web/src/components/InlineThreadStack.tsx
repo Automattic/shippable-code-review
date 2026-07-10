@@ -219,6 +219,40 @@ export function InlineThreadStack({
         />
       )}
 
+      {lineAnchored && vm.fileLineThreads.length > 0 && (
+        <section className="inspector__sec">
+          <div
+            className="inspector__sec-h"
+            title="comments on lines outside the changed hunks (e.g. an AI finding on an unchanged line)"
+          >
+            On unchanged lines
+            <span className="inspector__sec-count">
+              {vm.fileLineThreads.length} on this file
+            </span>
+          </div>
+          <ul className="notes">
+            {vm.fileLineThreads.map((row) => (
+              <DetachedThreadCard
+                key={row.threadKey}
+                row={row}
+                symbols={symbols}
+                worktreePath={worktreePath}
+                deliveredById={deliveredById}
+                isDrafting={row.isDrafting}
+                draftBody={draftFor(row.threadKey)}
+                onJump={onJump}
+                onStartDraft={() => onStartDraft(row.threadKey)}
+                onCloseDraft={onCloseDraft}
+                onChangeDraft={(body) => onChangeDraft(row.threadKey, body)}
+                onSubmitReply={(body) => onSubmitReply(row.threadKey, body)}
+                onDeleteReply={(replyId) => onDeleteReply(row.threadKey, replyId)}
+                onRetryReply={(replyId) => onRetryReply(row.threadKey, replyId)}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
+
       {lineAnchored && vm.detachedThreads.length > 0 && (
         <section className="inspector__sec">
           <div
