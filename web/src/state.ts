@@ -5,6 +5,7 @@ import type {
   ChangeSet,
   DetachedInteraction,
   DiffFile,
+  DiffLine,
   Hunk,
   Interaction,
   InteractionTarget,
@@ -24,8 +25,9 @@ import {
   parseReplyKey,
   teammateReplyKey,
   userCommentKey,
+  userFileCommentKey,
 } from "./types";
-import { findAnchorInFile, hashAnchorWindow } from "./anchor";
+import { captureAnchorContext, findAnchorInFile, hashAnchorWindow } from "./anchor";
 import { enrichWithFileContent } from "./expandContext";
 import { newReviewerInteractionId } from "./interactions";
 import { pickNextForFile, pickNextForChangeset } from "./quiz";
@@ -1045,6 +1047,10 @@ export function buildCommentStops(
     if (!s) userIdxByHunk.set(hunkId, (s = new Set()));
     s.add(idx);
   };
+  // Files carrying a file-line thread (`userFile:`/`blockFile:`) — anchored to
+  // a line outside every hunk, so like detached threads they get one file-level
+  // stop rather than a per-line one.
+  const fileLineFileIds = new Set<string>();
   for (const [key, list] of Object.entries(interactions)) {
     if (list.length === 0) continue;
     const parsed = parseReplyKey(key);
@@ -1053,6 +1059,8 @@ export function buildCommentStops(
       addIdx(parsed.hunkId, parsed.lineIdx);
     } else if (parsed.kind === "block") {
       addIdx(parsed.hunkId, parsed.lo);
+    } else if (parsed.kind === "userFile" || parsed.kind === "blockFile") {
+      fileLineFileIds.add(parsed.fileId);
     }
   }
 
@@ -1083,7 +1091,7 @@ export function buildCommentStops(
       if (!idxs) continue;
       for (const idx of idxs) perFile.push({ hunkIdx: hi, hunkId: f.hunks[hi].id, lineIdx: idx });
     }
-    if (detachedPaths.has(f.path) && f.hunks.length > 0) {
+    if ((detachedPaths.has(f.path) || fileLineFileIds.has(f.id)) && f.hunks.length > 0) {
       perFile.push({ hunkIdx: 0, hunkId: f.hunks[0].id, lineIdx: 0 });
     }
     perFile.sort((a, b) => a.hunkIdx - b.hunkIdx || a.lineIdx - b.lineIdx);
@@ -1271,6 +1279,10 @@ function mergeAgentInteractions(
     const located = activeCs
       ? resolveAgentTopLevelAnchor(activeCs, p.file, p.lines)
       : null;
+    const fileLine =
+      !located && activeCs
+        ? resolveAgentFileLineAnchor(activeCs, p.file, p.lines)
+        : null;
     if (located) {
       // Re-poll: reuse the thread key this comment already lives under so it
       // updates in place. Only a genuinely new comment mints a fresh key.
@@ -1295,10 +1307,33 @@ function mergeAgentInteractions(
           ...structured,
         },
       });
+    } else if (fileLine) {
+      // Line is outside every hunk but present in the file — anchor to the
+      // file line so it renders inline (full-file view) instead of detaching.
+      const existingKey = threadKeyById.get(p.id);
+      const threadKey = existingKey ?? userFileCommentKey(fileLine.fileId, fileLine.newNo);
+      resolved.push({
+        threadKey,
+        interaction: {
+          id: p.id,
+          threadKey,
+          target: "line",
+          intent: p.intent,
+          author: p.author,
+          authorRole: "agent",
+          body: p.body,
+          createdAt: p.postedAt,
+          anchorPath: p.file,
+          anchorLineNo: fileLine.newNo,
+          anchorContext: fileLine.anchorContext,
+          anchorHash: fileLine.anchorHash,
+          ...structured,
+        },
+      });
     } else {
-      // Either no active changeset, file not in the diff, or lines fall
-      // outside any hunk. Park in detached with a synthetic threadKey so
-      // the Sidebar's Detached group surfaces it.
+      // No active changeset, file not in the diff, or the line isn't in the
+      // file's content. Park in detached with a synthetic threadKey so the
+      // Sidebar's Detached group surfaces it.
       const detachedKey = `agent-detached:${p.id}`;
       const interaction: Interaction = {
         id: p.id,
@@ -1403,6 +1438,34 @@ function resolveAgentTopLevelAnchor(
   return null;
 }
 
+/**
+ * Fallback for an agent comment whose line isn't inside any hunk: anchor it to
+ * the file line if that line exists in the file's full content. This is how AI
+ * findings on unchanged lines (e.g. an issue on context the change depends on)
+ * become first-class file-line threads instead of detached "outdated" cards.
+ * Needs `file.fullContent`; returns null without it, so the caller falls back
+ * to detached.
+ */
+function resolveAgentFileLineAnchor(
+  cs: ChangeSet,
+  file: string,
+  lines: string,
+): { fileId: string; newNo: number; anchorContext: DiffLine[]; anchorHash: string } | null {
+  const match = lines.match(/^(\d+)(?:-\d+)?$/);
+  if (!match) return null;
+  const newNo = Number(match[1]);
+  if (!Number.isFinite(newNo)) return null;
+
+  const targetFile = cs.files.find((f) => f.path === file);
+  if (!targetFile?.fullContent) return null;
+
+  const idx = targetFile.fullContent.findIndex((l) => l.newNo === newNo);
+  if (idx < 0) return null;
+
+  const { context, hash } = captureAnchorContext(targetFile.fullContent, idx);
+  return { fileId: targetFile.id, newNo, anchorContext: context, anchorHash: hash };
+}
+
 function findLineIdxForLineNo(
   hunk: Hunk,
   lineNo: number,
@@ -1434,7 +1497,9 @@ export function replyTarget(): InteractionTarget {
  */
 export function firstTargetForKey(threadKey: string): InteractionTarget {
   if (threadKey.startsWith("user:")) return "line";
+  if (threadKey.startsWith("userFile:")) return "line";
   if (threadKey.startsWith("block:")) return "block";
+  if (threadKey.startsWith("blockFile:")) return "block";
   return replyTarget();
 }
 

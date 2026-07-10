@@ -198,6 +198,7 @@ import {
   noteKey,
   parseReplyKey,
   userCommentKey,
+  userFileCommentKey,
 } from "./types";
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
@@ -499,6 +500,15 @@ function csWithComments(): {
   return { cs, interactions };
 }
 
+describe("firstTargetForKey", () => {
+  it("maps file-line keys to their base target", () => {
+    expect(firstTargetForKey(userFileCommentKey("cs1/f1", 2))).toBe("line");
+    expect(firstTargetForKey("blockFile:cs1/f1:2-4")).toBe("block");
+    expect(firstTargetForKey(userCommentKey("cs1/f1#h1", 0, "c1"))).toBe("line");
+    expect(firstTargetForKey("note:cs1/f1#h1:0")).toBe("reply");
+  });
+});
+
 describe("buildCommentStops", () => {
   it("orders stops by file → hunk → lineIdx and merges AI + user sources", () => {
     const { cs, interactions } = csWithComments();
@@ -567,6 +577,18 @@ describe("buildCommentStops", () => {
     ]);
     // Live comment already sits at h1:0; the detached stop dedups into it.
     expect(buildCommentStops(cs, interactions, detached)).toEqual([
+      { fileId: "cs1/f1", hunkId: "cs1/f1#h1", lineIdx: 0 },
+    ]);
+  });
+
+  it("adds a file stop for a userFile thread (anchored outside hunks)", () => {
+    const cs = makeChangeset("cs1", [makeFile("cs1/f1", [makeHunk("cs1/f1#h1", 3)])]);
+    const interactions = mkUserInteractionMap({
+      [userFileCommentKey("cs1/f1", 2)]: [
+        { id: "u1", author: "you", body: "x", createdAt: "2026-04-30T00:00:00.000Z" },
+      ],
+    });
+    expect(buildCommentStops(cs, interactions)).toEqual([
       { fileId: "cs1/f1", hunkId: "cs1/f1#h1", lineIdx: 0 },
     ]);
   });
@@ -1702,6 +1724,64 @@ describe("MERGE_AGENT_REPLIES — top-level entries", () => {
     });
     expect(merged.detachedInteractions).toHaveLength(1);
     expect(merged.detachedInteractions[0].interaction.id).toBe("ag_4");
+  });
+
+  // With full file content available, a line outside every hunk but present in
+  // the file anchors to a userFile thread instead of detaching — this is how AI
+  // findings on unchanged lines stay first-class.
+  function csWithFullContent(): ChangeSet {
+    const cs = csForTopLevel();
+    const file = cs.files[0];
+    const fullContent: DiffLine[] = Array.from({ length: 12 }, (_, i) => ({
+      kind: "context",
+      text: `L${i + 1}`,
+      oldNo: i + 1,
+      newNo: i + 1,
+    }));
+    return { ...cs, files: [{ ...file, fullContent }] };
+  }
+
+  it("anchors an unchanged-line agent comment (outside hunks, in full content) to a userFile thread", () => {
+    const s = initialState([csWithFullContent()]);
+    const merged = reducer(s, {
+      type: "MERGE_AGENT_REPLIES",
+      polled: [topLevel({ id: "ag_fl", file: "src/foo.ts", lines: "2" })],
+    });
+    expect(merged.detachedInteractions).toHaveLength(0);
+    const keys = Object.keys(merged.interactions);
+    expect(keys).toHaveLength(1);
+    expect(parseReplyKey(keys[0])).toMatchObject({
+      kind: "userFile",
+      fileId: "cs1/f1",
+      newNo: 2,
+    });
+    expect(merged.interactions[keys[0]][0]).toMatchObject({
+      id: "ag_fl",
+      authorRole: "agent",
+      anchorPath: "src/foo.ts",
+      anchorLineNo: 2,
+    });
+  });
+
+  it("still detaches an agent comment whose line is absent from full content", () => {
+    const s = initialState([csWithFullContent()]);
+    const merged = reducer(s, {
+      type: "MERGE_AGENT_REPLIES",
+      polled: [topLevel({ id: "ag_gone", file: "src/foo.ts", lines: "999" })],
+    });
+    expect(merged.detachedInteractions).toHaveLength(1);
+    expect(Object.keys(merged.interactions)).toHaveLength(0);
+  });
+
+  it("still resolves an in-hunk agent comment to a user: thread when full content exists", () => {
+    const s = initialState([csWithFullContent()]);
+    const merged = reducer(s, {
+      type: "MERGE_AGENT_REPLIES",
+      polled: [topLevel({ id: "ag_inhunk", file: "src/foo.ts", lines: "7" })],
+    });
+    const keys = Object.keys(merged.interactions);
+    expect(keys).toHaveLength(1);
+    expect(parseReplyKey(keys[0])).toMatchObject({ kind: "user", hunkId: "cs1/f1#h1" });
   });
 
   it("deduplicates detached entries by id across repeated polls", () => {
