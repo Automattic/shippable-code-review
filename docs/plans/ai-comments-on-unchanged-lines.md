@@ -1,6 +1,23 @@
 # AI comments on unchanged lines + comments in full-file mode — design
 
-**Status:** planned 2026-07-10. Follows the `fix/next-comment-nav` stopgap.
+**Status:** narrow v1 implemented 2026-07-10 on `fix/next-comment-nav` (chosen
+over reusing the old worktree). Shipped:
+
+- AI comments on lines outside hunks anchor to `userFile:` file-line threads
+  (`resolveAgentFileLineAnchor` in `state.ts`), not detached, when the line is in
+  `file.fullContent`.
+- Full-file view renders every comment inline (read-only cards); hunk-anchored
+  and `userFile:` threads both, keyed by `newNo`.
+- The Inspector shows a file's `userFile:` threads in an "On unchanged lines"
+  section (reply-capable) so hunk mode doesn't lose them.
+- `n`/`N` reach them; the comment count includes them.
+
+Verified by unit + view-model + real-component-render tests (793 green), lint,
+build. **Not** yet exercised in the live app against a real AI review — no
+fixture changeset carries `fullContent`, so a gallery view would need one
+authored. Deferred: del-line comments and `note:` annotations in full-file view,
+a precise file-line cursor (nav lands on the file, not the exact line), and PR
+ingest (no full file content there yet).
 
 ## Problem
 
