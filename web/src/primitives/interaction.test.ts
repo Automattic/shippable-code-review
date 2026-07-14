@@ -95,4 +95,19 @@ describe("validateInteractionWrite", () => {
     });
     expect(r.ok).toBe(false);
   });
+
+  it("accepts a neutral respond reply anchored on an interaction", () => {
+    expect(validateInteractionWrite({
+      anchor: { type: "interaction", interactionId: "i1" }, intent: "respond",
+      role: "human", parentExists: true,
+    })).toEqual({ ok: true });
+  });
+
+  it("rejects a respond NOT anchored on an interaction", () => {
+    const r = validateInteractionWrite({
+      anchor: { type: "file", file: "a.ts" }, intent: "respond",
+      role: "human", parentExists: false,
+    });
+    expect(r.ok).toBe(false);
+  });
 });

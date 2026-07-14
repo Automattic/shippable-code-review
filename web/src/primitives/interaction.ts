@@ -4,7 +4,11 @@ import { isCompleteChecks, type Checks } from "./checks";
 export type Role = "human" | "ai";
 
 export type AskIntent = "comment" | "question" | "blocker";
-export type ResponseIntent = "accept" | "reject";
+// "respond" is the neutral reply — an answer, a follow-up, "fixed, look again".
+// accept/reject remain the typed verdict record; a blocker/finding thread stays
+// unresolved until a verdict reply exists, so `respond` never substitutes for a
+// decision (docs/plans/v1-incremental-migration.md, intent-vocabulary decision).
+export type ResponseIntent = "accept" | "reject" | "respond";
 export type Intent = AskIntent | ResponseIntent;
 
 export type Interaction = {

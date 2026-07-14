@@ -76,16 +76,40 @@ One worktree/branch per step; normal PR to `main`.
 
 Steps 1–4 are order-flexible; dependencies as noted.
 
+## Decision — intent vocabulary (2026-07-14; amends v1-architecture §1.2)
+
+`ResponseIntent = "accept" | "reject" | "respond"`. The spec's two-verdict
+vocabulary gains one neutral reply intent; everything else in §1.2 stands.
+
+- **Why.** With verdicts only, any reply that exchanges information — an agent
+  answering "why does `validateToken` return null?", a human posting "fixed in
+  abc123, look again" — has no honest intent. Forcing a ✓/✗ label on
+  non-verdict replies corrupts the verdict record, which is the data this tool
+  exists to produce. `respond` is the honest label for both.
+- **The forcing function moves, it doesn't disappear.** Clean accept/reject
+  existed to force decisions. That now lives in *resolution semantics*: a
+  thread rooted in a `blocker` (or any AI finding) counts as **unresolved
+  until a verdict reply exists** — `respond`s never resolve it, `n`/`N`
+  navigation and the sign-off surface keep counting it. `question`-rooted
+  threads resolve by being answered. Pressure stays; dishonest labels go.
+- **Unchanged:** the ask⇔code / response⇔interaction biconditional. Asks
+  (`comment | question | blocker`) still cannot anchor on interactions — an
+  ask is a claim about code and must carry its own code anchor (the
+  evidence-mandatory rule). If a mid-thread message needs its own position,
+  it is a new ask on code, not a reply. `respond` was chosen over widening
+  replies to the full ask set precisely to keep claims anchored and
+  intent-keyed projections free of anchor-type conditionals.
+- **Encoded now:** `web/src/primitives/interaction.ts` carries the widened
+  union as of this branch (step 1), so later steps build on the decided shape.
+- **Step-5 remap targets:** `request → comment`, `ack → accept`, historical
+  asks-on-interactions → `respond`.
+
 ## Open questions (decide before step 5)
 
-- **Intent vocabulary narrowing.** The v1 `Intent` is `comment | question |
-  blocker | accept | reject`, and asks may not anchor on interactions. Today's
-  data and trust boundary also carry `request`, `ack`, `unack`, and allow asks
-  on interactions (`server/src/agent-queue.ts`, `web/src/types.ts`). Step 5
-  needs an explicit remap decision — e.g. `request → comment`, `ack → accept`,
-  `unack → ?` — and a call on whether threaded discussion replies (an agent
-  *answering* a question with text) get an intent or are folded into
-  `accept`/`reject` bodies.
+- **`unack` remap.** No revocation intent exists in v1 (interactions are
+  immutable; replies append). Candidate rule: latest verdict reply wins, and
+  historical `unack` rows migrate as `respond` noting the withdrawal. Decide
+  with step 5's resolution-semantics implementation.
 
 ## Data migration
 
