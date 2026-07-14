@@ -1,5 +1,5 @@
-import type { Anchor } from "./anchor";
-import type { Checks } from "./checks";
+import { isInteractionAnchor, type Anchor } from "./anchor";
+import { isCompleteChecks } from "./checks";
 
 export type Role = "human" | "ai";
 
@@ -23,3 +23,36 @@ export type AgentInteraction = Interaction & {
   rationale: string;
   suggestedFix?: string;
 };
+
+const ASK_INTENTS: ReadonlySet<Intent> = new Set<Intent>(["comment", "question", "blocker"]);
+
+export type WriteInput = {
+  anchor: Anchor;
+  intent: Intent;
+  role: Role;
+  checks?: unknown;
+  rationale?: string;
+  suggestedFix?: string;
+  parentExists: boolean;
+};
+
+export function validateInteractionWrite(
+  input: WriteInput,
+): { ok: true } | { ok: false; error: string } {
+  const isAsk = ASK_INTENTS.has(input.intent);
+  const onInteraction = isInteractionAnchor(input.anchor);
+
+  if (isAsk && onInteraction) return { ok: false, error: "asks must root on code/changeset" };
+  if (!isAsk && !onInteraction) return { ok: false, error: "responses must reply to an interaction" };
+  if (onInteraction && !input.parentExists) return { ok: false, error: "parent interaction does not exist" };
+
+  if (input.role === "ai") {
+    if (!isCompleteChecks(input.checks)) return { ok: false, error: "ai interactions require complete checks" };
+    if (!input.rationale || input.rationale.trim() === "") return { ok: false, error: "ai interactions require a rationale" };
+  } else {
+    if (input.checks !== undefined || input.rationale !== undefined || input.suggestedFix !== undefined) {
+      return { ok: false, error: "human interactions carry no ai-only fields" };
+    }
+  }
+  return { ok: true };
+}
