@@ -36,4 +36,9 @@ describe("Checks", () => {
     const missing: Checks = { "reproduced": { result: "yes", note: "x" } };
     void missing;
   });
+
+  it("rejects extra keys beyond the five labels", () => {
+    const extra = { ...complete, "sixth-check": { result: "yes", note: "x" } };
+    expect(isCompleteChecks(extra)).toBe(false);
+  });
 });

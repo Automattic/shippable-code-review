@@ -21,8 +21,13 @@ export function resolveRootAnchor(
   anchor: Anchor,
   lookup: (interactionId: string) => Anchor | undefined,
 ): Anchor {
+  const visited = new Set<string>();
   let current = anchor;
   while (current.type === "interaction") {
+    if (visited.has(current.interactionId)) {
+      throw new Error(`resolveRootAnchor: cycle at ${current.interactionId}`);
+    }
+    visited.add(current.interactionId);
     const parent = lookup(current.interactionId);
     if (!parent) {
       throw new Error(`resolveRootAnchor: missing parent ${current.interactionId}`);

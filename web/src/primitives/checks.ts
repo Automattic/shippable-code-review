@@ -19,13 +19,16 @@ export const CHECK_KEYS: readonly CheckKey[] = [
 export function isCompleteChecks(value: unknown): value is Checks {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
-  return CHECK_KEYS.every((key) => {
-    const entry = v[key] as CheckResult | undefined;
-    return (
-      !!entry &&
-      (entry.result === "yes" || entry.result === "no") &&
-      typeof entry.note === "string" &&
-      entry.note.trim().length > 0
-    );
-  });
+  return (
+    CHECK_KEYS.every((key) => {
+      const entry = v[key] as CheckResult | undefined;
+      return (
+        !!entry &&
+        (entry.result === "yes" || entry.result === "no") &&
+        typeof entry.note === "string" &&
+        entry.note.trim().length > 0
+      );
+    }) &&
+    Object.keys(v).every((k) => (CHECK_KEYS as readonly string[]).includes(k))
+  );
 }

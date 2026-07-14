@@ -52,4 +52,14 @@ describe("resolveRootAnchor", () => {
     const orphan: Anchor = { type: "interaction", interactionId: "missing" };
     expect(() => resolveRootAnchor(orphan, lookup)).toThrow();
   });
+
+  it("throws on a cyclic chain instead of looping", () => {
+    const cyclic: Record<string, Anchor> = {
+      a: { type: "interaction", interactionId: "b" },
+      b: { type: "interaction", interactionId: "a" },
+    };
+    expect(() =>
+      resolveRootAnchor({ type: "interaction", interactionId: "a" }, (id) => cyclic[id]),
+    ).toThrow(/cycle/);
+  });
 });
