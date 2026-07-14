@@ -1,5 +1,5 @@
 import { isInteractionAnchor, type Anchor } from "./anchor";
-import { isCompleteChecks } from "./checks";
+import { isCompleteChecks, type Checks } from "./checks";
 
 export type Role = "human" | "ai";
 
