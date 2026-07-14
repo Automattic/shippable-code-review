@@ -1027,13 +1027,15 @@ async function synthesiseNewFileDiff(
 
 /**
  * Return the contents of `file` at commit `sha` via `git show <sha>:<file>`.
- * Used by the live-reload "view at <sha7>" affordance on detached committed
- * comments. The path validation matches the rest of this module — same
- * `assertGitDir`, same `validateRef` rules — and `file` is required to be a
- * non-empty repo-relative path with no `..` segments and no leading `/`.
+ * Backs the live-reload "view at <sha7>" affordance and expand-context/
+ * full-file hydration. A synthetic `dirty:<hash>` sha (what dirty views carry
+ * as their changeset id) is served from the working tree instead — that
+ * content exists only on disk. The hash must match the tree's current state
+ * so a drifted view can't hydrate lines misaligned with its diff; the
+ * live-reload banner is the recovery path.
  *
- * Errors from git (missing blob, oversized output) propagate as exceptions;
- * the HTTP layer maps them onto a 4xx.
+ * Errors (missing blob, stale hash, oversized output) propagate as
+ * exceptions; the HTTP layer maps them onto a 4xx.
  */
 export async function fileAt(
   worktreePath: string,
@@ -1041,8 +1043,20 @@ export async function fileAt(
   file: string,
 ): Promise<string> {
   await assertGitDir(worktreePath);
-  validateRef(sha);
   validateRepoRelativePath(file);
+  if (sha.startsWith("dirty:")) {
+    const state = await stateFor(worktreePath);
+    if (sha !== `dirty:${state.dirtyHash}`) {
+      throw new Error("worktree changed since this view was loaded — reload the view to expand");
+    }
+    const abs = path.join(worktreePath, file);
+    const st = await fs.stat(abs);
+    if (st.size > 4 * 1024 * 1024) {
+      throw new Error(`file too large: ${file}`);
+    }
+    return fs.readFile(abs, "utf8");
+  }
+  validateRef(sha);
   const { stdout } = await execFileAsync(
     GIT,
     ["show", "--end-of-options", `${sha}:${file}`],

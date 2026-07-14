@@ -337,7 +337,7 @@ function ReviewWorkspaceInner({
   const mouseTipTimeoutRef = useRef<number | null>(null);
   // Per-(csId,fileId) in-flight hydration promises. Memoised across renders
   // so racing clicks coalesce into one fetch instead of N.
-  const hydrationPromisesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const hydrationPromisesRef = useRef<Map<string, Promise<boolean>>>(new Map());
 
   const cs = state.changesets.find((c) => c.id === state.cursor.changesetId)!;
   const file = cs.files.find((f) => f.id === state.cursor.fileId)!;
@@ -347,11 +347,11 @@ function ReviewWorkspaceInner({
   // didn't ship content for (everything but `.md` today). The wt-source +
   // non-deleted gates mirror the optimistic affordances the view model
   // shows; without them this is a no-op.
-  async function ensureFileHydrated(target: DiffFile): Promise<void> {
-    if (target.fullContent) return;
-    if (target.status === "deleted") return;
+  async function ensureFileHydrated(target: DiffFile): Promise<boolean> {
+    if (target.fullContent) return true;
+    if (target.status === "deleted") return false;
     const source = cs.worktreeSource;
-    if (!source) return;
+    if (!source) return false;
     const key = `${cs.id}:${target.id}`;
     let p = hydrationPromisesRef.current.get(key);
     if (!p) {
@@ -367,17 +367,19 @@ function ReviewWorkspaceInner({
           fileId: target.id,
           postChangeText: content,
         });
+        return true;
       })().catch((err) => {
         // Swallow — the optimistic bar will keep showing and the user can
         // try again. Surfacing a banner here would be louder than the bug
         // (a binary file being clicked on, say); a console line is enough.
         console.warn(`[expand-hunks] hydration failed for ${target.path}:`, err);
+        return false;
       }).finally(() => {
         hydrationPromisesRef.current.delete(key);
       });
       hydrationPromisesRef.current.set(key, p);
     }
-    await p;
+    return p;
   }
   const canHydrateExpansion =
     !!cs.worktreeSource && file.status !== "deleted" && !file.fullContent;
@@ -2002,7 +2004,12 @@ function ReviewWorkspaceInner({
               dispatch({ type: "SET_EXPAND_LEVEL", hunkId, dir, level });
             }}
             onToggleExpandFile={async (fileId) => {
-              await ensureFileHydrated(file);
+              // Collapsing needs no content; expanding without fullContent
+              // would render an empty pane, so bail if hydration failed.
+              if (!state.fullExpandedFiles.has(fileId)) {
+                const hydrated = await ensureFileHydrated(file);
+                if (!hydrated) return;
+              }
               dispatch({ type: "TOGGLE_EXPAND_FILE", fileId });
             }}
             onTogglePreviewFile={(fileId) =>

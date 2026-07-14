@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listCommits, rangeChangeset, stateFor } from "./worktrees.ts";
+import { fileAt, listCommits, rangeChangeset, stateFor } from "./worktrees.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -166,6 +166,59 @@ describe("rangeChangeset", () => {
     expect(aCommit.subject).toBe("add a");
     expect(aCommit.body).toBe("");
     expect(aCommit.files).toEqual(["a.txt"]);
+  });
+});
+
+describe("fileAt", () => {
+  it("serves committed content for a real sha", async () => {
+    const sha = await commit("a.txt", "committed\n", "add a");
+    await fs.writeFile(path.join(repo, "a.txt"), "edited on disk\n");
+    expect(await fileAt(repo, sha, "a.txt")).toBe("committed\n");
+  });
+
+  it("serves working-tree content for the current dirty:<hash> sha", async () => {
+    await commit("a.txt", "committed\n", "add a");
+    await fs.writeFile(path.join(repo, "a.txt"), "edited on disk\n");
+    const state = await stateFor(repo);
+    const content = await fileAt(repo, `dirty:${state.dirtyHash}`, "a.txt");
+    expect(content).toBe("edited on disk\n");
+  });
+
+  it("serves untracked files for the current dirty:<hash> sha", async () => {
+    await commit("a.txt", "a\n", "add a");
+    await fs.writeFile(path.join(repo, "new.txt"), "fresh\n");
+    const state = await stateFor(repo);
+    expect(await fileAt(repo, `dirty:${state.dirtyHash}`, "new.txt")).toBe(
+      "fresh\n",
+    );
+  });
+
+  it("rejects a stale dirty hash so a drifted view can't hydrate misaligned content", async () => {
+    await commit("a.txt", "one\n", "add a");
+    await fs.writeFile(path.join(repo, "a.txt"), "two\n");
+    const stale = await stateFor(repo);
+    await fs.writeFile(path.join(repo, "a.txt"), "three-longer\n");
+    await expect(
+      fileAt(repo, `dirty:${stale.dirtyHash}`, "a.txt"),
+    ).rejects.toThrow(/changed since/);
+  });
+
+  it("rejects path traversal on dirty reads", async () => {
+    await commit("a.txt", "a\n", "add a");
+    await fs.writeFile(path.join(repo, "a.txt"), "dirty\n");
+    const state = await stateFor(repo);
+    await expect(
+      fileAt(repo, `dirty:${state.dirtyHash}`, "../outside.txt"),
+    ).rejects.toThrow(/'\.\.'/);
+  });
+
+  it("rejects an oversized working-tree file", async () => {
+    await commit("a.txt", "a\n", "add a");
+    await fs.writeFile(path.join(repo, "big.txt"), "x".repeat(5 * 1024 * 1024));
+    const state = await stateFor(repo);
+    await expect(
+      fileAt(repo, `dirty:${state.dirtyHash}`, "big.txt"),
+    ).rejects.toThrow(/too large/);
   });
 });
 

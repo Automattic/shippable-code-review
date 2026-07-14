@@ -525,6 +525,26 @@ describe("buildDiffViewModel — full-file comment threads", () => {
     });
     expect(vm.fullFileLines).toEqual([]);
   });
+
+  it("falls back to hunks when fully expanded without fullContent", () => {
+    const file = { ...fileWithFullContent(), fullContent: undefined };
+    const vm = buildDiffViewModel({
+      file,
+      currentHunkId: "f1#h1",
+      cursorLineIdx: 0,
+      read: {},
+      isFileReviewed: false,
+      acked: new Set(),
+      replies: {},
+      expandLevelAbove: {},
+      expandLevelBelow: {},
+      fileFullyExpanded: true,
+      filePreviewing: false,
+    });
+    expect(vm.fullFileLines).toEqual([]);
+    expect(vm.hunks).toHaveLength(1);
+    expect(vm.fileFullyExpanded).toBe(false);
+  });
 });
 
 describe("buildInspectorViewModel fileLineThreads", () => {

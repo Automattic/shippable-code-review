@@ -301,13 +301,15 @@ export function buildDiffViewModel({
         .join("\n")
     : "";
 
-  // Pre-compute full-file lines only when needed.
-  const threadsByNewNo =
-    fileFullyExpanded && !previewing && file.fullContent
-      ? fullFileThreadsByNewNo(file, replies)
-      : new Map<number, FullFileThreadViewModel[]>();
+  // Full-file mode needs fullContent — with the toggle on but content
+  // missing (failed hydration, stale persisted state) fall back to hunks
+  // rather than render an empty pane.
+  const showingFullFile = fileFullyExpanded && !previewing && !!file.fullContent;
+  const threadsByNewNo = showingFullFile
+    ? fullFileThreadsByNewNo(file, replies)
+    : new Map<number, FullFileThreadViewModel[]>();
   const fullFileLines: FullFileLineViewModel[] =
-    fileFullyExpanded && !previewing && file.fullContent
+    showingFullFile && file.fullContent
       ? file.fullContent.map((line) => ({
           kind: line.kind,
           text: line.text,
@@ -323,7 +325,7 @@ export function buildDiffViewModel({
       : [];
 
   // Build hunk view models.
-  const hunks: HunkViewModel[] = fileFullyExpanded || previewing
+  const hunks: HunkViewModel[] = showingFullFile || previewing
     ? []
     : file.hunks.map((hunk) => {
         const isCurrent = hunk.id === currentHunkId;
@@ -459,7 +461,7 @@ export function buildDiffViewModel({
     fileId: file.id,
     isFileReviewed,
     canExpandFile,
-    fileFullyExpanded: fileFullyExpanded && !previewing,
+    fileFullyExpanded: showingFullFile,
     fullFileLines,
     hunks,
     filePreviewing: previewing,
