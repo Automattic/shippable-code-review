@@ -3,7 +3,8 @@
 **Status:** active (2026-07-14). Supersedes the one-shot-branch strategy in
 `product-analysis/rebuild-sequence.md` (branch `rebuild/plan-on-main`, unmerged).
 The *target design* is unchanged: `product-analysis/v1-architecture.md` on that
-branch remains the design tie-breaker; only the execution strategy changed.
+branch (pinned: commit `a00d8d5`) remains the design tie-breaker; only the
+execution strategy changed.
 
 **Goal:** reach the v1 four-primitive architecture — `Anchor`, `Interaction`,
 `ChangeSet`, `Capability`; server SQLite as system of record; AI via MCP only;
@@ -75,8 +76,19 @@ One worktree/branch per step; normal PR to `main`.
 
 Steps 1–4 are order-flexible; dependencies as noted.
 
+## Open questions (decide before step 5)
+
+- **Intent vocabulary narrowing.** The v1 `Intent` is `comment | question |
+  blocker | accept | reject`, and asks may not anchor on interactions. Today's
+  data and trust boundary also carry `request`, `ack`, `unack`, and allow asks
+  on interactions (`server/src/agent-queue.ts`, `web/src/types.ts`). Step 5
+  needs an explicit remap decision — e.g. `request → comment`, `ack → accept`,
+  `unack → ?` — and a call on whether threaded discussion replies (an agent
+  *answering* a question with text) get an intent or are folded into
+  `accept`/`reject` bodies.
+
 ## Data migration
 
 The one-shot's "drop all prototype data at merge" is replaced by per-entity
 moves through the existing migration framework. Each entity either migrates or
-consciously starts empty, announced as one release-note line per step.
+consciously starts empty as a last resort, announced as one release-note line per step.
