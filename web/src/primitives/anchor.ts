@@ -16,3 +16,18 @@ export function isInteractionAnchor(
 ): a is Extract<Anchor, { type: "interaction" }> {
   return a.type === "interaction";
 }
+
+export function resolveRootAnchor(
+  anchor: Anchor,
+  lookup: (interactionId: string) => Anchor | undefined,
+): Anchor {
+  let current = anchor;
+  while (current.type === "interaction") {
+    const parent = lookup(current.interactionId);
+    if (!parent) {
+      throw new Error(`resolveRootAnchor: missing parent ${current.interactionId}`);
+    }
+    current = parent;
+  }
+  return current;
+}
