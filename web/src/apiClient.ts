@@ -1,4 +1,5 @@
 import { apiUrl } from "./apiUrl";
+import { getUserId } from "./userId";
 
 type ErrorEnvelope = { error: string };
 
@@ -14,21 +15,29 @@ export class ApiError extends Error {
 export async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(await apiUrl(path), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Shippable-User-Id": getUserId(),
+    },
     body: JSON.stringify(body),
   });
   return unwrap<T>(res);
 }
 
 export async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(await apiUrl(path));
+  const res = await fetch(await apiUrl(path), {
+    headers: { "X-Shippable-User-Id": getUserId() },
+  });
   return unwrap<T>(res);
 }
 
 // Body-less DELETE — the id goes in the query string (caller builds the URL).
 // Don't copy-paste for a DELETE that needs a request body; add a new helper.
 export async function deleteJson<T>(path: string): Promise<T> {
-  const res = await fetch(await apiUrl(path), { method: "DELETE" });
+  const res = await fetch(await apiUrl(path), {
+    method: "DELETE",
+    headers: { "X-Shippable-User-Id": getUserId() },
+  });
   return unwrap<T>(res);
 }
 

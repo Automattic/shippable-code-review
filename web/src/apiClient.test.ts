@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, postJson } from "./apiClient";
+import { ApiError, deleteJson, getJson, postJson } from "./apiClient";
+
+vi.mock("./userId", () => ({ getUserId: () => "test-user-id" }));
 
 function fetchReturning(
   status: number,
@@ -31,6 +33,37 @@ describe("apiClient — request shape", () => {
       headers: { "Content-Type": "application/json" },
     });
     expect(JSON.parse(init.body as string)).toEqual({ a: 1, b: "two" });
+  });
+});
+
+describe("apiClient — identity header", () => {
+  // Server upserts a users row keyed on this header (Task 2's contract);
+  // absent means human. Every helper must send it, on every method.
+  it("postJson sends X-Shippable-User-Id", async () => {
+    const fetch = fetchReturning(200, { ok: true });
+    vi.stubGlobal("fetch", fetch);
+    await postJson("/api/x", {});
+    const [, init] = fetch.mock.calls[0]!;
+    expect(init.headers).toMatchObject({ "X-Shippable-User-Id": "test-user-id" });
+  });
+
+  it("getJson sends X-Shippable-User-Id", async () => {
+    const fetch = fetchReturning(200, { ok: true });
+    vi.stubGlobal("fetch", fetch);
+    await getJson("/api/x");
+    const [, init] = fetch.mock.calls[0]!;
+    expect(init.headers).toMatchObject({ "X-Shippable-User-Id": "test-user-id" });
+  });
+
+  it("deleteJson sends X-Shippable-User-Id", async () => {
+    const fetch = fetchReturning(200, { ok: true });
+    vi.stubGlobal("fetch", fetch);
+    await deleteJson("/api/x");
+    const [, init] = fetch.mock.calls[0]!;
+    expect(init).toMatchObject({
+      method: "DELETE",
+      headers: { "X-Shippable-User-Id": "test-user-id" },
+    });
   });
 });
 
