@@ -291,6 +291,7 @@ export function postReply(
     body: string;
     intent: AgentResponseIntent;
     agentLabel?: string;
+    authorId?: string | null;
   },
 ): string {
   const id = newAgentInteractionId();
@@ -304,6 +305,7 @@ export function postReply(
     body: payload.body,
     createdAt: nextCreatedAt(),
     payload: { parentId: payload.parentId },
+    authorId: payload.authorId,
   });
   return id;
 }
@@ -325,6 +327,7 @@ export function postTopLevel(
     rationale?: string;
     suggestedFix?: string;
     confidence?: Confidence;
+    authorId?: string | null;
   },
 ): string {
   const id = newAgentInteractionId();
@@ -345,6 +348,7 @@ export function postTopLevel(
     body: payload.body,
     createdAt: nextCreatedAt(),
     payload: bag,
+    authorId: payload.authorId,
   });
   return id;
 }

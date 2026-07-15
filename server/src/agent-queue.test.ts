@@ -25,6 +25,7 @@ import { initDb } from "./db/index.ts";
 import {
   upsertInteraction,
   enqueueToWorktree,
+  listAgentReplies,
   type StoredInteraction,
 } from "./db/interaction-store.ts";
 import { assertGitDir } from "./worktree-validation.ts";
@@ -58,6 +59,7 @@ function seedEnqueued(
     changesetId: "cs-1",
     worktreePath: null,
     agentQueueStatus: null,
+    authorId: null,
     payload: { anchorPath: "src/foo.ts", anchorLineNo: 10, originSha: "abc123" },
     ...over,
   };
@@ -321,6 +323,39 @@ describe("postReply / postTopLevel / listReplies", () => {
       expect(first.suggestedFix).toBe("close(fd)");
       expect(first.confidence).toBe("high");
     }
+  });
+
+  it("postReply threads authorId through to the stored row", () => {
+    const id = postReply(WT, {
+      parentId: "c1",
+      body: "fixed it",
+      intent: "accept",
+      authorId: "u-agent-caller",
+    });
+    const [stored] = listAgentReplies(WT);
+    expect(stored.id).toBe(id);
+    expect(stored.authorId).toBe("u-agent-caller");
+  });
+
+  it("postReply without authorId leaves the stored row's authorId null", () => {
+    const id = postReply(WT, { parentId: "c1", body: "fixed it", intent: "accept" });
+    const [stored] = listAgentReplies(WT);
+    expect(stored.id).toBe(id);
+    expect(stored.authorId).toBeNull();
+  });
+
+  it("postTopLevel threads authorId through to the stored row", () => {
+    const id = postTopLevel(WT, {
+      file: "src/a.ts",
+      lines: "3",
+      target: "line",
+      body: "agent note",
+      intent: "comment",
+      authorId: "u-agent-caller",
+    });
+    const [stored] = listAgentReplies(WT);
+    expect(stored.id).toBe(id);
+    expect(stored.authorId).toBe("u-agent-caller");
   });
 
   it("appends rather than overwrites repeated replies to the same parentId", async () => {

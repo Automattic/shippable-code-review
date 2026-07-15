@@ -17,6 +17,7 @@ import {
   isAskIntent,
 } from "../agent-queue.ts";
 import { recordStatOnce } from "../stats/record.ts";
+import { getRequestIdentity } from "../identity.ts";
 import {
   upsertInteraction,
   getInteractionsByChangeset,
@@ -138,6 +139,10 @@ export async function handleInteractionsUpsert(
         ? b.worktreePath
         : null,
     agentQueueStatus: null,
+    // Stamped from the request's resolved identity (see identity.ts), not
+    // from the request body — a caller can't spoof authorship by sending an
+    // authorId field. Null when the request carried no identity headers.
+    authorId: getRequestIdentity(req)?.userId ?? null,
     payload,
   };
 

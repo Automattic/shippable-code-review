@@ -28,6 +28,7 @@ function makeIx(over: Partial<StoredInteraction> = {}): StoredInteraction {
     changesetId: "cs-1",
     worktreePath: null,
     agentQueueStatus: null,
+    authorId: null,
     payload: { anchorPath: "src/a.ts", anchorLineNo: 12 },
     ...over,
   };
@@ -98,6 +99,30 @@ describe("upsertInteraction", () => {
     // Queue columns untouched — the enqueue is not reset.
     expect(row!.worktreePath).toBe("/wt/my-worktree");
     expect(row!.agentQueueStatus).toBe("pending");
+  });
+
+  it("round-trips authorId when supplied", () => {
+    upsertInteraction(makeIx({ id: "ix-au", authorId: "u1" }));
+    const [row] = getInteractionsByChangeset("cs-1");
+    expect(row.authorId).toBe("u1");
+  });
+
+  it("leaves authorId null when not supplied", () => {
+    upsertInteraction(makeIx({ id: "ix-noau" }));
+    const [row] = getInteractionsByChangeset("cs-1");
+    expect(row.authorId).toBeNull();
+  });
+
+  it("preserves an existing authorId when a later upsert omits it", () => {
+    upsertInteraction(makeIx({ id: "ix-preserve", authorId: "original-author" }));
+
+    // Reviewer re-syncs the same id without identity (e.g. no auth header on
+    // that particular request) — must not clear the stamped author_id.
+    upsertInteraction(makeIx({ id: "ix-preserve", authorId: null, body: "edited" }));
+
+    const [row] = getInteractionsByChangeset("cs-1");
+    expect(row.body).toBe("edited");
+    expect(row.authorId).toBe("original-author");
   });
 
   it("updates all content columns on conflict", () => {
@@ -364,6 +389,26 @@ describe("postAgentInteraction", () => {
     expect(replies[0].changesetId).toBeNull();
     // postAgentInteraction hardcodes null — not part of the pull lifecycle.
     expect(replies[0].agentQueueStatus).toBeNull();
+    // No authorId supplied — defaults to null.
+    expect(replies[0].authorId).toBeNull();
+  });
+
+  it("round-trips authorId when supplied", () => {
+    postAgentInteraction({
+      id: "ag-au",
+      worktreePath: "/wt/eta",
+      threadKey: null,
+      target: "reply",
+      intent: "ack",
+      author: "agent-x",
+      body: "done",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: { parentId: "p1" },
+      authorId: "u-agent-caller",
+    });
+
+    const [reply] = listAgentReplies("/wt/eta");
+    expect(reply.authorId).toBe("u-agent-caller");
   });
 });
 

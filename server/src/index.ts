@@ -31,7 +31,7 @@ import {
 } from "./db/interaction-endpoints.ts";
 import { initDb, getDbStatus } from "./db/index.ts";
 import { upsertUser } from "./db/user-store.ts";
-import { identityFrom, attachRequestIdentity } from "./identity.ts";
+import { identityFrom, attachRequestIdentity, getRequestIdentity } from "./identity.ts";
 import {
   handleStatsEvent,
   handleStatsConsentGet,
@@ -1298,6 +1298,7 @@ async function handleAgentPostReply(
       body: replyBody,
       intent: parsed.intent,
       agentLabel,
+      authorId: getRequestIdentity(req)?.userId ?? null,
     });
     recordStat("comment-posted-agent");
     writeCorsHeaders(res, origin);
@@ -1350,6 +1351,7 @@ async function handleAgentPostReply(
     suggestedFix:
       typeof parsed.suggestedFix === "string" ? parsed.suggestedFix : undefined,
     confidence: parsed.confidence,
+    authorId: getRequestIdentity(req)?.userId ?? null,
   });
   recordStat("comment-posted-agent");
   writeCorsHeaders(res, origin);

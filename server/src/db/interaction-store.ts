@@ -25,6 +25,10 @@ export interface StoredInteraction {
   changesetId: string | null;
   worktreePath: string | null;
   agentQueueStatus: AgentQueueStatus | null;
+  /** The authoring user's id (matches `users.id`), or null for pre-migration
+   *  rows and writes made without a resolved request identity. Storage-side
+   *  only — nothing renders it yet. */
+  authorId: string | null;
   /** Optional Interaction fields (anchorPath, anchorHash, anchorContext,
    *  anchorLineNo, originSha, originType, external, runRecipe). Serialised to
    *  payload_json in the DB. enqueueError is transient client state — not here. */
@@ -44,6 +48,7 @@ interface InteractionRow {
   changeset_id: string | null;
   worktree_path: string | null;
   agent_queue_status: string | null;
+  author_id: string | null;
   payload_json: string;
 }
 
@@ -60,6 +65,7 @@ function rowToStored(row: InteractionRow): StoredInteraction {
     changesetId: row.changeset_id,
     worktreePath: row.worktree_path,
     agentQueueStatus: row.agent_queue_status as AgentQueueStatus | null,
+    authorId: row.author_id,
     // payload_json is NOT NULL but can be "" from raw SQL — guard returns {}.
     payload: row.payload_json
       ? (JSON.parse(row.payload_json) as Record<string, unknown>)
@@ -73,11 +79,17 @@ function rowToStored(row: InteractionRow): StoredInteraction {
 // would reset a `delivered` row to `pending`, causing infinite re-delivery.
 // On a fresh INSERT both default to the caller-supplied values (typically null
 // for a normal review interaction that hasn't been enqueued yet).
+//
+// `author_id` is absent from the SET clause too, but for a different reason:
+// once a row is stamped with an author, a later re-sync of the same id
+// without a resolved request identity (e.g. no auth header on that request)
+// must not clear it. On a fresh INSERT it takes the caller-supplied value
+// (null if no identity was resolved for that request).
 const UPSERT_SQL = `
   INSERT INTO interactions (
     id, thread_key, target, intent, author, author_role, body, created_at,
-    changeset_id, worktree_path, agent_queue_status, payload_json
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    changeset_id, worktree_path, agent_queue_status, author_id, payload_json
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     thread_key   = excluded.thread_key,
     target       = excluded.target,
@@ -90,7 +102,7 @@ const UPSERT_SQL = `
     payload_json = excluded.payload_json
 `;
 
-/** Insert or update one interaction row. Queue columns are protected on conflict. */
+/** Insert or update one interaction row. Queue columns and author_id are protected on conflict. */
 export function upsertInteraction(ix: StoredInteraction): void {
   getDb()
     .prepare(UPSERT_SQL)
@@ -106,6 +118,7 @@ export function upsertInteraction(ix: StoredInteraction): void {
       ix.changesetId,
       ix.worktreePath,
       ix.agentQueueStatus,
+      ix.authorId,
       JSON.stringify(ix.payload),
     );
 }
@@ -256,6 +269,9 @@ export interface AgentInteractionInput {
   createdAt: string;
   /** Contextual fields: parentId for replies, file/lines for top-level. */
   payload: Record<string, unknown>;
+  /** The calling agent session's resolved request identity, if any. Defaults
+   *  to null (agents commonly authenticate without a per-user identity header). */
+  authorId?: string | null;
 }
 
 /**
@@ -278,6 +294,7 @@ export function postAgentInteraction(input: AgentInteractionInput): void {
       null, // changeset_id — agent rows are not changeset-keyed
       input.worktreePath,
       null, // agent_queue_status — not part of the pull lifecycle
+      input.authorId ?? null,
       JSON.stringify(input.payload),
     );
 }
