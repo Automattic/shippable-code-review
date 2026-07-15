@@ -22,6 +22,7 @@ import {
   getInteractionsByChangeset,
   deleteInteraction,
   deleteInteractionsByChangeset,
+  deleteInteractionsByWorktree,
   enqueueToWorktree,
   unenqueueFromWorktree,
   type StoredInteraction,
@@ -219,18 +220,27 @@ export async function handleInteractionsDelete(
   const url = new URL(req.url ?? "", "http://localhost");
   const id = url.searchParams.get("id");
   const changesetId = url.searchParams.get("changesetId");
+  const worktreePath = url.searchParams.get("worktreePath");
   if (id) {
     writeJson(res, origin, 200, { deleted: deleteInteraction(id) });
     return;
   }
+  // Bulk forms back the review-reset flow: `deleted` is a row count. Reset
+  // needs both scopes — user comments are changeset-keyed, agent comments
+  // (MCP posts) are worktree-keyed with changeset_id null.
   if (changesetId) {
-    // Bulk form backs the review-reset flow: `deleted` is a row count.
     writeJson(res, origin, 200, {
       deleted: deleteInteractionsByChangeset(changesetId),
     });
     return;
   }
+  if (worktreePath) {
+    writeJson(res, origin, 200, {
+      deleted: deleteInteractionsByWorktree(worktreePath),
+    });
+    return;
+  }
   writeJson(res, origin, 400, {
-    error: "missing required query param: id or changesetId",
+    error: "missing required query param: id, changesetId, or worktreePath",
   });
 }

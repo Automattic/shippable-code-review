@@ -96,6 +96,18 @@ export async function deleteInteractionsForChangeset(
   return deleted;
 }
 
+/** Delete every interaction tied to a worktree. Agent comments (MCP posts)
+ *  are worktree-keyed with no changeset id, so reset needs this scope too —
+ *  the delivered-replies poll would otherwise bring them back. */
+export async function deleteInteractionsForWorktree(
+  worktreePath: string,
+): Promise<number> {
+  const { deleted } = await deleteJson<{ deleted: number }>(
+    `/api/interactions?worktreePath=${encodeURIComponent(worktreePath)}`,
+  );
+  return deleted;
+}
+
 /** Mark an existing interaction as pending for a worktree agent.
  *  Throws ApiError (status 404) if the id is not found. */
 export async function enqueueInteraction(

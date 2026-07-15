@@ -29,4 +29,4 @@ A hunk or file whose content changed matches no key and starts over; that's the 
 
 ## Reset
 
-"Reset review" (topbar) deletes the server-side interactions for every loaded changeset (`DELETE /api/interactions?changesetId=…`) **before** clearing the localStorage snapshot and reloading. Order matters: comments live in the server DB keyed by changeset id and are re-fetched on every load, so clearing local state alone resurrects them. If the server delete fails, nothing is cleared and the modal says so.
+"Reset review" (topbar) deletes the server-side interactions for every loaded changeset (`DELETE /api/interactions?changesetId=…`) **and** for every loaded worktree path (`…?worktreePath=…`) **before** clearing the localStorage snapshot and reloading. Both scopes are needed: user comments are changeset-keyed, but agent comments (posted via MCP "post to shippable") are worktree-keyed with a null changeset id and would be resurrected by the delivered-replies poll. Order matters too — comments are re-fetched on every load, so clearing local state alone brings them back. If the server delete fails, nothing is cleared and the modal says so.

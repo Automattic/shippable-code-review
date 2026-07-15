@@ -5,6 +5,7 @@ import {
   upsertInteraction,
   deleteInteraction,
   deleteInteractionsForChangeset,
+  deleteInteractionsForWorktree,
   enqueueInteraction,
   unenqueueInteraction,
 } from "./interactionClient";
@@ -336,6 +337,27 @@ describe("deleteInteractionsForChangeset", () => {
     await expect(deleteInteractionsForChangeset("wt-x")).rejects.toBeInstanceOf(
       ApiError,
     );
+  });
+});
+
+// ─── deleteInteractionsForWorktree ────────────────────────────────────────────
+
+describe("deleteInteractionsForWorktree", () => {
+  it("sends DELETE to /api/interactions?worktreePath=<path>", async () => {
+    const stub = makeFetch(true, 200, { deleted: 4 });
+    vi.stubGlobal("fetch", stub);
+
+    await deleteInteractionsForWorktree("/Users/me/wt");
+
+    expect(stub).toHaveBeenCalledOnce();
+    const [url, init] = stub.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/interactions?worktreePath=%2FUsers%2Fme%2Fwt");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("returns the deleted row count", async () => {
+    vi.stubGlobal("fetch", makeFetch(true, 200, { deleted: 4 }));
+    expect(await deleteInteractionsForWorktree("/Users/me/wt")).toBe(4);
   });
 });
 

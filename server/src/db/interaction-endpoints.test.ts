@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resetForTests } from "./index.ts";
+import { listAgentReplies, postAgentInteraction } from "./interaction-store.ts";
 import {
   captureStats,
   startTestServer,
@@ -384,6 +385,43 @@ describe("DELETE /api/interactions", () => {
     );
     expect(r.status).toBe(200);
     expect(r.body.deleted).toBe(0);
+  });
+
+  it("deletes agent-channel rows by worktreePath", async () => {
+    // Agent rows (MCP "post to shippable") are worktree-keyed with a null
+    // changeset_id — the changesetId form can't reach them. Seed at the
+    // store level (the POST routes insist on a real git dir); the DELETE
+    // route is what's under test here.
+    postAgentInteraction({
+      id: "agent-1",
+      worktreePath: "/wt/one",
+      threadKey: null,
+      target: "file",
+      intent: "comment",
+      author: "claude",
+      body: "posted via MCP",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: {},
+    });
+    postAgentInteraction({
+      id: "agent-2",
+      worktreePath: "/wt/other",
+      threadKey: null,
+      target: "file",
+      intent: "comment",
+      author: "claude",
+      body: "different worktree",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: {},
+    });
+
+    const r = await deleteJson(
+      `${baseUrl}/api/interactions?worktreePath=${encodeURIComponent("/wt/one")}`,
+    );
+    expect(r.status).toBe(200);
+    expect(r.body.deleted).toBe(1);
+    expect(listAgentReplies("/wt/one")).toHaveLength(0);
+    expect(listAgentReplies("/wt/other")).toHaveLength(1);
   });
 });
 

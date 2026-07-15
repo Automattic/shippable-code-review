@@ -406,6 +406,85 @@ describe("ReviewWorkspace — reset review", () => {
     });
   });
 
+  it("also deletes worktree-keyed (agent/MCP) interactions for a worktree review", async () => {
+    // Agent comments posted via MCP are stored by worktree path with no
+    // changeset id — reset must hit both scopes or the delivered-replies
+    // poll brings the AI comments back.
+    const respond = (body: unknown) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(body),
+      });
+    const fetchStub = vi.fn().mockImplementation(
+      (url: unknown, init?: RequestInit) => {
+        if (
+          typeof url === "string" &&
+          url.startsWith("/api/interactions") &&
+          init?.method === "DELETE"
+        ) {
+          return respond({ deleted: 1 });
+        }
+        if (typeof url === "string" && url.startsWith("/api/agent/replies")) {
+          return respond({ replies: [], watching: false });
+        }
+        if (typeof url === "string" && url.startsWith("/api/agent/delivered")) {
+          return respond({ delivered: [] });
+        }
+        return respond({});
+      },
+    );
+    vi.stubGlobal("fetch", fetchStub);
+    window.localStorage.setItem(STORAGE_KEY, "{}");
+
+    const cs: ChangeSet = {
+      ...fixturePrChangeset(),
+      id: "wt-dirty:ab12cd",
+      prSource: undefined,
+      worktreeSource: {
+        worktreePath: "/Users/me/repo/wt",
+        commitSha: "dirty:ab12cd",
+        branch: "feat/x",
+        dirty: true,
+      },
+    };
+    render(
+      <CredentialsProvider>
+        <ReviewWorkspace
+          state={initialState([cs])}
+          dispatch={vi.fn()}
+          rawDispatch={vi.fn()}
+          drafts={{}}
+          setDrafts={() => ({})}
+          themeId="light"
+          setThemeId={() => undefined}
+          onLoadChangeset={() => undefined}
+          currentSource={{
+            kind: "worktree",
+            path: "/Users/me/repo/wt",
+            branch: "feat/x",
+          }}
+        />
+      </CredentialsProvider>,
+    );
+
+    fireEvent.click(screen.getAllByText("reset review")[0]);
+    fireEvent.click(screen.getByText("reset"));
+
+    await waitFor(() => {
+      expect(fetchStub).toHaveBeenCalledWith(
+        "/api/interactions?changesetId=wt-dirty%3Aab12cd",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+      expect(fetchStub).toHaveBeenCalledWith(
+        "/api/interactions?worktreePath=%2FUsers%2Fme%2Frepo%2Fwt",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+      expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+      expect(reload).toHaveBeenCalled();
+    });
+  });
+
   it("keeps the session and shows an error when the server delete fails", async () => {
     vi.stubGlobal(
       "fetch",

@@ -93,6 +93,7 @@ import {
 } from "../agentContextClient";
 import {
   deleteInteractionsForChangeset,
+  deleteInteractionsForWorktree,
   enqueueInteraction,
   unenqueueInteraction,
   upsertInteraction,
@@ -2355,16 +2356,26 @@ function ReviewWorkspaceInner({
           danger
           onConfirm={() => {
             void (async () => {
-              // Comments live in the server DB, keyed by changeset id, and
-              // are re-fetched on every load — clearing local state alone
-              // resurrects all of them. Delete server-side first; if that
-              // fails, reset nothing and say so.
+              // Comments live in the server DB and are re-fetched on every
+              // load — clearing local state alone resurrects all of them.
+              // Two scopes: user comments are changeset-keyed; agent
+              // comments (MCP posts) are worktree-keyed with no changeset
+              // id. Delete server-side first; if that fails, reset nothing
+              // and say so.
+              const worktreePaths = new Set(
+                state.changesets
+                  .map((c) => c.worktreeSource?.worktreePath)
+                  .filter((p): p is string => !!p),
+              );
               try {
-                await Promise.all(
-                  state.changesets.map((c) =>
+                await Promise.all([
+                  ...state.changesets.map((c) =>
                     deleteInteractionsForChangeset(c.id),
                   ),
-                );
+                  ...Array.from(worktreePaths, (p) =>
+                    deleteInteractionsForWorktree(p),
+                  ),
+                ]);
               } catch {
                 setResetError(
                   "Couldn't delete comments on the server — nothing was reset. Is the server running?",

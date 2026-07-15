@@ -143,6 +143,19 @@ export function deleteInteractionsByChangeset(changesetId: string): number {
   return result.changes;
 }
 
+/**
+ * Delete every interaction tied to a worktree: agent-authored rows (which
+ * are channel-keyed — changeset_id is null) plus user rows enqueued to the
+ * worktree. The changeset-scoped delete can't reach agent rows, and the
+ * delivered-replies poll would resurrect them after a reset.
+ */
+export function deleteInteractionsByWorktree(worktreePath: string): number {
+  const result = getDb()
+    .prepare("DELETE FROM interactions WHERE worktree_path = ?")
+    .run(worktreePath);
+  return result.changes;
+}
+
 // ─── Agent-channel ops ───────────────────────────────────────────────────────
 //
 // The interactions table doubles as a reviewer↔agent channel. Review

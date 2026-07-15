@@ -4,6 +4,7 @@ import { initDb, getDb, resetForTests } from "./index.ts";
 import {
   deleteInteraction,
   deleteInteractionsByChangeset,
+  deleteInteractionsByWorktree,
   enqueueToWorktree,
   getInteractionsByChangeset,
   interactionExistsForWorktree,
@@ -205,6 +206,53 @@ describe("deleteInteractionsByChangeset", () => {
 
   it("returns 0 for an unknown changeset", () => {
     expect(deleteInteractionsByChangeset("never-seen")).toBe(0);
+  });
+});
+
+describe("deleteInteractionsByWorktree", () => {
+  // Agent-authored rows (MCP "post to shippable") are channel-keyed:
+  // changeset_id is null and worktree_path carries identity, so a
+  // changeset-scoped delete never touches them and the delivered-replies
+  // poll resurrects them after a reset. Reset deletes by worktree too.
+  it("removes agent-channel rows for the worktree and returns the count", () => {
+    postAgentInteraction({
+      id: "agent-1",
+      worktreePath: "/wt/one",
+      threadKey: "note:h1:0",
+      target: "line",
+      intent: "comment",
+      author: "claude",
+      body: "consider a guard here",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: {},
+    });
+    postAgentInteraction({
+      id: "agent-2",
+      worktreePath: "/wt/other",
+      threadKey: "note:h2:0",
+      target: "line",
+      intent: "comment",
+      author: "claude",
+      body: "unrelated worktree",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: {},
+    });
+
+    expect(deleteInteractionsByWorktree("/wt/one")).toBe(1);
+    expect(listAgentReplies("/wt/one")).toHaveLength(0);
+    expect(listAgentReplies("/wt/other")).toHaveLength(1);
+  });
+
+  it("also removes user rows enqueued to the worktree", () => {
+    upsertInteraction(makeIx({ id: "queued" }));
+    enqueueToWorktree("queued", "/wt/one");
+
+    expect(deleteInteractionsByWorktree("/wt/one")).toBe(1);
+    expect(getInteractionsByChangeset("cs-1")).toHaveLength(0);
+  });
+
+  it("returns 0 for an unknown worktree", () => {
+    expect(deleteInteractionsByWorktree("/wt/never")).toBe(0);
   });
 });
 
