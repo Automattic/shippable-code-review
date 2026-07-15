@@ -30,6 +30,8 @@ import {
   handleInteractionsDelete,
 } from "./db/interaction-endpoints.ts";
 import { initDb, getDbStatus } from "./db/index.ts";
+import { upsertUser } from "./db/user-store.ts";
+import { identityFrom, attachRequestIdentity } from "./identity.ts";
 import {
   handleStatsEvent,
   handleStatsConsentGet,
@@ -88,6 +90,30 @@ export function createApp(): Server {
       res.writeHead(403, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "request not allowed" }));
       return;
+    }
+    // Static serving never shadows the API namespace: an unmatched /api GET
+    // (with or without a query string) must fall through to the JSON 404, not
+    // the SPA shell. Match on the path alone so `/api?x=1` is reserved too.
+    const reqPath = req.url?.split(/[?#]/, 1)[0];
+    const isApi = reqPath === "/api" || reqPath?.startsWith("/api/");
+    // Identity is resolved once here, ahead of route dispatch, rather than
+    // per-handler. Upsert is best-effort — a DB hiccup must not fail the
+    // request; identity is an expand-phase side effect, not the point of
+    // the call. Handlers don't consume the identity yet (stashed for a
+    // later task); it's just made reachable via getRequestIdentity(req).
+    if (isApi) {
+      const identity = identityFrom(req.headers);
+      if (identity) {
+        attachRequestIdentity(req, identity);
+        try {
+          upsertUser(identity.userId, identity.role);
+        } catch (err) {
+          console.warn(
+            `[server] identity upsert failed for user=${identity.userId}:`,
+            err,
+          );
+        }
+      }
     }
     if (req.method === "POST" && req.url === "/api/plan") {
       return await handlePlan(req, res, origin);
@@ -205,11 +231,7 @@ export function createApp(): Server {
       res.end(JSON.stringify({ ok: true, db: getDbStatus() }));
       return;
     }
-    // Static serving never shadows the API namespace: an unmatched /api GET
-    // (with or without a query string) must fall through to the JSON 404, not
-    // the SPA shell. Match on the path alone so `/api?x=1` is reserved too.
-    const reqPath = req.url?.split(/[?#]/, 1)[0];
-    const isApi = reqPath === "/api" || reqPath?.startsWith("/api/");
+    // reqPath/isApi computed once, above, ahead of route dispatch.
     if (WEB_DIST && req.method === "GET" && req.url && !isApi) {
       if (await serveStatic(WEB_DIST, req.url, res)) return;
     }
