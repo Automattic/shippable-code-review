@@ -99,8 +99,8 @@ export function createApp(): Server {
     // Identity is resolved once here, ahead of route dispatch, rather than
     // per-handler. Upsert is best-effort — a DB hiccup must not fail the
     // request; identity is an expand-phase side effect, not the point of
-    // the call. Handlers don't consume the identity yet (stashed for a
-    // later task); it's just made reachable via getRequestIdentity(req).
+    // the call. Handlers reach it via getRequestIdentity(req) (interactions
+    // upsert, agent replies).
     if (isApi) {
       const identity = identityFrom(req.headers);
       if (identity) {

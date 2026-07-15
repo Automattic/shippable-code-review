@@ -169,3 +169,25 @@ describe("identity flow: request headers -> users table -> author_id", () => {
     expect(legacy.authorId).toBeNull();
   });
 });
+
+describe("CORS preflight allows the identity headers", () => {
+  // The packaged Tauri app is cross-origin (tauri://localhost ->
+  // http://127.0.0.1:<port>), so every apiClient call carrying
+  // X-Shippable-User-Id/-Role preflights first. If Access-Control-Allow-Headers
+  // doesn't list them, the browser blocks the real request before it's sent.
+  it("echoes X-Shippable-User-Id and X-Shippable-User-Role in Access-Control-Allow-Headers", async () => {
+    const res = await fetch(`${baseUrl}/api/interactions`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:5173",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers":
+          "content-type, x-shippable-user-id, x-shippable-user-role",
+      },
+    });
+    expect(res.status).toBe(204);
+    const allowHeaders = res.headers.get("access-control-allow-headers") ?? "";
+    expect(allowHeaders).toMatch(/x-shippable-user-id/i);
+    expect(allowHeaders).toMatch(/x-shippable-user-role/i);
+  });
+});

@@ -54,7 +54,10 @@ export function readBody(req: IncomingMessage): Promise<string> {
 export function writeCorsHeaders(res: ServerResponse, origin: string | null) {
   if (!origin) return;
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, X-Shippable-User-Id, X-Shippable-User-Role",
+  );
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Vary", "Origin");
 }

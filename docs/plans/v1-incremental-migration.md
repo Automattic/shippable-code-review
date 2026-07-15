@@ -52,7 +52,9 @@ One worktree/branch per step; normal PR to `main`.
    `reviewed_changesets`, `prefs`; client writes through; localStorage keeps
    only cursor/drafts/dismissals.
 3. **Users + identity** — `users` table; client-minted UUID +
-   `X-Shippable-User-Id` header; replaces the hardcoded `"you"` author.
+   `X-Shippable-User-Id`/`-Role` headers upsert a user and stamp the new
+   `interactions.author_id` expand column on write. Display-name resolution
+   and rendering (still the hardcoded `"you"`/`"agent"` labels) are deferred.
    **Done 2026-07-15.**
 4. **Persist changesets** — `changesets` + `diff_files` written at ingest with
    the parent chain; per-request recompute stays as fallback until stable.
@@ -126,6 +128,17 @@ re-sync without headers can't clear it. Old rows read back `null`. Contract
   immutable; replies append). Candidate rule: latest verdict reply wins, and
   historical `unack` rows migrate as `respond` noting the withdrawal. Decide
   with step 5's resolution-semantics implementation.
+- **Author-integrity on upsert.** `POST /api/interactions` is an open upsert
+  on a client-supplied id; today a different identity can rewrite a row's
+  body while the original `author_id` is preserved. Decide whether to 409 on
+  an author mismatch once step 5 moves this onto the contract phase.
+- **Role vocabulary unification.** `users.role` is `human | ai`; the legacy
+  `interactions.author_role` is `user | ai | agent`. Step 5's contract should
+  unify or map between them rather than carry both.
+- **Header seam width.** Only `apiClient`'s three helpers send the identity
+  header today. ~15 web modules still call raw `fetch` — harmless right now
+  because all interaction writes route through `apiClient`, but don't assume
+  full coverage without checking call sites first.
 
 ## Data migration
 

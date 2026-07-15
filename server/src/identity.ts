@@ -16,20 +16,19 @@ function firstHeaderValue(
 
 /**
  * Reads X-Shippable-User-Id / X-Shippable-User-Role off a headers object.
- * Returns null when the id header is absent, empty/whitespace, or longer
- * than 128 chars — those are the only rejection conditions; the id itself
- * is otherwise opaque. Role is "ai" only when the role header is exactly
- * "ai" case-insensitively; anything else (including absent) is "human".
+ * The id is trimmed before validation and the trimmed value is what's
+ * returned/stored, so " u1 " and "u1" resolve to the same user. Returns null
+ * when the trimmed id is absent, empty, or longer than 128 chars — those are
+ * the only rejection conditions; the id itself is otherwise opaque. Role is
+ * "ai" only when the role header is exactly "ai" case-insensitively; anything
+ * else (including absent) is "human".
  */
 export function identityFrom(
   headers: Record<string, string | string[] | undefined>,
 ): RequestIdentity | null {
-  const userId = firstHeaderValue(headers["x-shippable-user-id"]);
-  if (
-    !userId ||
-    userId.trim().length === 0 ||
-    userId.length > MAX_USER_ID_LENGTH
-  ) {
+  const rawUserId = firstHeaderValue(headers["x-shippable-user-id"]);
+  const userId = rawUserId?.trim();
+  if (!userId || userId.length === 0 || userId.length > MAX_USER_ID_LENGTH) {
     return null;
   }
   const roleHeader = firstHeaderValue(headers["x-shippable-user-role"]);

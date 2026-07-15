@@ -57,4 +57,11 @@ describe("identityFrom", () => {
   it("returns null when an array id header's first value is empty", () => {
     expect(identityFrom({ "x-shippable-user-id": ["", "u2"] })).toBeNull();
   });
+
+  it("trims surrounding whitespace so ' u1 ' and 'u1' are the same user", () => {
+    expect(identityFrom({ "x-shippable-user-id": " u1 " })).toEqual({
+      userId: "u1",
+      role: "human",
+    });
+  });
 });
