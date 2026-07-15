@@ -5,6 +5,7 @@ export type BlockOrigin =
   | { type: "dirty"; hash: string; context: DiffLine[] }; // no sha → welded snapshot in our store
 
 export type Anchor =
+  // no separate "line" variant — a single-line position is a block with lo === hi
   | { type: "block"; file: string; lo: number; hi: number; origin: BlockOrigin }
   | { type: "symbol"; file: string; symbol: string }
   | { type: "file"; file: string }
