@@ -131,6 +131,18 @@ export function deleteInteraction(id: string): boolean {
   return result.changes > 0;
 }
 
+/**
+ * Delete every interaction for a changeset. Returns the number of rows
+ * removed. Backs the review-reset flow — without this, reset clears local
+ * progress but the next per-changeset fetch resurrects every comment.
+ */
+export function deleteInteractionsByChangeset(changesetId: string): number {
+  const result = getDb()
+    .prepare("DELETE FROM interactions WHERE changeset_id = ?")
+    .run(changesetId);
+  return result.changes;
+}
+
 // ─── Agent-channel ops ───────────────────────────────────────────────────────
 //
 // The interactions table doubles as a reviewer↔agent channel. Review

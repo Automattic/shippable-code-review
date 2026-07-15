@@ -21,6 +21,7 @@ import {
   upsertInteraction,
   getInteractionsByChangeset,
   deleteInteraction,
+  deleteInteractionsByChangeset,
   enqueueToWorktree,
   unenqueueFromWorktree,
   type StoredInteraction,
@@ -217,10 +218,19 @@ export async function handleInteractionsDelete(
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
   const id = url.searchParams.get("id");
-  if (!id) {
-    writeJson(res, origin, 400, { error: "missing required query param: id" });
+  const changesetId = url.searchParams.get("changesetId");
+  if (id) {
+    writeJson(res, origin, 200, { deleted: deleteInteraction(id) });
     return;
   }
-  const deleted = deleteInteraction(id);
-  writeJson(res, origin, 200, { deleted });
+  if (changesetId) {
+    // Bulk form backs the review-reset flow: `deleted` is a row count.
+    writeJson(res, origin, 200, {
+      deleted: deleteInteractionsByChangeset(changesetId),
+    });
+    return;
+  }
+  writeJson(res, origin, 400, {
+    error: "missing required query param: id or changesetId",
+  });
 }

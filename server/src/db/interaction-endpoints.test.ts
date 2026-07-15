@@ -354,6 +354,37 @@ describe("DELETE /api/interactions", () => {
     );
     expect(get.body.interactions).toHaveLength(0);
   });
+
+  // Bulk delete backs the review-reset flow: reset must clear the DB rows
+  // for the changeset, or the next fetch resurrects every comment.
+  it("deletes every interaction for a changesetId and reports the count", async () => {
+    await postJson(`${baseUrl}/api/interactions`, makeInteraction({ id: "ix-1" }));
+    await postJson(`${baseUrl}/api/interactions`, makeInteraction({ id: "ix-2" }));
+    await postJson(
+      `${baseUrl}/api/interactions`,
+      makeInteraction({ id: "ix-other", changesetId: "cs-other" }),
+    );
+
+    const r = await deleteJson(
+      `${baseUrl}/api/interactions?changesetId=cs-abc`,
+    );
+    expect(r.status).toBe(200);
+    expect(r.body.deleted).toBe(2);
+
+    const gone = await getJson(`${baseUrl}/api/interactions?changesetId=cs-abc`);
+    expect(gone.body.interactions).toHaveLength(0);
+    // Other changesets untouched.
+    const kept = await getJson(`${baseUrl}/api/interactions?changesetId=cs-other`);
+    expect(kept.body.interactions).toHaveLength(1);
+  });
+
+  it("returns deleted:0 for an unknown changesetId", async () => {
+    const r = await deleteJson(
+      `${baseUrl}/api/interactions?changesetId=never-seen`,
+    );
+    expect(r.status).toBe(200);
+    expect(r.body.deleted).toBe(0);
+  });
 });
 
 // ─── comment-posted-user stat ────────────────────────────────────────────────

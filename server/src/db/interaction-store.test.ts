@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initDb, getDb, resetForTests } from "./index.ts";
 import {
   deleteInteraction,
+  deleteInteractionsByChangeset,
   enqueueToWorktree,
   getInteractionsByChangeset,
   interactionExistsForWorktree,
@@ -186,6 +187,24 @@ describe("deleteInteraction", () => {
     deleteInteraction("gone");
     const rows = getInteractionsByChangeset("cs-1");
     expect(rows.map((r) => r.id)).toEqual(["keep"]);
+  });
+});
+
+describe("deleteInteractionsByChangeset", () => {
+  // Backs the review-reset flow: reset clears a changeset's rows in one call,
+  // otherwise the next per-changeset fetch resurrects every comment.
+  it("removes every row for the changeset and returns the count", () => {
+    upsertInteraction(makeIx({ id: "a1" }));
+    upsertInteraction(makeIx({ id: "a2" }));
+    upsertInteraction(makeIx({ id: "b1", changesetId: "cs-2" }));
+
+    expect(deleteInteractionsByChangeset("cs-1")).toBe(2);
+    expect(getInteractionsByChangeset("cs-1")).toHaveLength(0);
+    expect(getInteractionsByChangeset("cs-2")).toHaveLength(1);
+  });
+
+  it("returns 0 for an unknown changeset", () => {
+    expect(deleteInteractionsByChangeset("never-seen")).toBe(0);
   });
 });
 

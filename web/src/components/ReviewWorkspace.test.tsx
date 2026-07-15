@@ -357,6 +357,72 @@ function renderPrWorkspace(over: Partial<{ dispatch: Dispatch<Action> }> = {}) {
   return { state, dispatch, container };
 }
 
+describe("ReviewWorkspace — reset review", () => {
+  const STORAGE_KEY = "shippable:review:v1";
+  const originalLocation = window.location;
+  let reload: ReturnType<typeof vi.fn>;
+
+  // jsdom's location.reload is unforgeable (can't spyOn) and calling it
+  // prints "Not implemented: navigation" — swap the whole object.
+  beforeEach(() => {
+    fetchDefinitionCapabilitiesMock.mockResolvedValue({ languages: [] });
+    reload = vi.fn();
+    Object.defineProperty(window, "location", {
+      value: { ...originalLocation, reload },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "location", {
+      value: originalLocation,
+      writable: true,
+      configurable: true,
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("deletes server-side interactions for the changeset, then clears the session and reloads", async () => {
+    const fetchStub = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ deleted: 2 }),
+    });
+    vi.stubGlobal("fetch", fetchStub);
+    window.localStorage.setItem(STORAGE_KEY, "{}");
+
+    renderPrWorkspace();
+    fireEvent.click(screen.getAllByText("reset review")[0]);
+    fireEvent.click(screen.getByText("reset"));
+
+    await waitFor(() => {
+      expect(fetchStub).toHaveBeenCalledWith(
+        "/api/interactions?changesetId=pr%3Agithub.com%3Aowner%3Arepo%3A1",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+      expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+      expect(reload).toHaveBeenCalled();
+    });
+  });
+
+  it("keeps the session and shows an error when the server delete fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new TypeError("fetch failed")),
+    );
+    window.localStorage.setItem(STORAGE_KEY, "{}");
+
+    renderPrWorkspace();
+    fireEvent.click(screen.getAllByText("reset review")[0]);
+    fireEvent.click(screen.getByText("reset"));
+
+    await screen.findByText(/nothing was reset/i);
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe("{}");
+    expect(reload).not.toHaveBeenCalled();
+  });
+});
+
 describe("ReviewWorkspace — PR topbar", () => {
   beforeEach(() => {
     fetchDefinitionCapabilitiesMock.mockResolvedValue({ languages: [] });

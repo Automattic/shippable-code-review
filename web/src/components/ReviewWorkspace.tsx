@@ -92,6 +92,7 @@ import {
   fetchMcpStatus,
 } from "../agentContextClient";
 import {
+  deleteInteractionsForChangeset,
   enqueueInteraction,
   unenqueueInteraction,
   upsertInteraction,
@@ -246,6 +247,7 @@ function ReviewWorkspaceInner({
     !hasAnthropicCredential && credentials.anthropicSkipped;
   const [showHelp, setShowHelp] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const [showInspector, setShowInspector] = useState(getStoredShowInspector);
   const [inlineComments, setInlineComments] = useState(getStoredInlineComments);
   const [ligatures, setLigatures] = useLigatures();
@@ -2345,14 +2347,38 @@ function ReviewWorkspaceInner({
       {showResetConfirm && (
         <ConfirmModal
           title="Reset review session?"
-          message="Read marks, sign-offs, comments, and drafts will be cleared."
+          message={
+            resetError ??
+            "Read marks, sign-offs, comments, and drafts will be cleared."
+          }
           confirmLabel="reset"
           danger
           onConfirm={() => {
-            clearSession();
-            window.location.reload();
+            void (async () => {
+              // Comments live in the server DB, keyed by changeset id, and
+              // are re-fetched on every load — clearing local state alone
+              // resurrects all of them. Delete server-side first; if that
+              // fails, reset nothing and say so.
+              try {
+                await Promise.all(
+                  state.changesets.map((c) =>
+                    deleteInteractionsForChangeset(c.id),
+                  ),
+                );
+              } catch {
+                setResetError(
+                  "Couldn't delete comments on the server — nothing was reset. Is the server running?",
+                );
+                return;
+              }
+              clearSession();
+              window.location.reload();
+            })();
           }}
-          onCancel={() => setShowResetConfirm(false)}
+          onCancel={() => {
+            setShowResetConfirm(false);
+            setResetError(null);
+          }}
         />
       )}
       {showHelp && (

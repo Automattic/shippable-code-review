@@ -4,6 +4,7 @@ import {
   fetchInteractions,
   upsertInteraction,
   deleteInteraction,
+  deleteInteractionsForChangeset,
   enqueueInteraction,
   unenqueueInteraction,
 } from "./interactionClient";
@@ -297,6 +298,44 @@ describe("deleteInteraction", () => {
   it("throws ApiError on non-2xx", async () => {
     vi.stubGlobal("fetch", makeFetch(false, 400, { error: "missing required query param: id" }));
     await expect(deleteInteraction("")).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+// ─── deleteInteractionsForChangeset ───────────────────────────────────────────
+
+describe("deleteInteractionsForChangeset", () => {
+  it("sends DELETE to /api/interactions?changesetId=<id>", async () => {
+    const stub = makeFetch(true, 200, { deleted: 3 });
+    vi.stubGlobal("fetch", stub);
+
+    await deleteInteractionsForChangeset("wt-abc123");
+
+    expect(stub).toHaveBeenCalledOnce();
+    const [url, init] = stub.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/interactions?changesetId=wt-abc123");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("returns the deleted row count", async () => {
+    vi.stubGlobal("fetch", makeFetch(true, 200, { deleted: 3 }));
+    expect(await deleteInteractionsForChangeset("wt-abc123")).toBe(3);
+  });
+
+  it("encodes a dirty-hash changesetId containing a colon", async () => {
+    const stub = makeFetch(true, 200, { deleted: 0 });
+    vi.stubGlobal("fetch", stub);
+
+    await deleteInteractionsForChangeset("wt-dirty:ab12cd");
+
+    const [url] = stub.mock.calls[0] as [string];
+    expect(url).toBe("/api/interactions?changesetId=wt-dirty%3Aab12cd");
+  });
+
+  it("throws ApiError on non-2xx", async () => {
+    vi.stubGlobal("fetch", makeFetch(false, 500, { error: "db unavailable" }));
+    await expect(deleteInteractionsForChangeset("wt-x")).rejects.toBeInstanceOf(
+      ApiError,
+    );
   });
 });
 

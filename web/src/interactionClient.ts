@@ -84,6 +84,18 @@ export async function deleteInteraction(id: string): Promise<boolean> {
   return deleted;
 }
 
+/** Delete every interaction stored for a changeset. Returns the row count.
+ *  Backs the review-reset flow — reset must clear the DB rows or the next
+ *  per-changeset fetch brings every comment back. */
+export async function deleteInteractionsForChangeset(
+  changesetId: string,
+): Promise<number> {
+  const { deleted } = await deleteJson<{ deleted: number }>(
+    `/api/interactions?changesetId=${encodeURIComponent(changesetId)}`,
+  );
+  return deleted;
+}
+
 /** Mark an existing interaction as pending for a worktree agent.
  *  Throws ApiError (status 404) if the id is not found. */
 export async function enqueueInteraction(
