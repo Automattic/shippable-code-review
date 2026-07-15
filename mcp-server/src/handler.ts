@@ -1,4 +1,18 @@
+import { randomUUID } from "node:crypto";
 import { discoverSidecarPort } from "./port-discovery.js";
+
+/**
+ * This subprocess's identity, sent on every call to the local server as
+ * `X-Shippable-User-Id` / `X-Shippable-User-Role: ai`. Minted once per
+ * process, in memory only — a restart mints a new id (spec §13).
+ */
+export const AGENT_USER_ID = randomUUID();
+
+/** Headers every request to the Shippable server carries to identify this agent. */
+const AGENT_IDENTITY_HEADERS = {
+  "X-Shippable-User-Id": AGENT_USER_ID,
+  "X-Shippable-User-Role": "ai",
+};
 
 export const DEFAULT_PORT = 3001;
 
@@ -102,7 +116,7 @@ export async function handleCheckReviewComments(
   try {
     response = await fetchFn(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AGENT_IDENTITY_HEADERS },
       body: JSON.stringify({ worktreePath, status: input.status }),
     });
   } catch (err) {
@@ -173,7 +187,7 @@ export async function handleWatchReviewComments(
     try {
       response = await fetchFn(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...AGENT_IDENTITY_HEADERS },
         body: JSON.stringify({ worktreePath, status: "unread", watch: true }),
       });
     } catch (err) {
@@ -351,7 +365,7 @@ export async function handlePostReviewComment(
   try {
     response = await fetchFn(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AGENT_IDENTITY_HEADERS },
       body: JSON.stringify(payload),
     });
   } catch (err) {

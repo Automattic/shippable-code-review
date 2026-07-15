@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  AGENT_USER_ID,
   DEFAULT_PORT,
   WATCH_DELIVERED_HINT,
   WATCH_IDLE_HINT,
@@ -728,5 +729,91 @@ describe("handleWatchReviewComments", () => {
     expect(result.content[0]!.text).toContain("4242");
     expect(result.content[0]!.text).toContain("500");
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("agent identity headers", () => {
+  it("is a valid UUID minted once per process", () => {
+    expect(AGENT_USER_ID).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it("sends both identity headers on handleCheckReviewComments", async () => {
+    const { fetchFn, calls } = makeFetch(jsonResponse({ payload: "", ids: [] }));
+
+    await handleCheckReviewComments(
+      { worktreePath: "/repo", status: "unread" },
+      { fetchFn },
+    );
+
+    const headers = calls[0]!.init?.headers as Record<string, string>;
+    expect(headers["X-Shippable-User-Id"]).toBe(AGENT_USER_ID);
+    expect(headers["X-Shippable-User-Role"]).toBe("ai");
+  });
+
+  it("sends both identity headers on handlePostReviewComment", async () => {
+    const { fetchFn, calls } = makeFetch(jsonResponse({ id: "x" }));
+
+    await handlePostReviewComment(
+      {
+        worktreePath: "/repo",
+        parentInteractionId: "c1",
+        replyText: "fixed it",
+        intent: "ack",
+      },
+      { fetchFn },
+    );
+
+    const headers = calls[0]!.init?.headers as Record<string, string>;
+    expect(headers["X-Shippable-User-Id"]).toBe(AGENT_USER_ID);
+    expect(headers["X-Shippable-User-Role"]).toBe("ai");
+  });
+
+  it("sends both identity headers on every poll of handleWatchReviewComments", async () => {
+    const ENVELOPE =
+      '<reviewer-feedback from="shippable" commit="abc"><interaction id="c1" file="x.ts">hi</interaction></reviewer-feedback>';
+    const { fetchFn, calls } = makeSequenceFetch([
+      jsonResponse({ payload: "", ids: [] }),
+      jsonResponse({ payload: "", ids: [] }),
+      jsonResponse({ payload: ENVELOPE, ids: ["c1"] }),
+    ]);
+
+    await handleWatchReviewComments(
+      { worktreePath: "/repo" },
+      { fetchFn, sleepFn: async () => {}, nowFn: () => 0 },
+    );
+
+    expect(calls.length).toBeGreaterThan(1);
+    for (const call of calls) {
+      const headers = call.init?.headers as Record<string, string>;
+      expect(headers["X-Shippable-User-Id"]).toBe(AGENT_USER_ID);
+      expect(headers["X-Shippable-User-Role"]).toBe("ai");
+    }
+  });
+
+  it("sends the same user id across different tool calls within the process", async () => {
+    const check = makeFetch(jsonResponse({ payload: "", ids: [] }));
+    await handleCheckReviewComments(
+      { worktreePath: "/repo", status: "unread" },
+      { fetchFn: check.fetchFn },
+    );
+
+    const post = makeFetch(jsonResponse({ id: "x" }));
+    await handlePostReviewComment(
+      {
+        worktreePath: "/repo",
+        parentInteractionId: "c1",
+        replyText: "x",
+        intent: "ack",
+      },
+      { fetchFn: post.fetchFn },
+    );
+
+    const checkHeaders = check.calls[0]!.init?.headers as Record<string, string>;
+    const postHeaders = post.calls[0]!.init?.headers as Record<string, string>;
+    expect(checkHeaders["X-Shippable-User-Id"]).toBe(
+      postHeaders["X-Shippable-User-Id"],
+    );
   });
 });
