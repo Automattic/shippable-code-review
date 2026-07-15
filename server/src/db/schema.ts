@@ -3,7 +3,7 @@ import type { SqliteDb } from "./adapter.ts";
 // The `interactions` table and a `schema_meta` version row. `runMigrations`
 // applies ordered forward steps from the stored version up to `SCHEMA_HEAD`.
 
-export const SCHEMA_HEAD = 2;
+export const SCHEMA_HEAD = 4;
 
 type Migration = (db: SqliteDb) => void;
 
@@ -55,6 +55,27 @@ const MIGRATIONS: Migration[] = [
         value TEXT NOT NULL
       )
     `);
+  },
+  // v2 → v3: identity. One row per author (human or AI) seen by the server.
+  // declared_json/observed_json are reserved for future identity signals —
+  // no store reads or writes them yet.
+  (db) => {
+    db.exec(`
+      CREATE TABLE users (
+        id             TEXT PRIMARY KEY,
+        role           TEXT NOT NULL,
+        display_name   TEXT NOT NULL,
+        declared_json  TEXT,
+        observed_json  TEXT,
+        last_seen_at   TEXT NOT NULL
+      )
+    `);
+  },
+  // v3 → v4: links interactions to their author's user row. Nullable —
+  // existing rows have no author_id, and nothing queries by it yet, so no
+  // index.
+  (db) => {
+    db.exec("ALTER TABLE interactions ADD COLUMN author_id TEXT");
   },
 ];
 
