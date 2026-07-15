@@ -51,7 +51,7 @@ describe("persist v5 — snapshot shape only contains progress fields", () => {
     const state = initialState([cs]);
     const snap = buildSnapshot(state, { "some:key": "draft text" });
 
-    expect(snap.v).toBe(7);
+    expect(snap.v).toBe(8);
     expect(snap.cursor).toEqual(state.cursor);
     expect(snap.readLines).toBeDefined();
     expect(snap.reviewedFiles).toBeDefined();
@@ -196,10 +196,12 @@ describe("persist v5 — empty / unusable changeset boot path", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        v: 7,
+        v: 8,
         cursor: { changesetId: "wt-clean", fileId: "x", hunkId: "y", lineIdx: 0 },
         readLines: {},
+        hunkKeys: {},
         reviewedFiles: [],
+        fileKeys: {},
         reviewedChangesets: {},
         dismissedGuides: [],
         drafts: {},
@@ -221,10 +223,12 @@ describe("persist v5 — empty / unusable changeset boot path", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        v: 7,
+        v: 8,
         cursor: { changesetId: "cs1", fileId: "cs1/f1", hunkId: "missing", lineIdx: 0 },
         readLines: {},
+        hunkKeys: {},
         reviewedFiles: [],
+        fileKeys: {},
         reviewedChangesets: {},
         dismissedGuides: [],
         drafts: {},
@@ -251,10 +255,12 @@ describe("persist v5 — empty / unusable changeset boot path", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        v: 7,
+        v: 8,
         cursor: { changesetId: "cs1", fileId: "cs1/gone", hunkId: "gone", lineIdx: 0 },
         readLines: {},
+        hunkKeys: {},
         reviewedFiles: [],
+        fileKeys: {},
         reviewedChangesets: {},
         dismissedGuides: [],
         drafts: {},
@@ -269,7 +275,119 @@ describe("persist v5 — empty / unusable changeset boot path", () => {
   });
 });
 
-describe("v:7 quiz persistence", () => {
+describe("v:8 — read-state re-keys across changeset id churn", () => {
+  // Worktree edits churn the changeset id (dirty-hash based), which churns
+  // every file/hunk id. The snapshot stores a content key per read hunk /
+  // reviewed file so hydration can follow unchanged content to its new ids.
+  function csOf(csId: string, filesTexts: Record<string, string[]>): ChangeSet {
+    const files = Object.entries(filesTexts).map(([path, texts]) => ({
+      id: `${csId}/${path}`,
+      path,
+      language: "ts",
+      status: "modified" as const,
+      hunks: [
+        {
+          id: `${csId}/${path}#h1`,
+          header: "@@",
+          oldStart: 1,
+          oldCount: texts.length,
+          newStart: 1,
+          newCount: texts.length,
+          lines: texts.map((t, i) => ({
+            kind: "context" as const,
+            text: t,
+            oldNo: i + 1,
+            newNo: i + 1,
+          })),
+        },
+      ],
+    }));
+    return { ...makeChangeset(), id: csId, title: csId, files };
+  }
+
+  it("buildSnapshot records content keys for read hunks and reviewed files", () => {
+    const cs = csOf("wt-dirty:aaa", { "a.ts": ["a1", "a2", "a3"] });
+    const state = {
+      ...initialState([cs]),
+      readLines: { "wt-dirty:aaa/a.ts#h1": new Set([0, 1]) },
+      reviewedFiles: new Set(["wt-dirty:aaa/a.ts"]),
+    };
+    const snap = buildSnapshot(state, {});
+    expect(snap.v).toBe(8);
+    expect(snap.hunkKeys["wt-dirty:aaa/a.ts#h1"]).toMatch(/^[0-9a-f]{8}$/);
+    expect(snap.fileKeys["wt-dirty:aaa/a.ts"]).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it("re-keys readLines and reviewedFiles onto same-content hunks under new ids", () => {
+    const csOld = csOf("wt-dirty:aaa", {
+      "a.ts": ["a1", "a2", "a3"],
+      "b.ts": ["b1", "b2", "b3"],
+    });
+    const state = {
+      ...initialState([csOld]),
+      readLines: {
+        "wt-dirty:aaa/a.ts#h1": new Set([0, 1, 2]),
+        "wt-dirty:aaa/b.ts#h1": new Set([0, 1, 2]),
+      },
+      reviewedFiles: new Set(["wt-dirty:aaa/a.ts", "wt-dirty:aaa/b.ts"]),
+    };
+    saveSession(state, {});
+
+    // New load after an edit to b.ts only — new changeset id, all ids churned.
+    const csNew = csOf("wt-dirty:bbb", {
+      "a.ts": ["a1", "a2", "a3"],
+      "b.ts": ["b1", "EDITED", "b3"],
+    });
+    const hydrated = loadSession([csNew]);
+    expect(hydrated.state).not.toBeNull();
+    expect(hydrated.state!.readLines["wt-dirty:bbb/a.ts#h1"]).toEqual(
+      new Set([0, 1, 2]),
+    );
+    expect(hydrated.state!.readLines["wt-dirty:bbb/b.ts#h1"]).toBeUndefined();
+    expect(hydrated.state!.reviewedFiles).toEqual(
+      new Set(["wt-dirty:bbb/a.ts"]),
+    );
+  });
+
+  it("re-keys the cursor onto the new ids when its hunk content survives", () => {
+    const csOld = csOf("wt-dirty:aaa", { "a.ts": ["a1", "a2", "a3"] });
+    const state = {
+      ...initialState([csOld]),
+      cursor: {
+        changesetId: "wt-dirty:aaa",
+        fileId: "wt-dirty:aaa/a.ts",
+        hunkId: "wt-dirty:aaa/a.ts#h1",
+        lineIdx: 2,
+      },
+      readLines: { "wt-dirty:aaa/a.ts#h1": new Set([0, 1, 2]) },
+    };
+    saveSession(state, {});
+
+    const csNew = csOf("wt-dirty:bbb", { "a.ts": ["a1", "a2", "a3"] });
+    const hydrated = loadSession([csNew]);
+    expect(hydrated.state?.cursor).toEqual({
+      changesetId: "wt-dirty:bbb",
+      fileId: "wt-dirty:bbb/a.ts",
+      hunkId: "wt-dirty:bbb/a.ts#h1",
+      lineIdx: 2,
+    });
+  });
+
+  it("still keeps entries whose ids match the loaded changeset directly", () => {
+    const cs = csOf("cs-same", { "a.ts": ["a1", "a2"] });
+    const state = {
+      ...initialState([cs]),
+      readLines: { "cs-same/a.ts#h1": new Set([0, 1]) },
+      reviewedFiles: new Set(["cs-same/a.ts"]),
+    };
+    saveSession(state, {});
+    const hydrated = loadSession([cs]);
+    expect(hydrated.state!.readLines["cs-same/a.ts#h1"]).toEqual(new Set([0, 1]));
+    expect(hydrated.state!.reviewedFiles).toEqual(new Set(["cs-same/a.ts"]));
+  });
+});
+
+describe("v:8 quiz persistence", () => {
   it("round-trips the quiz slice", () => {
     const cs: ChangeSet = {
       id: "cs-1", title: "x", description: "", branch: "f", base: "main", author: "u",
@@ -297,7 +415,7 @@ describe("v:7 quiz persistence", () => {
       },
     };
     const snap = buildSnapshot(stateWithQuiz, {});
-    expect(snap.v).toBe(7);
+    expect(snap.v).toBe(8);
     const wire = JSON.parse(JSON.stringify(snap));
     localStorage.setItem("shippable:review:v1", JSON.stringify(wire));
     const hydrated = loadSession([cs]);
@@ -319,14 +437,14 @@ describe("v:7 quiz persistence", () => {
   });
 
   it("rejects a snapshot with a malformed quiz blob", () => {
-    // A v:7 snapshot is otherwise valid but quiz is missing inner fields.
+    // A v:8 snapshot is otherwise valid but quiz is missing inner fields.
     // The reducer would crash on first read of quiz.questions / quiz.asked,
     // so isPersistedSnapshot must reject before we hand it back.
     localStorage.setItem(
       "shippable:review:v1",
       JSON.stringify({
-        v: 7, cursor: {}, readLines: {}, reviewedFiles: [],
-        reviewedChangesets: {}, dismissedGuides: [], drafts: {}, quiz: {},
+        v: 8, cursor: {}, readLines: {}, hunkKeys: {}, reviewedFiles: [],
+        fileKeys: {}, reviewedChangesets: {}, dismissedGuides: [], drafts: {}, quiz: {},
       }),
     );
     const hydrated = loadSession([]);

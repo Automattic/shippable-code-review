@@ -27,7 +27,13 @@ import {
   userCommentKey,
   userFileCommentKey,
 } from "./types";
-import { captureAnchorContext, findAnchorInFile, hashAnchorWindow } from "./anchor";
+import {
+  captureAnchorContext,
+  fileContentKey,
+  findAnchorInFile,
+  hashAnchorWindow,
+  hunkContentKey,
+} from "./anchor";
 import { enrichWithFileContent } from "./expandContext";
 import { newReviewerInteractionId } from "./interactions";
 import { pickNextForFile, pickNextForChangeset } from "./quiz";
@@ -870,21 +876,86 @@ function reloadChangeset(
     }
   }
 
-  // Cursor: same file if it still exists in the new cs, else file 0.
+  // Read-state re-key: ids embed the changeset id, so every reload churns
+  // them even for files the edit didn't touch. Unchanged content keeps its
+  // read marks and reviewed flag under the new ids; changed hunks/files
+  // start over — a changed hunk must be re-read.
+  const newHunkByKey = new Map<string, { hunk: Hunk; fileId: string }>();
+  for (const f of cs.files) {
+    for (const h of f.hunks) {
+      const k = hunkContentKey(f.path, h.lines);
+      if (!newHunkByKey.has(k)) newHunkByKey.set(k, { hunk: h, fileId: f.id });
+    }
+  }
+  const nextReadLines: Record<string, Set<number>> = {};
+  for (const [hunkId, set] of Object.entries(state.readLines)) {
+    const oldRef = oldHunkInfo.get(hunkId);
+    if (!oldRef) {
+      // Belongs to a different changeset — pass through.
+      nextReadLines[hunkId] = set;
+      continue;
+    }
+    const match = newHunkByKey.get(
+      hunkContentKey(oldRef.file.path, oldRef.hunk.lines),
+    );
+    if (!match) continue;
+    const existing = nextReadLines[match.hunk.id];
+    nextReadLines[match.hunk.id] = existing
+      ? new Set([...existing, ...set])
+      : set;
+  }
+
+  const newFileIdByKey = new Map<string, string>();
+  for (const f of cs.files) {
+    const k = fileContentKey(f);
+    if (!newFileIdByKey.has(k)) newFileIdByKey.set(k, f.id);
+  }
+  const oldFileById = new Map(oldCs.files.map((f) => [f.id, f]));
+  const nextReviewedFiles = new Set<string>();
+  for (const fileId of state.reviewedFiles) {
+    const oldFile = oldFileById.get(fileId);
+    if (!oldFile) {
+      nextReviewedFiles.add(fileId);
+      continue;
+    }
+    const newId = newFileIdByKey.get(fileContentKey(oldFile));
+    if (newId) nextReviewedFiles.add(newId);
+  }
+
+  // Cursor: exact hunk if its content survived (keeps the reviewer's place,
+  // line for line), else same file by path, else file 0.
   const wasOnReloadedCs = state.cursor.changesetId === prevId;
   let nextCursor: Cursor;
   if (wasOnReloadedCs) {
-    const oldCursorFile = oldCs.files.find((f) => f.id === state.cursor.fileId);
-    const cursorFile =
-      (oldCursorFile && cs.files.find((f) => f.path === oldCursorFile.path)) ??
-      firstFile;
-    const cursorHunk = cursorFile.hunks[0];
-    nextCursor = {
-      changesetId: cs.id,
-      fileId: cursorFile.id,
-      hunkId: cursorHunk.id,
-      lineIdx: 0,
-    };
+    const oldCursorRef = oldHunkInfo.get(state.cursor.hunkId);
+    const cursorMatch = oldCursorRef
+      ? newHunkByKey.get(
+          hunkContentKey(oldCursorRef.file.path, oldCursorRef.hunk.lines),
+        )
+      : undefined;
+    if (cursorMatch) {
+      nextCursor = {
+        changesetId: cs.id,
+        fileId: cursorMatch.fileId,
+        hunkId: cursorMatch.hunk.id,
+        lineIdx: Math.min(
+          state.cursor.lineIdx,
+          cursorMatch.hunk.lines.length - 1,
+        ),
+      };
+    } else {
+      const oldCursorFile = oldCs.files.find((f) => f.id === state.cursor.fileId);
+      const cursorFile =
+        (oldCursorFile && cs.files.find((f) => f.path === oldCursorFile.path)) ??
+        firstFile;
+      const cursorHunk = cursorFile.hunks[0];
+      nextCursor = {
+        changesetId: cs.id,
+        fileId: cursorFile.id,
+        hunkId: cursorHunk.id,
+        lineIdx: 0,
+      };
+    }
   } else {
     nextCursor = state.cursor;
   }
@@ -894,7 +965,8 @@ function reloadChangeset(
     changesets: nextChangesets,
     cursor: nextCursor,
     selection: null,
-    readLines: addLine(state.readLines, nextCursor.hunkId, nextCursor.lineIdx),
+    readLines: addLine(nextReadLines, nextCursor.hunkId, nextCursor.lineIdx),
+    reviewedFiles: nextReviewedFiles,
     interactions: nextInteractions,
     detachedInteractions: nextDetached,
   };

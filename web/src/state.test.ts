@@ -1120,6 +1120,132 @@ describe("RELOAD_CHANGESET", () => {
   });
 });
 
+// ── RELOAD_CHANGESET — read-state carry-over ────────────────────────────────
+// A worktree edit churns the changeset id, which churns every file/hunk id.
+// Read marks and reviewed flags must follow unchanged content to its new ids;
+// changed content starts over.
+
+describe("RELOAD_CHANGESET read-state carry-over", () => {
+  function fileOf(id: string, path: string, hunkId: string, texts: string[]): DiffFile {
+    return {
+      id,
+      path,
+      language: "ts",
+      status: "modified",
+      hunks: [
+        {
+          id: hunkId,
+          header: "@@",
+          oldStart: 1,
+          oldCount: texts.length,
+          newStart: 1,
+          newCount: texts.length,
+          lines: texts.map((t, i) => ({
+            kind: "context" as const,
+            text: t,
+            oldNo: i + 1,
+            newNo: i + 1,
+          })),
+        },
+      ],
+    };
+  }
+
+  // Old cs "cs-old": a.ts (unchanged on reload) + b.ts (edited on reload).
+  function seed(): ReviewState {
+    const cs = makeChangeset("cs-old", [
+      fileOf("cs-old/a.ts", "a.ts", "cs-old/a.ts#h1", ["a1", "a2", "a3"]),
+      fileOf("cs-old/b.ts", "b.ts", "cs-old/b.ts#h1", ["b1", "b2", "b3"]),
+    ]);
+    let s = initialState([cs]);
+    s = reducer(s, { type: "MARK_LINES_READ", hunkId: "cs-old/a.ts#h1", loLineIdx: 0, hiLineIdx: 2 });
+    s = reducer(s, { type: "MARK_LINES_READ", hunkId: "cs-old/b.ts#h1", loLineIdx: 0, hiLineIdx: 2 });
+    s = reducer(s, { type: "TOGGLE_FILE_REVIEWED", fileId: "cs-old/a.ts" });
+    s = reducer(s, { type: "TOGGLE_FILE_REVIEWED", fileId: "cs-old/b.ts" });
+    return s;
+  }
+
+  function reloaded(): ChangeSet {
+    return makeChangeset("cs-new", [
+      fileOf("cs-new/a.ts", "a.ts", "cs-new/a.ts#h1", ["a1", "a2", "a3"]),
+      fileOf("cs-new/b.ts", "b.ts", "cs-new/b.ts#h1", ["b1", "EDITED", "b3"]),
+    ]);
+  }
+
+  it("carries readLines to the new hunk id when hunk content is unchanged", () => {
+    const s = reducer(seed(), {
+      type: "RELOAD_CHANGESET",
+      prevChangesetId: "cs-old",
+      changeset: reloaded(),
+    });
+    expect(s.readLines["cs-new/a.ts#h1"]).toEqual(new Set([0, 1, 2]));
+    // No stale entries under the old ids.
+    expect(s.readLines["cs-old/a.ts#h1"]).toBeUndefined();
+    expect(s.readLines["cs-old/b.ts#h1"]).toBeUndefined();
+  });
+
+  it("drops read marks for a hunk whose content changed", () => {
+    const s = reducer(seed(), {
+      type: "RELOAD_CHANGESET",
+      prevChangesetId: "cs-old",
+      changeset: reloaded(),
+    });
+    // The cursor re-seat may mark one line read in the seat hunk (a.ts);
+    // b.ts changed, so nothing carries over to it.
+    expect(s.readLines["cs-new/b.ts#h1"]).toBeUndefined();
+  });
+
+  it("carries the reviewed flag for an unchanged file, drops it for a changed one", () => {
+    const s = reducer(seed(), {
+      type: "RELOAD_CHANGESET",
+      prevChangesetId: "cs-old",
+      changeset: reloaded(),
+    });
+    expect(s.reviewedFiles.has("cs-new/a.ts")).toBe(true);
+    expect(s.reviewedFiles.has("cs-new/b.ts")).toBe(false);
+    expect(s.reviewedFiles.has("cs-old/a.ts")).toBe(false);
+    expect(s.reviewedFiles.has("cs-old/b.ts")).toBe(false);
+  });
+
+  it("keeps the cursor at the same line when the cursor's hunk content is unchanged", () => {
+    let s = seed();
+    s = reducer(s, { type: "MOVE_LINE", delta: 2 });
+    expect(s.cursor).toMatchObject({ hunkId: "cs-old/a.ts#h1", lineIdx: 2 });
+    s = reducer(s, {
+      type: "RELOAD_CHANGESET",
+      prevChangesetId: "cs-old",
+      changeset: reloaded(),
+    });
+    expect(s.cursor).toMatchObject({
+      changesetId: "cs-new",
+      fileId: "cs-new/a.ts",
+      hunkId: "cs-new/a.ts#h1",
+      lineIdx: 2,
+    });
+  });
+
+  it("leaves read state of other changesets untouched", () => {
+    const other = makeChangeset("cs-other", [
+      fileOf("cs-other/z.ts", "z.ts", "cs-other/z.ts#h1", ["z1", "z2"]),
+    ]);
+    const cs = makeChangeset("cs-old", [
+      fileOf("cs-old/a.ts", "a.ts", "cs-old/a.ts#h1", ["a1", "a2", "a3"]),
+    ]);
+    let s = initialState([other, cs]);
+    s = reducer(s, { type: "MARK_LINES_READ", hunkId: "cs-other/z.ts#h1", loLineIdx: 0, hiLineIdx: 1 });
+    s = reducer(s, { type: "TOGGLE_FILE_REVIEWED", fileId: "cs-other/z.ts" });
+    s = reducer(s, {
+      type: "RELOAD_CHANGESET",
+      prevChangesetId: "cs-old",
+      changeset: makeChangeset("cs-new", [
+        fileOf("cs-new/a.ts", "a.ts", "cs-new/a.ts#h1", ["a1", "a2", "a3"]),
+      ]),
+    });
+    expect(s.readLines["cs-other/z.ts#h1"]).toEqual(new Set([0, 1]));
+    expect(s.reviewedFiles.has("cs-other/z.ts")).toBe(true);
+  });
+});
+
 // ── HYDRATE_FILE ───────────────────────────────────────────────────────────
 
 describe("HYDRATE_FILE", () => {

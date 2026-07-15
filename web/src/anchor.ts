@@ -47,6 +47,33 @@ export function hashAnchorWindow(lines: DiffLine[], centerIdx: number): string {
   return fnv1a(parts.join("\n"));
 }
 
+/**
+ * Content key for a whole hunk, scoped by file path. Worktree reloads mint a
+ * new changeset id (and therefore new file/hunk ids) whenever the dirty hash
+ * moves, even for files the edit didn't touch. Read-line marks and reviewed
+ * flags follow unchanged content to its new ids by matching these keys.
+ * Line numbers are excluded on purpose — identity is the diff content itself.
+ */
+export function hunkContentKey(path: string, lines: DiffLine[]): string {
+  return fnv1a(
+    `${path}\u0000${lines.map((l) => `${l.kind[0]}|${l.text}`).join("\n")}`,
+  );
+}
+
+/** Content key for a file's entire diff: path + every hunk's lines. Matches
+ *  only when no hunk in the file changed — the bar for keeping a "reviewed"
+ *  flag across a reload. */
+export function fileContentKey(file: {
+  path: string;
+  hunks: Pick<Hunk, "lines">[];
+}): string {
+  return fnv1a(
+    `${file.path}\u0000${file.hunks
+      .map((h) => h.lines.map((l) => `${l.kind[0]}|${l.text}`).join("\n"))
+      .join("\u001e")}`,
+  );
+}
+
 export interface CapturedAnchor {
   context: DiffLine[];
   hash: string;

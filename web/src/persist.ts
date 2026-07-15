@@ -12,7 +12,15 @@
  * review progress (cursor, readLines, reviewedFiles, dismissedGuides, drafts).
  */
 
-import type { ChangeSet, Cursor, QuizState, ReviewState } from "./types";
+import { fileContentKey, hunkContentKey } from "./anchor";
+import type {
+  ChangeSet,
+  Cursor,
+  DiffFile,
+  DiffLine,
+  QuizState,
+  ReviewState,
+} from "./types";
 
 const STORAGE_KEY = "shippable:review:v1";
 
@@ -59,7 +67,7 @@ export function setLiveReloadEnabled(
   }
 }
 
-// Head schema version is 7. Snapshots whose `v` isn't exactly 7 are rejected
+// Head schema version is 8. Snapshots whose `v` isn't exactly 8 are rejected
 // at load and the store boots empty. The prototype has no users to migrate.
 // v3 → v4: interactions and detachedInteractions removed (moved to SQLite).
 // v4 → v5: reviewedChangesets added (revision-scoped changeset sign-off,
@@ -68,14 +76,22 @@ export function setLiveReloadEnabled(
 // see docs/plans/comprehension-quiz.md).
 // v6 → v7: quiz dice + cooldown removed; `lastQuizAt` gone, `active.mode`
 // added. Deterministic surfacing on sign-off events.
+// v7 → v8: hunkKeys + fileKeys added — content keys that let read marks and
+// reviewed flags survive changeset-id churn (worktree dirty-hash reloads).
 
 /** What we actually serialize — Sets become arrays, ephemeral fields drop. */
 interface PersistedSnapshot {
-  v: 7;
+  v: 8;
   cursor: Cursor;
   /** Set<number> → number[] per hunk id. */
   readLines: Record<string, number[]>;
+  /** hunkId → content key (anchor.ts hunkContentKey) for every readLines
+   *  entry resolvable in the saved changesets. Lets hydration follow
+   *  unchanged content to its new ids when the changeset id churns. */
+  hunkKeys: Record<string, string>;
   reviewedFiles: string[];
+  /** fileId → content key (anchor.ts fileContentKey), same purpose. */
+  fileKeys: Record<string, string>;
   /** changesetId → review tokens at which sign-off was given for that cs. */
   reviewedChangesets: Record<string, string[]>;
   dismissedGuides: string[];
@@ -105,21 +121,50 @@ export function buildSnapshot(
   state: ReviewState,
   drafts: Record<string, string>,
 ): PersistedSnapshot {
+  // Content keys for whatever the snapshot references and the loaded
+  // changesets can resolve. Entries pointing at changesets not currently
+  // loaded simply get no key — they can't re-key, same as before v8.
+  const hunkById = new Map<string, { path: string; lines: DiffLine[] }>();
+  const fileById = new Map<string, DiffFile>();
+  for (const cs of state.changesets) {
+    for (const f of cs.files) {
+      fileById.set(f.id, f);
+      for (const h of f.hunks) hunkById.set(h.id, { path: f.path, lines: h.lines });
+    }
+  }
+
   const readLines: Record<string, number[]> = {};
+  const hunkKeys: Record<string, string> = {};
   for (const [hunkId, set] of Object.entries(state.readLines)) {
     if (set.size === 0) continue;
     readLines[hunkId] = Array.from(set).sort((a, b) => a - b);
+    const hunk = hunkById.get(hunkId);
+    if (hunk) hunkKeys[hunkId] = hunkContentKey(hunk.path, hunk.lines);
   }
+  const cursorHunk = hunkById.get(state.cursor.hunkId);
+  if (cursorHunk) {
+    hunkKeys[state.cursor.hunkId] = hunkContentKey(cursorHunk.path, cursorHunk.lines);
+  }
+
+  const reviewedFiles = Array.from(state.reviewedFiles).sort();
+  const fileKeys: Record<string, string> = {};
+  for (const fileId of reviewedFiles) {
+    const file = fileById.get(fileId);
+    if (file) fileKeys[fileId] = fileContentKey(file);
+  }
+
   const reviewedChangesets: Record<string, string[]> = {};
   for (const [csId, tokens] of Object.entries(state.reviewedChangesets)) {
     if (tokens.length === 0) continue;
     reviewedChangesets[csId] = [...tokens];
   }
   return {
-    v: 7,
+    v: 8,
     cursor: state.cursor,
     readLines,
-    reviewedFiles: Array.from(state.reviewedFiles).sort(),
+    hunkKeys,
+    reviewedFiles,
+    fileKeys,
     reviewedChangesets,
     dismissedGuides: Array.from(state.dismissedGuides).sort(),
     drafts,
@@ -221,20 +266,45 @@ export function loadSession(changesets: ChangeSet[]): HydratedSession {
   const snapshot = parsed;
 
   // Validate the cursor against current changesets — fixtures change
-  // between runs (or the user loaded an entirely different set).
-  const cursor = validateCursor(snapshot.cursor, changesets);
+  // between runs (or the user loaded an entirely different set). When the
+  // exact ids are gone (worktree reload churned the changeset id) but the
+  // cursor's hunk content survived, follow it to its new id.
+  const hunkKeyIndex = indexHunksByContentKey(changesets);
+  const cursor =
+    validateCursor(snapshot.cursor, changesets) ??
+    rekeyCursor(snapshot, hunkKeyIndex);
 
-  // Rehydrate Sets and Maps. Drop entries whose hunk/file ids don't
-  // exist in the current changesets — stale data from older fixtures
-  // shouldn't poison the current session. (We don't drop them on save —
-  // user might switch back to the older changeset later.)
+  // Rehydrate Sets and Maps. Entries whose hunk/file ids don't exist in the
+  // current changesets re-key by content when the snapshot carries a content
+  // key that matches — ids churn with the changeset id on every worktree
+  // reload, and unchanged files shouldn't lose their marks. Anything that
+  // neither matches by id nor by content is dropped — stale data from older
+  // fixtures shouldn't poison the current session. (We don't drop them on
+  // save — user might switch back to the older changeset later.)
   const validHunkIds = collectHunkIds(changesets);
   const validFileIds = collectFileIds(changesets);
 
   const readLines: Record<string, Set<number>> = {};
   for (const [hunkId, arr] of Object.entries(snapshot.readLines)) {
-    if (!validHunkIds.has(hunkId)) continue;
-    readLines[hunkId] = new Set(arr.filter((n) => Number.isFinite(n)));
+    const targetId = validHunkIds.has(hunkId)
+      ? hunkId
+      : rekeyByContent(hunkId, snapshot.hunkKeys, hunkKeyIndex)?.hunkId;
+    if (!targetId) continue;
+    const set = readLines[targetId] ?? new Set<number>();
+    for (const n of arr) if (Number.isFinite(n)) set.add(n);
+    readLines[targetId] = set;
+  }
+
+  const fileKeyIndex = indexFilesByContentKey(changesets);
+  const reviewedFiles = new Set<string>();
+  for (const fileId of snapshot.reviewedFiles) {
+    if (validFileIds.has(fileId)) {
+      reviewedFiles.add(fileId);
+      continue;
+    }
+    const key = snapshot.fileKeys[fileId];
+    const rekeyed = key ? fileKeyIndex.get(key) : undefined;
+    if (rekeyed) reviewedFiles.add(rekeyed);
   }
 
   // No valid persisted cursor and no usable fallback in the current
@@ -259,7 +329,7 @@ export function loadSession(changesets: ChangeSet[]): HydratedSession {
     state: {
       cursor: resolvedCursor,
       readLines,
-      reviewedFiles: new Set(snapshot.reviewedFiles.filter((id) => validFileIds.has(id))),
+      reviewedFiles,
       reviewedChangesets,
       dismissedGuides: new Set(snapshot.dismissedGuides),
       quiz: snapshot.quiz,
@@ -270,14 +340,84 @@ export function loadSession(changesets: ChangeSet[]): HydratedSession {
 
 // ─── helpers ────────────────────────────────────────────────────────────
 
+/** Content-key → location of the first hunk with that content in the
+ *  loaded changesets. Duplicate content keeps the first hit — a stale
+ *  match lands somewhere identical, which is as good as correct. */
+interface HunkLocation {
+  changesetId: string;
+  fileId: string;
+  hunkId: string;
+  lineCount: number;
+}
+
+function indexHunksByContentKey(
+  changesets: ChangeSet[],
+): Map<string, HunkLocation> {
+  const out = new Map<string, HunkLocation>();
+  for (const cs of changesets) {
+    for (const f of cs.files) {
+      for (const h of f.hunks) {
+        const key = hunkContentKey(f.path, h.lines);
+        if (!out.has(key)) {
+          out.set(key, {
+            changesetId: cs.id,
+            fileId: f.id,
+            hunkId: h.id,
+            lineCount: h.lines.length,
+          });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function indexFilesByContentKey(changesets: ChangeSet[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const cs of changesets) {
+    for (const f of cs.files) {
+      const key = fileContentKey(f);
+      if (!out.has(key)) out.set(key, f.id);
+    }
+  }
+  return out;
+}
+
+function rekeyByContent(
+  hunkId: string,
+  hunkKeys: Record<string, string>,
+  index: Map<string, HunkLocation>,
+): HunkLocation | undefined {
+  const key = hunkKeys[hunkId];
+  return key ? index.get(key) : undefined;
+}
+
+/** Follow the persisted cursor's hunk content to its new ids. Same-content
+ *  hunks have the same line count, but clamp anyway — the key is a hash. */
+function rekeyCursor(
+  snapshot: PersistedSnapshot,
+  index: Map<string, HunkLocation>,
+): Cursor | null {
+  const hit = rekeyByContent(snapshot.cursor.hunkId, snapshot.hunkKeys, index);
+  if (!hit) return null;
+  return {
+    changesetId: hit.changesetId,
+    fileId: hit.fileId,
+    hunkId: hit.hunkId,
+    lineIdx: Math.max(0, Math.min(hit.lineCount - 1, snapshot.cursor.lineIdx)),
+  };
+}
+
 function isPersistedSnapshot(x: unknown): x is PersistedSnapshot {
   if (!x || typeof x !== "object") return false;
   const o = x as Record<string, unknown>;
   if (
-    o.v !== 7 ||
+    o.v !== 8 ||
     typeof o.cursor !== "object" ||
     typeof o.readLines !== "object" ||
+    !isStringRecord(o.hunkKeys) ||
     !Array.isArray(o.reviewedFiles) ||
+    !isStringRecord(o.fileKeys) ||
     typeof o.reviewedChangesets !== "object" || o.reviewedChangesets === null ||
     !Array.isArray(o.dismissedGuides) ||
     typeof o.drafts !== "object" ||
@@ -304,6 +444,12 @@ function isPersistedSnapshot(x: unknown): x is PersistedSnapshot {
     if (a.mode !== "single" && a.mode !== "sequence") return false;
   }
   for (const id of q.asked) if (typeof id !== "string") return false;
+  return true;
+}
+
+function isStringRecord(x: unknown): x is Record<string, string> {
+  if (!x || typeof x !== "object" || Array.isArray(x)) return false;
+  for (const v of Object.values(x)) if (typeof v !== "string") return false;
   return true;
 }
 
