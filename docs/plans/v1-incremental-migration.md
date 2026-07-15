@@ -53,6 +53,7 @@ One worktree/branch per step; normal PR to `main`.
    only cursor/drafts/dismissals.
 3. **Users + identity** — `users` table; client-minted UUID +
    `X-Shippable-User-Id` header; replaces the hardcoded `"you"` author.
+   **Done 2026-07-15.**
 4. **Persist changesets** — `changesets` + `diff_files` written at ingest with
    the parent chain; per-request recompute stays as fallback until stable.
 5. **Anchor cutover** *(expand/migrate/contract; depends on 1)* — dual-write
@@ -103,6 +104,21 @@ vocabulary gains one neutral reply intent; everything else in §1.2 stands.
   union as of this branch (step 1), so later steps build on the decided shape.
 - **Step-5 remap targets:** `request → comment`, `ack → accept`, historical
   asks-on-interactions → `respond`.
+
+## Decision — explicit role header (2026-07-15; amends v1-architecture §13)
+
+§13 has role implied by route (`/api/agent/*` ⇒ `'ai'`, everything else ⇒
+`'human'`). Step 3 landed an explicit `X-Shippable-User-Role` header instead —
+`identityFrom` reads it and defaults to `'human'` when absent — because the
+MCP subprocess already sends both headers on every call and a route-implied
+rule would need every current and future agent route enumerated to stay
+correct. First-sight role is sticky (`user-store.ts`'s upsert never updates
+`role` on conflict), so a later request can't flip it either way.
+
+`interactions.author_id` landed as the expand column: nullable, populated
+from the resolved request identity on write, untouched on conflict so a
+re-sync without headers can't clear it. Old rows read back `null`. Contract
+(backfill or NOT NULL) is a step 5/6 decision, not this step's.
 
 ## Open questions (decide before step 5)
 
