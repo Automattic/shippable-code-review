@@ -2,9 +2,9 @@
 
 **Status:** active (2026-07-14). Supersedes the one-shot-branch strategy in
 `product-analysis/rebuild-sequence.md` (branch `rebuild/plan-on-main`, unmerged).
-The *target design* is unchanged: `product-analysis/v1-architecture.md` on that
-branch (pinned: commit `a00d8d5`) remains the design tie-breaker; only the
-execution strategy changed.
+The *target design* is unchanged: `product-analysis/v1-architecture.md` —
+vendored onto this branch from `rebuild/plan-on-main@a00d8d5` — remains the
+design tie-breaker; only the execution strategy changed.
 
 **Goal:** reach the v1 four-primitive architecture — `Anchor`, `Interaction`,
 `ChangeSet`, `Capability`; server SQLite as system of record; AI via MCP only;
