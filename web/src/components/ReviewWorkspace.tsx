@@ -2350,7 +2350,7 @@ function ReviewWorkspaceInner({
           title="Reset review session?"
           message={
             resetError ??
-            "Read marks, sign-offs, comments, and drafts will be cleared."
+            "Read marks, sign-offs, drafts, and all comments will be cleared — including AI comments posted by agents and comments still queued for the agent."
           }
           confirmLabel="reset"
           danger
