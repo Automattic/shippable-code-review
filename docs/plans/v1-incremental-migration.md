@@ -16,7 +16,7 @@ plan assumed had to be rebuilt — a SQLite store with a forward-migration
 framework (`server/src/db/schema.ts`), a unified `Interaction` type
 (`web/src/types.ts`), the interaction trust boundary
 (`server/src/agent-queue.ts`), and a working agent queue + MCP bridge. The
-remaining delta is a model swap behind an insulated view seam, not a rewrite.
+remaining delta is a model swap behind an insulated view boundary, not a rewrite.
 Meanwhile this repo has already demonstrated the one-shot failure mode:
 `refactor/unify-interactions-seam` died of branch rot while `main` moved on.
 
@@ -60,7 +60,7 @@ One worktree/branch per step; normal PR to `main`.
    the parent chain; per-request recompute stays as fallback until stable.
 5. **Anchor cutover** *(expand/migrate/contract; depends on 1)* — dual-write
    `anchor_json` beside `threadKey` in `payload_json`; adapt the
-   `interactions.ts`/`view.ts` seam; thread via `resolveRootAnchor`; then
+   `interactions.ts`/`view.ts` boundary; thread via `resolveRootAnchor`; then
    contract `threadKey`/`target`/`parentId` out of the client,
    `renderInteraction`, and the MCP tool together.
 6. **agent_queue + wait_for_work** *(depends on 3)* — new `agent_queue` table
@@ -122,23 +122,56 @@ from the resolved request identity on write, untouched on conflict so a
 re-sync without headers can't clear it. Old rows read back `null`. Contract
 (backfill or NOT NULL) is a step 5/6 decision, not this step's.
 
+## Decision — author integrity on upsert (2026-07-16)
+
+One identity must never rewrite another identity's row. Nothing legitimate
+needs it: the web client mirrors only rows it authored
+(`useInteractionSync`'s `shouldMirror`), and the MCP path writes only agent
+rows. Today's `POST /api/interactions` allows it purely by omission — the id
+is client-supplied and the conflict clause trusts the caller, overwriting
+`body`/`author` while preserving `author_id`. Enforcement landed on this
+branch (pulled forward from step 5 at review): `POST /api/interactions` 409s
+an upsert whose resolved identity differs from the row's non-null
+`author_id` — a headerless request counts as a different identity. Rows
+whose `author_id` is null (pre-identity data, or a headerless write) adopt
+the first identified writer rather than staying unowned forever.
+
+## Decision — role vocabulary (2026-07-16)
+
+Unify, don't map. `users.role`'s `human | ai` is the vocabulary; the legacy
+`interactions.author_role` values remap in step 5's migration
+(`user → human`, `agent → ai`).
+
 ## Open questions (decide before step 5)
 
 - **`unack` remap.** No revocation intent exists in v1 (interactions are
   immutable; replies append). Candidate rule: latest verdict reply wins, and
   historical `unack` rows migrate as `respond` noting the withdrawal. Decide
   with step 5's resolution-semantics implementation.
-- **Author-integrity on upsert.** `POST /api/interactions` is an open upsert
-  on a client-supplied id; today a different identity can rewrite a row's
-  body while the original `author_id` is preserved. Decide whether to 409 on
-  an author mismatch once step 5 moves this onto the contract phase.
-- **Role vocabulary unification.** `users.role` is `human | ai`; the legacy
-  `interactions.author_role` is `user | ai | agent`. Step 5's contract should
-  unify or map between them rather than carry both.
-- **Header seam width.** Only `apiClient`'s three helpers send the identity
+- **Role correction path.** `users.role` is first-sight-sticky and the
+  headers are unauthenticated, so a wrong first claim (buggy script sending
+  `-Role: ai` with a human's id, or vice versa) is permanent — there is no
+  correction path, not even manual. Not exploitable on a single-user
+  127.0.0.1 bind: anyone positioned to squat a role can already edit the
+  SQLite file directly. It becomes real exactly when localhost stops meaning
+  "just me" — forwarded ports to shared dev hosts, or multi-user v1.x —
+  where a pre-claimed id would mislabel a person's comments with the agent
+  badge forever. Decide alongside §18's real-auth work; a manual
+  `UPDATE users SET role` escape hatch may be enough until then.
+- **Header boundary width.** Only `apiClient`'s three helpers send the identity
   header today. ~15 web modules still call raw `fetch` — harmless right now
   because all interaction writes route through `apiClient`, but don't assume
   full coverage without checking call sites first.
+
+## Noted for steps 5/6 (accepted costs, not blocking)
+
+- `upsertUser` fires a SQLite write on every identified `/api/*` call purely
+  to bump `last_seen_at` — including every poll of the MCP watch loop.
+  Throttle per-id if it ever shows up in profiles.
+- The MCP subprocess mints a fresh agent id per process, so every restart
+  inserts a `users` row that's never referenced again. Unbounded by design in
+  the expand phase; GC (or subprocess id persistence, §18) needs a home in
+  step 6.
 
 ## Data migration
 
