@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getUserId } from "./userId";
+import { getUserId, resetForTests } from "./userId";
 
 const STORAGE_KEY = "shippable:userId:v1";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -8,6 +8,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
+  resetForTests();
 });
 
 describe("getUserId", () => {
@@ -46,6 +47,25 @@ describe("getUserId", () => {
       throw new Error("SecurityError: private mode");
     });
     const first = getUserId();
+    const second = getUserId();
+    expect(second).toBe(first);
+  });
+
+  it("keeps one id for the session even when storage fails and then recovers", () => {
+    const getItem = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new Error("QuotaExceededError");
+      });
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new Error("QuotaExceededError");
+      });
+    const first = getUserId();
+
+    getItem.mockRestore();
+    setItem.mockRestore();
     const second = getUserId();
     expect(second).toBe(first);
   });
