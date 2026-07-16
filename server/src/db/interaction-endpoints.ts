@@ -4,11 +4,6 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { writeJson, readJson } from "../http.ts";
-import type {
-  InteractionTarget,
-  InteractionIntent,
-  InteractionAuthorRole,
-} from "../agent-queue.ts";
 import {
   isValidInteractionPair,
   isInteractionTarget,
@@ -20,6 +15,7 @@ import { recordStatOnce } from "../stats/record.ts";
 import { getRequestIdentity } from "../identity.ts";
 import {
   upsertInteraction,
+  existingAuthorId,
   getInteractionsByChangeset,
   deleteInteraction,
   enqueueToWorktree,
@@ -108,6 +104,19 @@ export async function handleInteractionsUpsert(
   const bodyless = b.intent === "ack" || b.intent === "unack";
   if (typeof b.body !== "string" || (b.body === "" && !bodyless)) {
     writeJson(res, origin, 400, { error: "body must be a non-empty string" });
+    return;
+  }
+
+  // Author integrity (docs/plans/v1-incremental-migration.md): once a row is
+  // owned, only that identity may rewrite it — a headerless request counts as
+  // a different identity. No await between this check and the upsert, so the
+  // pair can't interleave with another request in this single-process server.
+  const owner = existingAuthorId(b.id);
+  const callerId = getRequestIdentity(req)?.userId ?? null;
+  if (owner != null && owner !== callerId) {
+    writeJson(res, origin, 409, {
+      error: "author mismatch: interaction belongs to another identity",
+    });
     return;
   }
 

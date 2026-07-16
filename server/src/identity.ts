@@ -28,7 +28,7 @@ export function identityFrom(
 ): RequestIdentity | null {
   const rawUserId = firstHeaderValue(headers["x-shippable-user-id"]);
   const userId = rawUserId?.trim();
-  if (!userId || userId.length === 0 || userId.length > MAX_USER_ID_LENGTH) {
+  if (!userId || userId.length > MAX_USER_ID_LENGTH) {
     return null;
   }
   const roleHeader = firstHeaderValue(headers["x-shippable-user-role"]);

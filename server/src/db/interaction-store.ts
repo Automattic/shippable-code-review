@@ -80,11 +80,12 @@ function rowToStored(row: InteractionRow): StoredInteraction {
 // On a fresh INSERT both default to the caller-supplied values (typically null
 // for a normal review interaction that hasn't been enqueued yet).
 //
-// `author_id` is absent from the SET clause too, but for a different reason:
-// once a row is stamped with an author, a later re-sync of the same id
-// without a resolved request identity (e.g. no auth header on that request)
-// must not clear it. On a fresh INSERT it takes the caller-supplied value
-// (null if no identity was resolved for that request).
+// `author_id` adopts on first identified write and is immutable after: the
+// COALESCE keeps a stamped author through headerless re-syncs (which must not
+// clear it) while letting a pre-identity row gain an owner the first time an
+// identified client rewrites it. Rewrites by a *different* identity never
+// reach this statement — the endpoint 409s them first (see
+// interaction-endpoints.ts).
 const UPSERT_SQL = `
   INSERT INTO interactions (
     id, thread_key, target, intent, author, author_role, body, created_at,
@@ -99,6 +100,7 @@ const UPSERT_SQL = `
     body         = excluded.body,
     created_at   = excluded.created_at,
     changeset_id = excluded.changeset_id,
+    author_id    = COALESCE(author_id, excluded.author_id),
     payload_json = excluded.payload_json
 `;
 
@@ -124,6 +126,15 @@ export function upsertInteraction(ix: StoredInteraction): void {
 }
 
 /** All interactions for a changeset, sorted oldest-first. */
+/** author_id of an existing row: undefined when no row has this id, null when
+ *  the row exists but is unowned, otherwise the owning user id. */
+export function existingAuthorId(id: string): string | null | undefined {
+  const row = getDb()
+    .prepare(`SELECT author_id FROM interactions WHERE id = ?`)
+    .get(id) as { author_id: string | null } | undefined;
+  return row === undefined ? undefined : row.author_id;
+}
+
 export function getInteractionsByChangeset(changesetId: string): StoredInteraction[] {
   const rows = getDb()
     .prepare(

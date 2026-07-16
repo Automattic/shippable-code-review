@@ -58,6 +58,11 @@ export function writeCorsHeaders(res: ServerResponse, origin: string | null) {
     "Access-Control-Allow-Headers",
     "Content-Type, X-Shippable-User-Id, X-Shippable-User-Role",
   );
+  // The identity headers make every cross-origin call preflighted (the
+  // packaged Tauri shape is tauri://localhost -> 127.0.0.1). Without Max-Age,
+  // Chromium caches preflights for ~5s, so polling paths pay a second OPTIONS
+  // round trip per poll. 7200s is Chromium's cap; Firefox allows more.
+  res.setHeader("Access-Control-Max-Age", "7200");
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Vary", "Origin");
 }

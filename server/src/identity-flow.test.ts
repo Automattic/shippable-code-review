@@ -132,6 +132,88 @@ describe("identity flow: request headers -> users table -> author_id", () => {
     expect(row.authorId).toBe("uuid-a");
   });
 
+  it("ignores a client-supplied authorId in the body — the header identity wins", async () => {
+    const r = await postJson(
+      `${baseUrl}/api/interactions`,
+      makeInteraction({ id: "ix-e2e-spoof-header", authorId: "someone-else" }),
+      { "X-Shippable-User-Id": "uuid-real" },
+    );
+    expect(r.status).toBe(200);
+
+    const get = await getJson(
+      `${baseUrl}/api/interactions?changesetId=cs-e2e`,
+    );
+    const row = get.body.interactions.find(
+      (i: any) => i.id === "ix-e2e-spoof-header",
+    );
+    expect(row.authorId).toBe("uuid-real");
+  });
+
+  it("a headerless POST leaves author_id null even when the body supplies one", async () => {
+    const r = await postJson(
+      `${baseUrl}/api/interactions`,
+      makeInteraction({ id: "ix-e2e-spoof-bare", authorId: "someone-else" }),
+    );
+    expect(r.status).toBe(200);
+
+    const get = await getJson(
+      `${baseUrl}/api/interactions?changesetId=cs-e2e`,
+    );
+    const row = get.body.interactions.find(
+      (i: any) => i.id === "ix-e2e-spoof-bare",
+    );
+    expect(row.authorId).toBeNull();
+  });
+
+  it("409s when a different identity rewrites an owned row, leaving it unchanged", async () => {
+    await postJson(
+      `${baseUrl}/api/interactions`,
+      makeInteraction({ id: "ix-e2e-owned", body: "original" }),
+      { "X-Shippable-User-Id": "uuid-owner" },
+    );
+
+    const hijack = await postJson(
+      `${baseUrl}/api/interactions`,
+      makeInteraction({ id: "ix-e2e-owned", body: "rewritten" }),
+      { "X-Shippable-User-Id": "uuid-intruder" },
+    );
+    expect(hijack.status).toBe(409);
+
+    const headerless = await postJson(
+      `${baseUrl}/api/interactions`,
+      makeInteraction({ id: "ix-e2e-owned", body: "rewritten" }),
+    );
+    expect(headerless.status).toBe(409);
+
+    const get = await getJson(
+      `${baseUrl}/api/interactions?changesetId=cs-e2e`,
+    );
+    const row = get.body.interactions.find((i: any) => i.id === "ix-e2e-owned");
+    expect(row.body).toBe("original");
+    expect(row.authorId).toBe("uuid-owner");
+  });
+
+  it("an unowned row adopts the first identified writer", async () => {
+    await postJson(
+      `${baseUrl}/api/interactions`,
+      makeInteraction({ id: "ix-e2e-adopt", body: "headerless" }),
+    );
+
+    const r = await postJson(
+      `${baseUrl}/api/interactions`,
+      makeInteraction({ id: "ix-e2e-adopt", body: "claimed" }),
+      { "X-Shippable-User-Id": "uuid-adopter" },
+    );
+    expect(r.status).toBe(200);
+
+    const get = await getJson(
+      `${baseUrl}/api/interactions?changesetId=cs-e2e`,
+    );
+    const row = get.body.interactions.find((i: any) => i.id === "ix-e2e-adopt");
+    expect(row.authorId).toBe("uuid-adopter");
+    expect(row.body).toBe("claimed");
+  });
+
   it("a second request with the same id but a different role header does not flip the stored role", async () => {
     await postJson(
       `${baseUrl}/api/interactions`,
@@ -189,5 +271,8 @@ describe("CORS preflight allows the identity headers", () => {
     const allowHeaders = res.headers.get("access-control-allow-headers") ?? "";
     expect(allowHeaders).toMatch(/x-shippable-user-id/i);
     expect(allowHeaders).toMatch(/x-shippable-user-role/i);
+    // Preflight caching — without Max-Age, Chromium re-preflights every ~5s
+    // and identity-header requests double the request count on polling paths.
+    expect(res.headers.get("access-control-max-age")).toBe("7200");
   });
 });
